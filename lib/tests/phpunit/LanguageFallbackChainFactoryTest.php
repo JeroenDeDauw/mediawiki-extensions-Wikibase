@@ -14,7 +14,6 @@ use Wikibase\LanguageFallbackChainFactory;
  *
  * @group Wikibase
  * @group WikibaseLib
- * @group WikibaseUtils
  *
  * @licence GNU GPL v2+
  * @author Liangent
@@ -66,7 +65,7 @@ class LanguageFallbackChainFactoryTest extends \MediaWikiTestCase {
 		$this->assertChainEquals( $expected, $chain );
 	}
 
-	public static function providerNewFromLanguage() {
+	public function providerNewFromLanguage() {
 		return array(
 			array( 'en', LanguageFallbackChainFactory::FALLBACK_ALL, array( 'en' ) ),
 			array( 'en', LanguageFallbackChainFactory::FALLBACK_VARIANTS, array() ),
@@ -219,7 +218,7 @@ class LanguageFallbackChainFactoryTest extends \MediaWikiTestCase {
 
 	public function testNewFromContextAndLanguageCode() {
 		$factory = new LanguageFallbackChainFactory();
-		$languageFallbackChain = $factory->newFromContext( \RequestContext::getMain(), 'en' );
+		$languageFallbackChain = $factory->newFromContextAndLanguageCode( \RequestContext::getMain(), 'en' );
 		$this->assertTrue( $languageFallbackChain instanceof LanguageFallbackChain );
 	}
 
@@ -393,7 +392,7 @@ class LanguageFallbackChainFactoryTest extends \MediaWikiTestCase {
 		$user = User::newFromId( 0 );
 		$context->setUser( $user );
 
-		$factory = new LanguageFallbackChainFactory( false, true );
+		$factory = new LanguageFallbackChainFactory( $experimental, $anonymousPageViewCached );
 		$fallbackChain = $factory->newFromContextForPageView( $context );
 
 		$this->assertInstanceOf( 'Wikibase\LanguageFallbackChain', $fallbackChain, $msg );
@@ -407,4 +406,5 @@ class LanguageFallbackChainFactoryTest extends \MediaWikiTestCase {
 			array( true, false, 'experimental, not anon cached page view' )
 		);
 	}
+
 }

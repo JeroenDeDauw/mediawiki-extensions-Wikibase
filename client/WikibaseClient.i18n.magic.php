@@ -21,12 +21,14 @@ $magicWords['en'] = array(
 $magicWords['ar'] = array(
 	'noexternallanglinks' => array( 0, 'لا_وصلات_لغة_خارجية' ),
 	'property' => array( 0, 'خاصية' ),
+	'wbreponame' => array( 0, 'اسم_مستودع_وب' ),
 );
 
-/** Egyptian Spoken Arabic (مصرى) */
+/** Egyptian Arabic (مصرى) */
 $magicWords['arz'] = array(
 	'noexternallanglinks' => array( 0, 'من_غير_وصلات_لغه_خارجيه' ),
 	'property' => array( 0, 'خاصيه' ),
+	'wbreponame' => array( 0, 'اسم_ريبو_وب' ),
 );
 
 /** German (Deutsch) */
@@ -51,6 +53,7 @@ $magicWords['eo'] = array(
 /** Spanish (español) */
 $magicWords['es'] = array(
 	'noexternallanglinks' => array( 0, 'nointerwikis' ),
+	'property' => array( 0, 'propiedad' ),
 );
 
 /** Estonian (eesti) */
@@ -73,6 +76,11 @@ $magicWords['fi'] = array(
 $magicWords['fr'] = array(
 	'noexternallanglinks' => array( 0, 'sanslienexterne' ),
 	'property' => array( 0, 'propriété' ),
+);
+
+/** Western Frisian (Frysk) */
+$magicWords['fy'] = array(
+	'property' => array( 0, 'eigenskip' ),
 );
 
 /** Hindi (हिन्दी) */
@@ -113,11 +121,17 @@ $magicWords['ml'] = array(
 /** Dutch (Nederlands) */
 $magicWords['nl'] = array(
 	'noexternallanglinks' => array( 0, 'geenexternetaalkoppelingen', 'geenexternetaalverwijzingen' ),
+	'property' => array( 0, 'eigenschap' ),
 );
 
 /** Norwegian Nynorsk (norsk nynorsk) */
 $magicWords['nn'] = array(
 	'noexternallanglinks' => array( 0, 'ingenspråklenkjerutanfrå' ),
+);
+
+/** Polish (polski) */
+$magicWords['pl'] = array(
+	'property' => array( 0, 'właściwość' ),
 );
 
 /** Portuguese (português) */
@@ -139,6 +153,7 @@ $magicWords['ru'] = array(
 /** Ukrainian (українська) */
 $magicWords['uk'] = array(
 	'noexternallanglinks' => array( 0, 'беззовнішніхпосилань' ),
+	'property' => array( 0, 'властивість' ),
 );
 
 /** Vietnamese (Tiếng Việt) */
@@ -164,5 +179,5 @@ $magicWords['zh-hans'] = array(
 $magicWords['zh-hant'] = array(
 	'noexternallanglinks' => array( 0, '隱藏跨語言連結' ),
 	'property' => array( 0, '屬性' ),
-	'wbreponame' => array( 0, 'wb匯報名' ),
+	'wbreponame' => array( 0, 'wb報表名稱' ),
 );

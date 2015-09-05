@@ -1,6 +1,6 @@
 <?php
 
-namespace Wikibase\Api;
+namespace Wikibase\Repo\Api;
 
 use ApiBase;
 use ApiResult;
@@ -10,7 +10,7 @@ use Language;
 use LogicException;
 use Message;
 use Status;
-use Wikibase\Lib\Localizer\ExceptionLocalizer;
+use Wikibase\Repo\Localizer\ExceptionLocalizer;
 
 /**
  * ApiErrorReporter is a component for API modules that handles
@@ -26,17 +26,17 @@ class ApiErrorReporter {
 	/**
 	 * @var ApiBase
 	 */
-	protected $apiModule;
+	private $apiModule;
 
 	/**
 	 * @var ExceptionLocalizer
 	 */
-	protected $localizer;
+	private $localizer;
 
 	/**
 	 * @var Language
 	 */
-	protected $language;
+	private $language;
 
 	/**
 	 * @param ApiBase $apiModule the API module for collaboration
@@ -97,13 +97,16 @@ class ApiErrorReporter {
 	 * @param string $key
 	 * @param string|array $warningData Warning message
 	 */
-	protected function setWarning( $key, $warningData ) {
+	private function setWarning( $key, $warningData ) {
 		$result = $this->apiModule->getResult();
 		$moduleName = $this->apiModule->getModuleName();
 
-		$result->disableSizeCheck();
-		$result->addValue( array( 'warnings', $moduleName ), $key, $warningData );
-		$result->enableSizeCheck();
+		$result->addValue(
+			array( 'warnings', $moduleName ),
+			$key,
+			$warningData,
+			ApiResult::NO_SIZE_CHECK
+		);
 	}
 
 	/**
@@ -113,7 +116,7 @@ class ApiErrorReporter {
 	 * If possible, a localized error message based on the exception is
 	 * included in the error sent to the client. Localization of errors
 	 * is attempted using the ExceptionLocalizer service provided to the
-	 * constructor. If that fails, dieUSage() is called, which in turn
+	 * constructor. If that fails, dieUsage() is called, which in turn
 	 * attempts localization based on the error code.
 	 *
 	 * @see ApiBase::dieUsage()
@@ -134,7 +137,7 @@ class ApiErrorReporter {
 		$this->addStatusToResult( $status, $extradata );
 
 		//XXX: when to prefer $statusCode over $errorCode?
-		list( $statusCode, $description ) = $this->apiModule->getErrorFromStatus( $status );
+		list( , $description ) = $this->apiModule->getErrorFromStatus( $status );
 
 		$this->throwUsageException( $description, $errorCode, $httpRespCode, $extradata );
 
@@ -148,7 +151,7 @@ class ApiErrorReporter {
 	 * If possible, a localized error message based on the exception is
 	 * included in the error sent to the client. Localization of errors
 	 * is attempted using the ExceptionLocalizer service provided to the
-	 * constructor. If that fails, dieUSage() is called, which in turn
+	 * constructor. If that fails, dieUsage() is called, which in turn
 	 * attempts localization based on the error code.
 	 *
 	 * @see ApiBase::dieUsage()
@@ -169,7 +172,7 @@ class ApiErrorReporter {
 			// NOTE: Ignore generic error messages, rely on the code instead!
 			// XXX: No better way to do this?
 			if ( $key !== 'wikibase-error-unexpected' ) {
-				$this->dieMessage( $message, $errorCode, $httpRespCode, $extradata );
+				$this->dieMessageObject( $message, $errorCode, $httpRespCode, $extradata );
 			}
 		}
 
@@ -179,8 +182,32 @@ class ApiErrorReporter {
 	}
 
 	/**
-	 * Aborts the request with an error message. This is intended as an alternative
-	 * for ApiBase::dieUsage(). The given message is included in the error's extra data.
+	 * Aborts the request with an error message derived from the error code.
+	 *
+	 * @param string $errorCode A code identifying the error.
+	 * @param string [$param,...] Parameters for the Message.
+	 *
+	 * @throws LogicException
+	 */
+	public function dieMessage( $errorCode /*...*/ ) {
+		$messageName = "wikibase-api-$errorCode";
+		$params = func_get_args();
+		array_shift( $params );
+		$message = wfMessage( $messageName, $params );
+
+		if ( !$message || !$message->exists() ) {
+			// TODO: log warning
+			// TODO: replace with generic message
+		}
+
+		$this->dieMessageObject( $message, $errorCode );
+
+		throw new LogicException( 'UsageException not thrown' );
+	}
+
+	/**
+	 * Aborts the request with an error message. The given message is included in
+	 * the error's extra data.
 	 *
 	 * @see ApiBase::dieUsage()
 	 *
@@ -194,7 +221,7 @@ class ApiErrorReporter {
 	 *
 	 * @throws LogicException
 	 */
-	public function dieMessage( Message $message, $errorCode, $httpRespCode = 0, $extradata = array() ) {
+	private function dieMessageObject( Message $message, $errorCode, $httpRespCode = 0, $extradata = array() ) {
 		$description = $this->forceMessageLanguage( $message, 'en' )->useDatabase( false )->plain();
 
 		$this->addMessageToResult( $message, $extradata );
@@ -209,7 +236,7 @@ class ApiErrorReporter {
 	 * replacement for ApiBase::dieUsage().
 	 *
 	 * Localization of the error code is attempted by looking up a message key
-	 * constructed using the given code in "wikibase-error-$errorCode". If such a message
+	 * constructed using the given code in "wikibase-api-$errorCode". If such a message
 	 * exists, it is included in the error's extra data.
 	 *
 	 * @see ApiBase::dieUsage()
@@ -245,19 +272,19 @@ class ApiErrorReporter {
 	}
 
 	/**
-	 * Throws a UsageException by calling $this->apiModule->dieUsage().
+	 * Throws a UsageException by calling ApiBase::dieUsage().
 	 *
 	 * @see ApiBase::dieUsage()
 	 *
-	 * @param $description
-	 * @param $errorCode
+	 * @param string $description
+	 * @param string $errorCode
 	 * @param int $httpRespCode
 	 * @param null|array $extradata
 	 *
 	 * @throws LogicException
 	 */
-	protected function throwUsageException( $description, $errorCode, $httpRespCode = 0, $extradata = null ) {
-		$this->apiModule->dieUsage( $description, $errorCode, $httpRespCode, $extradata );
+	private function throwUsageException( $description, $errorCode, $httpRespCode = 0, $extradata = null ) {
+		$this->apiModule->getMain()->dieUsage( $description, $errorCode, $httpRespCode, $extradata );
 
 		throw new LogicException( 'UsageException not thrown' );
 	}
@@ -281,13 +308,11 @@ class ApiErrorReporter {
 
 		$messageData = $this->convertMessageToResult( $message );
 
-		$res = $this->apiModule->getResult();
-
 		$messageList = isset( $data['messages'] ) ? $data['messages'] : array();
-		$res->setIndexedTagName( $messageList, 'message' );
+		ApiResult::setIndexedTagName( $messageList, 'message' );
 
 		$messageList[] = $messageData;
-		$res->setElement( $data, 'messages', $messageList, ApiResult::OVERRIDE );
+		ApiResult::setValue( $data, 'messages', $messageList, ApiResult::OVERRIDE );
 	}
 
 	/**
@@ -336,9 +361,8 @@ class ApiErrorReporter {
 	 * @return array a result structure containing the messages from $errors as well as what
 	 *         was already present in the $messages parameter.
 	 */
-	protected function convertMessagesToResult( array $messageSpecs ) {
+	private function convertMessagesToResult( array $messageSpecs ) {
 		$result = array();
-		$res = $this->apiModule->getResult();
 
 		foreach ( $messageSpecs as $message ) {
 			$type = null;
@@ -358,13 +382,13 @@ class ApiErrorReporter {
 			$row = $this->convertMessageToResult( $message );
 
 			if ( $type !== null ) {
-				$res->setElement( $row, 'type', $type );
+				ApiResult::setValue( $row, 'type', $type );
 			}
 
 			$result[] = $row;
 		}
 
-		$res->setIndexedTagName( $result, 'message' );
+		ApiResult::setIndexedTagName( $result, 'message' );
 		return $result;
 	}
 
@@ -380,7 +404,7 @@ class ApiErrorReporter {
 	 * @return array a result structure containing the messages from $errors as well as what
 	 *         was already present in the $messages parameter.
 	 */
-	protected function convertToMessageList( array $messageSpecs ) {
+	private function convertToMessageList( array $messageSpecs ) {
 		$messages = array();
 
 		foreach ( $messageSpecs as $message ) {
@@ -405,20 +429,19 @@ class ApiErrorReporter {
 	 *
 	 * @return array
 	 */
-	protected function convertMessageToResult( Message $message ) {
-		$res = $this->apiModule->getResult();
-
+	private function convertMessageToResult( Message $message ) {
 		$name = $message->getKey();
 		$params = $message->getParams();
 
 		$row = array();
-		$res->setElement( $row, 'name', $name );
+		ApiResult::setValue( $row, 'name', $name );
 
-		$res->setElement( $row, 'parameters', $params );
-		$res->setIndexedTagName( $row['parameters'], 'parameter' );
+		ApiResult::setValue( $row, 'parameters', $params );
+		ApiResult::setIndexedTagName( $row['parameters'], 'parameter' );
 
 		$html = $this->forceMessageLanguage( $message, $this->language )->useDatabase( true )->parse();
-		$res->setContent( $row, $html, 'html' );
+		ApiResult::setValue( $row, 'html', $html );
+		$row[ApiResult::META_BC_SUBELEMENTS][] = 'html';
 
 		return $row;
 	}
@@ -447,7 +470,7 @@ class ApiErrorReporter {
 	 *
 	 * @return Message|null
 	 */
-	protected function convertToMessage( $messageSpec ) {
+	private function convertToMessage( $messageSpec ) {
 		$name = null;
 		$params = null;
 
@@ -455,7 +478,7 @@ class ApiErrorReporter {
 			// it's a plain string containing a message key
 			$name = $messageSpec;
 		} elseif ( is_array( $messageSpec ) ) {
-			if ( isset( $messageSpec[0]) ) {
+			if ( isset( $messageSpec[0] ) ) {
 				// it's an indexed array, the first entriy is the message key, the rest are paramters
 				$name = $messageSpec[0];
 				$params = array_slice( $messageSpec, 1 );

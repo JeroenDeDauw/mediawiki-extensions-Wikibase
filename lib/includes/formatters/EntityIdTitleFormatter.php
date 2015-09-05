@@ -2,10 +2,9 @@
 
 namespace Wikibase\Lib;
 
-use ValueFormatters\FormatterOptions;
 use Wikibase\DataModel\Entity\EntityId;
-use Wikibase\DataModel\Entity\EntityIdValue;
-use Wikibase\EntityTitleLookup;
+use Wikibase\DataModel\Services\EntityId\EntityIdFormatter;
+use Wikibase\Lib\Store\EntityTitleLookup;
 
 /**
  * Formats entity IDs by generating the corresponding page title.
@@ -15,7 +14,7 @@ use Wikibase\EntityTitleLookup;
  * @licence GNU GPL v2+
  * @author Daniel Kinzler
  */
-class EntityIdTitleFormatter extends EntityIdFormatter {
+class EntityIdTitleFormatter implements EntityIdFormatter {
 
 	/**
 	 * @var EntityTitleLookup
@@ -23,12 +22,9 @@ class EntityIdTitleFormatter extends EntityIdFormatter {
 	protected $titleLookup;
 
 	/**
-	 * @param FormatterOptions $options
 	 * @param EntityTitleLookup $titleLookup
 	 */
-	public function __construct( FormatterOptions $options, EntityTitleLookup $titleLookup ) {
-		parent::__construct( $options );
-
+	public function __construct( EntityTitleLookup $titleLookup ) {
 		$this->titleLookup = $titleLookup;
 	}
 
@@ -39,7 +35,7 @@ class EntityIdTitleFormatter extends EntityIdFormatter {
 	 *
 	 * @return string
 	 */
-	protected function formatEntityId( EntityId $entityId ) {
+	public function formatEntityId( EntityId $entityId ) {
 		$title = $this->titleLookup->getTitleForId( $entityId );
 		return $title->getFullText();
 	}

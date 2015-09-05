@@ -3,149 +3,64 @@
 namespace Wikibase\Client\Specials;
 
 use DatabaseBase;
-use Html;
+use FakeResultWrapper;
 use Linker;
-use MWException;
+use QueryPage;
+use ResultWrapper;
+use Skin;
 use Title;
-use Wikibase\Lib\Specials\SpecialWikibaseQueryPage;
-use Wikibase\NamespaceChecker;
 use Wikibase\Client\WikibaseClient;
+use Wikibase\NamespaceChecker;
 
 /**
- * List client pages that is not connected to repository items.
+ * List client pages that are not connected to repository items.
  *
  * @since 0.4
  * @licence GNU GPL v2+
  * @author John Erling Blad < jeblad@gmail.com >
+ * @author Amir Sarabadani < ladsgroup@gmail.com >
+ * @author Daniel Kinzler
  */
-class SpecialUnconnectedPages extends SpecialWikibaseQueryPage {
+class SpecialUnconnectedPages extends QueryPage {
 
 	/**
-	 * The title as a string to start search at
-	 *
-	 * @since 0.4
-	 *
-	 * @var string
+	 * @var int maximum supported offset
 	 */
-	private $startPage = '';
+	const MAX_OFFSET = 10000;
 
 	/**
-	 * The startPage as a title to start search at
-	 *
-	 * @since 0.4
-	 *
-	 * @var Title
-	 */
-	private $startTitle = null;
-
-	/**
-	 * The namespaceChecker
-	 *
-	 * @since 0.4
-	 *
-	 * @var NamespaceChecker
+	 * @var NamespaceChecker|null
 	 */
 	private $namespaceChecker = null;
 
 	/**
-	 * If the search should only include pages with iw-links
+	 * @see SpecialPage::__construct
 	 *
-	 * @since 0.4
-	 *
-	 * @var string
+	 * @param string $name
 	 */
-	private $iwData = '';
-
-	public function __construct() {
-		parent::__construct( 'UnconnectedPages' );
-
+	public function __construct( $name = 'UnconnectedPages' ) {
+		parent::__construct( $name );
 	}
 
 	/**
-	 * @see SpecialWikibasePage::execute
+	 * @see QueryPage::isSyndicated
 	 *
-	 * @since 0.4
+	 * @return bool Always false because we do not want to build RSS/Atom feeds for this page.
 	 */
-	public function execute( $subPage ) {
-		if ( !parent::execute( $subPage ) ) {
-			return false;
-		}
-
-		$output = $this->getOutput();
-		$request = $this->getRequest();
-
-		$this->startPage = $request->getText( 'page', $subPage );
-		if ( $this->startPage !== '' ) {
-			$this->startTitle = \Title::newFromText( $this->startPage );
-		}
-
-		$this->iwData = $request->getText( 'iwdata', '' );
-
-		$out = '';
-
-		if ( $this->startPage !== '' && $this->startTitle === null ) {
-			$out .= Html::element( 'div', array(), $this->msg( 'wikibase-unconnectedpages-page-warning' )->text() );
-		}
-
-		$out .= Html::openElement(
-			'form',
-			array(
-				'action' => $this->getPageTitle()->getLocalURL(),
-				'name' => 'unconnectedpages',
-				'id' => 'wbc-unconnectedpages-form'
-			)
-		)
-		. Html::openElement( 'fieldset' )
-		. Html::element( 'legend', array(), $this->msg( 'wikibase-unconnectedpages-legend' )->text() )
-		. Html::openElement( 'p' )
-		. Html::element( 'label', array( 'for' => 'language' ), $this->msg( 'wikibase-unconnectedpages-page' )->text() )
-		. ' '
-		. Html::input(
-			'page',
-			$this->startPage,
-			'text',
-			array(
-				'id' => 'page'
-			)
-		)
-		. Html::input(
-			'submit',
-			$this->msg( 'wikibase-unconnectedpages-submit' )->text(),
-			'submit',
-			array(
-				'id' => 'wbc-unconnectedpages-submit',
-				'class' => 'wbc-input-button'
-			)
-		)
-		. ' '
-		. Html::input(
-			'iwdata',
-			'only',
-			'checkbox',
-			array(
-				'id' => 'wbc-unconnectedpages-iwdata',
-				'class' => 'wbc-input-button',
-				$this->iwData === 'only' ? 'checked' : 'unchecked' => ''
-			)
-		)
-		. ' '
-		. Html::element( 'label', array( 'for' => 'wbc-unconnectedpages-iwdata' ), $this->msg( 'wikibase-unconnectedpages-iwdata-label' )->text() )
-		. Html::closeElement( 'p' )
-		. Html::closeElement( 'fieldset' )
-		. Html::closeElement( 'form' );
-		$output->addHTML( $out );
-
-		$query = array();
-		if ( $this->iwData === 'only' ) {
-			$query['iwdata'] = $this->iwData;
-		}
-
-		$this->showQuery( $query );
+	function isSyndicated() {
+		return false;
 	}
 
 	/**
-	 * Set the NamespaceChecker
+	 * @see QueryPage::isCacheable
 	 *
+	 * @return bool Always false because we can not have caching since we will store additional information.
+	 */
+	public function isCacheable() {
+		return false;
+	}
+
+	/**
 	 * @since 0.4
 	 *
 	 * @param NamespaceChecker $namespaceChecker
@@ -155,21 +70,20 @@ class SpecialUnconnectedPages extends SpecialWikibaseQueryPage {
 	}
 
 	/**
-	 * Get the NamespaceChecker
-	 *
 	 * @since 0.4
 	 *
-	 * @return \Wikibase\NamespaceChecker
+	 * @return NamespaceChecker
 	 */
 	public function getNamespaceChecker() {
-		$settings = WikibaseClient::getDefaultInstance()->getSettings();
-
 		if ( $this->namespaceChecker === null ) {
+			$settings = WikibaseClient::getDefaultInstance()->getSettings();
+
 			$this->namespaceChecker = new NamespaceChecker(
 				$settings->getSetting( 'excludeNamespaces' ),
 				$settings->getSetting( 'namespaces' )
 			);
 		}
+
 		return $this->namespaceChecker;
 	}
 
@@ -181,103 +95,99 @@ class SpecialUnconnectedPages extends SpecialWikibaseQueryPage {
 	 * @param DatabaseBase $dbr
 	 * @param Title $title
 	 * @param NamespaceChecker $checker
+	 *
 	 * @return string[]
 	 */
-	public function buildConditionals( $dbr, Title $title = null, $checker = null ) {
-		if ( !isset( $title ) ) {
-			$title = $this->startTitle;
-		}
-		if ( !isset( $checker ) ) {
+	public function buildConditionals( DatabaseBase $dbr, Title $title = null, NamespaceChecker $checker = null ) {
+		$conds = array();
+
+		if ( $checker === null ) {
 			$checker = $this->getNamespaceChecker();
 		}
 		if ( $title !== null ) {
 			$conds[] = 'page_title >= ' . $dbr->addQuotes( $title->getDBkey() );
-			$conds[] = 'page_namespace = ' . $title->getNamespace();
+			$conds[] = 'page_namespace = ' . (int)$title->getNamespace();
 		}
-		$conds[] = 'page_namespace IN (' . implode(',', $checker->getWikibaseNamespaces() ) . ')';
+		$conds[] = 'page_namespace IN (' . implode( ',', $checker->getWikibaseNamespaces() ) . ')';
+
 		return $conds;
 	}
 
 	/**
-	 * @see SpecialWikibaseQueryPage::getResult
+	 * @see QueryPage::getQueryInfo
 	 *
-	 * @since 0.4
+	 * @return array[]
 	 */
-	public function getResult( $offset = 0, $limit = 0 ) {
-
+	function getQueryInfo() {
 		$dbr = wfGetDB( DB_SLAVE );
 
 		$conds = $this->buildConditionals( $dbr );
-		$conds["page_is_redirect"] = '0';
-		$conds[] = "pp_propname IS NULL";
-		if ( $this->iwData === 'only' ) {
-			$conds[] = 'll_from IS NOT NULL';
-		}
+		$conds['page_is_redirect'] = 0;
+		$conds[] = 'pp_propname IS NULL';
 
-		$rows = $dbr->select(
-			array(
+		return array(
+			'tables' => array(
 				'page',
 				'page_props',
-				'langlinks'
 			),
-			array(
-				'page_namespace',
-				'page_title',
-				'page_id',
-				'page_len',
-				'page_is_redirect',
-				'page_num_iwlinks' => 'count(ll_from)'
+			'fields' => array(
+				'value' => 'page_id',
+				'namespace' => 'page_namespace',
+				'title' => 'page_title',
+				'page_num_iwlinks' => '0', // placeholder, we'll get this from page_props in the future
 			),
-			$conds,
-			__METHOD__,
-			array(
-				'OFFSET' => $offset,
-				'LIMIT' => $limit,
-				'GROUP BY' => 'page_namespace, page_title',
-				'ORDER BY' => 'page_namespace, page_title',
-				'USE INDEX' => array( 'page' => 'name_title' )
-			),
-			array(
+			'conds' => $conds,
+			'options' => array(), // sorting is determined getOrderFields(), which returns array( 'value' ) per default.
+			'join_conds' => array(
+				// TODO: also get explicit_langlink_count from page_props once that is populated. Could even filter or sort by it via pp_sortkey.
 				'page_props' => array( 'LEFT JOIN', array( 'page_id = pp_page', "pp_propname = 'wikibase_item'" ) ),
-				'langlinks' => array( 'LEFT JOIN', 'll_from = page_id' )
 			)
 		);
-
-		$entries = array();
-		foreach ( $rows as $row ) {
-			$title = \Title::newFromRow( $row );
-			$numIWLinks = $row->page_num_iwlinks;
-			$entries[] = array( 'title' => $title, 'num' => $numIWLinks);
-		}
-		return $entries;
 	}
 
 	/**
-	 * @see SpecialWikibaseQueryPage::formatRow
+	 * @see QueryPage::reallyDoQuery
 	 *
-	 * @since 0.4
+	 * @param int|bool $limit
+	 * @param int|bool $offset
+	 *
+	 * @return ResultWrapper
 	 */
-	protected function formatRow( $entry ) {
-		try {
-			$out = Linker::linkKnown( $entry['title'] );
-			if ( $entry['num'] > 0 ) {
-				$out .= ' ' . $this->msg( 'wikibase-unconnectedpages-format-row' )
-					->numParams( $entry['num'] )->text();
-			}
-			return $out;
-		} catch ( MWException $e ) {
-			wfWarn( "Error formatting result row: " . $e->getMessage() );
-			return false;
+	function reallyDoQuery( $limit, $offset = false ) {
+		if ( is_int( $offset ) && $offset > self::MAX_OFFSET ) {
+			return new FakeResultWrapper( array() );
 		}
+
+		return parent::reallyDoQuery( $limit, $offset );
 	}
 
 	/**
-	 * @see SpecialWikibaseQueryPage::getTitleForNavigation
+	 * @see QueryPage::formatResult
 	 *
-	 * @since 0.4
+	 * @param Skin $skin
+	 * @param object $result
+	 *
+	 * @return string
 	 */
-	protected function getTitleForNavigation() {
-		return $this->getPageTitle( $this->startPage );
+	function formatResult( $skin, $result ) {
+		$title = Title::newFromID( $result->value );
+		$out = Linker::linkKnown( $title );
+
+		if ( $result->page_num_iwlinks > 0 ) {
+			$out .= ' ' . $this->msg( 'wikibase-unconnectedpages-format-row' )
+				->numParams( $result->page_num_iwlinks )->text();
+		}
+
+		return $out;
+	}
+
+	/**
+	 * @see SpecialPage::getGroupName
+	 *
+	 * @return string
+	 */
+	protected function getGroupName() {
+		return 'maintenance';
 	}
 
 }

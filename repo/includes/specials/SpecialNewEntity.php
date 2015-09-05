@@ -2,13 +2,14 @@
 
 namespace Wikibase\Repo\Specials;
 
+use HTMLForm;
 use Html;
+use Language;
 use Status;
 use Wikibase\CopyrightMessageBuilder;
 use Wikibase\DataModel\Entity\Entity;
 use Wikibase\Repo\WikibaseRepo;
 use Wikibase\Summary;
-use Wikibase\SummaryFormatter;
 
 /**
  * Page for creating new Wikibase entities.
@@ -25,38 +26,43 @@ abstract class SpecialNewEntity extends SpecialWikibaseRepoPage {
 	/**
 	 * Contains pieces of the sub-page name of this special page if a subpage was called.
 	 * E.g. array( 'a', 'b' ) in case of 'Special:NewEntity/a/b'
-	 * @var string[]
+	 * @var string[]|null
 	 */
 	protected $parts = null;
 
 	/**
-	 * @var string
+	 * @var string|null
 	 */
-	protected $label = null;
+	private $label = null;
+
+	/**
+	 * @var string|null
+	 */
+	private $description = null;
+
+	/**
+	 * @var Language
+	 */
+	private $contentLanguage = null;
 
 	/**
 	 * @var string
 	 */
-	protected $description = null;
-
-	/**
-	 * @var SummaryFormatter
-	 */
-	protected $summaryFormatter;
+	private $rightsUrl;
 
 	/**
 	 * @var string
 	 */
-	protected $rightsUrl;
+	private $rightsText;
 
 	/**
-	 * @var string
+	 * @var string[]
 	 */
-	protected $rightsText;
+	private $aliases;
 
 	/**
-	 * @param $name String: name of the special page, as seen in links and URLs
-	 * @param $restriction String: user right required, 'createpage' per default.
+	 * @param string $name Name of the special page, as seen in links and URLs.
+	 * @param string $restriction User right required, 'createpage' per default.
 	 *
 	 * @since 0.1
 	 */
@@ -73,18 +79,14 @@ abstract class SpecialNewEntity extends SpecialWikibaseRepoPage {
 	}
 
 	/**
-	 * Main method.
+	 * @see SpecialWikibasePage::execute
 	 *
 	 * @since 0.1
 	 *
 	 * @param string|null $subPage
-	 *
-	 * @return boolean
 	 */
 	public function execute( $subPage ) {
-		if ( !parent::execute( $subPage ) ) {
-			return false;
-		}
+		parent::execute( $subPage );
 
 		$this->checkPermissions();
 		$this->checkBlocked();
@@ -95,9 +97,11 @@ abstract class SpecialNewEntity extends SpecialWikibaseRepoPage {
 
 		$out = $this->getOutput();
 
-		if ( $this->getRequest()->wasPosted()
-			&&  $this->getUser()->matchEditToken( $this->getRequest()->getVal( 'token' ) ) ) {
+		$uiLanguageCode = $this->getLanguage()->getCode();
 
+		if ( $this->getRequest()->wasPosted()
+			&& $this->getUser()->matchEditToken( $this->getRequest()->getVal( 'wpEditToken' ) )
+		) {
 			if ( $this->hasSufficientArguments() ) {
 				$entity = $this->createEntity();
 
@@ -105,13 +109,13 @@ abstract class SpecialNewEntity extends SpecialWikibaseRepoPage {
 
 				if ( $status->isGood() ) {
 					$summary = new Summary( 'wbeditentity', 'create' );
-					$summary->setLanguage( $this->getLanguage()->getCode() );
+					$summary->setLanguage( $uiLanguageCode );
 					$summary->addAutoSummaryArgs( $this->label, $this->description );
 
 					$status = $this->saveEntity(
 						$entity,
 						$summary,
-						$this->getRequest()->getVal( 'token' ),
+						$this->getRequest()->getVal( 'wpEditToken' ),
 						EDIT_NEW
 					);
 
@@ -141,8 +145,6 @@ abstract class SpecialNewEntity extends SpecialWikibaseRepoPage {
 		}
 
 		$this->createForm( $this->getLegend(), $this->additionalFormElements() );
-
-		return true;
 	}
 
 	/**
@@ -151,9 +153,20 @@ abstract class SpecialNewEntity extends SpecialWikibaseRepoPage {
 	 * @since 0.1
 	 */
 	protected function prepareArguments() {
-		$this->label = $this->getRequest()->getVal( 'label', isset( $this->parts[0] ) ? $this->parts[0] : '' );
-		$this->description = $this->getRequest()->getVal( 'description', isset( $this->parts[1] ) ? $this->parts[1] : '' );
-		return true;
+		$this->label = $this->getRequest()->getVal(
+			'label',
+			isset( $this->parts[0] ) ? $this->parts[0] : ''
+		);
+		$this->description = $this->getRequest()->getVal(
+			'description',
+			isset( $this->parts[1] ) ? $this->parts[1] : ''
+		);
+		$aliases = $this->getRequest()->getVal( 'aliases' );
+		$this->aliases = ( $aliases === null ? array() : explode( '|', $aliases ) );
+		$this->contentLanguage = Language::factory( $this->getRequest()->getVal(
+			'lang',
+			$this->getLanguage()->getCode()
+		) );
 	}
 
 	/**
@@ -165,12 +178,14 @@ abstract class SpecialNewEntity extends SpecialWikibaseRepoPage {
 	 */
 	protected function hasSufficientArguments() {
 		return $this->stringNormalizer->trimWhitespace( $this->label ) !== ''
-			|| $this->stringNormalizer->trimWhitespace( $this->description ) !== '';
+			|| $this->stringNormalizer->trimWhitespace( $this->description ) !== ''
+			|| implode( '', array_map(
+					array( $this->stringNormalizer, 'trimWhitespace' ),
+					$this->aliases
+				) ) !== '';
 	}
 
 	/**
-	 * Create entity
-	 *
 	 * @since 0.1
 	 *
 	 * @return Entity Created entity of correct subtype
@@ -187,12 +202,15 @@ abstract class SpecialNewEntity extends SpecialWikibaseRepoPage {
 	 * @return Status
 	 */
 	protected function modifyEntity( Entity &$entity ) {
-		$lang = $this->getLanguage()->getCode();
+		$contentLanguageCode = $this->contentLanguage->getCode();
 		if ( $this->label !== '' ) {
-			$entity->setLabel( $lang, $this->label );
+			$entity->setLabel( $contentLanguageCode, $this->label );
 		}
 		if ( $this->description !== '' ) {
-			$entity->setDescription( $lang, $this->description );
+			$entity->setDescription( $contentLanguageCode, $this->description );
+		}
+		if ( count( $this->aliases ) !== 0 ) {
+			$entity->setAliases( $contentLanguageCode, $this->aliases );
 		}
 		return \Status::newGood();
 	}
@@ -205,119 +223,95 @@ abstract class SpecialNewEntity extends SpecialWikibaseRepoPage {
 	 * @return string Formatted HTML for inclusion in the form
 	 */
 	protected function additionalFormElements() {
-		global $wgLang;
-		return Html::element(
-			'label',
-			array(
-				'for' => 'wb-newentity-label',
-				'class' => 'wb-label'
+		$langCode = $this->contentLanguage->getCode();
+		$langName = Language::fetchLanguageName( $langCode );
+		$langDir = $this->contentLanguage->getDir();
+		return array(
+			'lang' => array(
+				'name' => 'lang',
+				'default' => $langCode,
+				'type' => 'hidden'
 			),
-			$this->msg( 'wikibase-newentity-label' )->text()
-		)
-		. Html::input(
-			'label',
-			$this->label ? $this->label : '',
-			'text',
-			array(
+			'label' => array(
+				'name' => 'label',
+				'default' => $this->label ?: '',
+				'type' => 'text',
 				'id' => 'wb-newentity-label',
-				'size' => 12,
-				'class' => 'wb-input',
-				'lang' => $wgLang->getCode(),
-				'dir' => $wgLang->getDir(),
-			)
-		)
-		. Html::element( 'br' )
-		. Html::element(
-			'label',
-			array(
-				'for' => 'wb-newentity-description',
-				'class' => 'wb-label'
+				'cssclass' => 'wb-input',
+				'lang' => $langCode,
+				'dir' => $langDir,
+				'placeholder' => $this->msg(
+					'wikibase-label-edit-placeholder-language-aware',
+					$langName
+				)->text(),
+				'label-message' => 'wikibase-newentity-label'
 			),
-			$this->msg( 'wikibase-newentity-description' )->text()
-		)
-		. Html::input(
-			'description',
-			$this->description ? $this->description : '',
-			'text',
-			array(
+			'description' => array(
+				'name' => 'description',
+				'default' => $this->description ?: '',
+				'type' => 'text',
 				'id' => 'wb-newentity-description',
-				'size' => 36,
-				'class' => 'wb-input',
-				'lang' => $wgLang->getCode(),
-				'dir' => $wgLang->getDir(),
+				'cssclass' => 'wb-input',
+				'lang' => $langCode,
+				'dir' => $langDir,
+				'placeholder' => $this->msg(
+					'wikibase-description-edit-placeholder-language-aware',
+					$langName
+				)->text(),
+				'label-message' => 'wikibase-newentity-description'
+			),
+			'aliases' => array(
+				'name' => 'aliases',
+				'default' => $this->aliases ? implode( '|', $this->aliases ) : '',
+				'type' => 'text',
+				'id' => 'wb-newentity-aliases',
+				'cssclass' => 'wb-input',
+				'lang' => $langCode,
+				'dir' => $langDir,
+				'placeholder' => $this->msg(
+					'wikibase-aliases-edit-placeholder-language-aware',
+					$langName
+				)->text(),
+				'label-message' => 'wikibase-newentity-aliases'
 			)
-		)
-		. Html::element( 'br' );
+		);
 	}
 
 	/**
 	 * Building the HTML form for creating a new item.
 	 *
-	 * @since 0.1
-	 *
 	 * @param string|null $legend initial value for the label input box
-	 * @param string $additionalHtml initial value for the description input box
+	 * @param array $additionalFormElements initial value for the description input box
 	 */
-	public function createForm( $legend = null, $additionalHtml = '' ) {
+	private function createForm( $legend = null, $additionalFormElements = array() ) {
 		$this->addCopyrightText();
 
-		$this->getOutput()->addHTML(
-				Html::openElement(
-					'form',
-					array(
-						'method' => 'post',
-						'action' => $this->getPageTitle()->getFullUrl(),
-						'name' => 'newentity',
-						'id' => 'mw-newentity-form1',
-						'class' => 'wb-form'
-					)
-				)
-				. Html::openElement(
-					'fieldset',
-					array( 'class' => 'wb-fieldset' )
-				)
-				. Html::element(
-					'legend',
-					array( 'class' => 'wb-legend' ),
-					$legend
-				)
-				. Html::hidden(
-					'token',
-					$this->getUser()->getEditToken()
-				)
-				. $additionalHtml
-				. Html::input(
-					'submit',
-					$this->msg( 'wikibase-newentity-submit' )->text(),
-					'submit',
-					array(
-						'id' => 'wb-newentity-submit',
-						'class' => 'wb-button'
-					)
-				)
-				. Html::closeElement( 'fieldset' )
-				. Html::closeElement( 'form' )
-		);
+		HTMLForm::factory( 'ooui', $additionalFormElements, $this->getContext() )
+			->setId( 'mw-newentity-form1' )
+			->setSubmitID( 'wb-newentity-submit' )
+			->setSubmitName( 'submit' )
+			->setSubmitTextMsg( 'wikibase-newentity-submit' )
+			->setWrapperLegendMsg( $legend )
+			->setSubmitCallback( function () {// no-op
+			} )->show();
 	}
 
 	/**
 	 * @todo could factor this out into a special page form builder and renderer
 	 */
-	protected function addCopyrightText() {
+	private function addCopyrightText() {
 		$copyrightView = new SpecialPageCopyrightView(
 			new CopyrightMessageBuilder(),
 			$this->rightsUrl,
 			$this->rightsText
 		);
 
-		$html = $copyrightView->getHtml( $this->getLanguage() );
+		$html = $copyrightView->getHtml( $this->getLanguage(), 'wikibase-newentity-submit' );
 
 		$this->getOutput()->addHTML( $html );
 	}
 
 	/**
-	 * Get legend
-	 *
 	 * @since 0.1
 	 *
 	 * @return string Legend for the fieldset

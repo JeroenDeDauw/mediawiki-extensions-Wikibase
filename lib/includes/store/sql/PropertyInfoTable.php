@@ -2,11 +2,11 @@
 
 namespace Wikibase;
 
-use DatabaseUpdater;
+use DBAccessBase;
 use DBError;
 use InvalidArgumentException;
+use ResultWrapper;
 use Wikibase\DataModel\Entity\PropertyId;
-use Wikibase\store\CachingEntityRevisionLookup;
 
 /**
  * Class PropertyInfoTable implements PropertyInfoStore on top of an SQL table.
@@ -15,132 +15,49 @@ use Wikibase\store\CachingEntityRevisionLookup;
  *
  * @license GPL 2+
  * @author Daniel Kinzler
+ * @author Bene* < benestar.wikimedia@gmail.com >
  */
-class PropertyInfoTable extends \DBAccessBase implements PropertyInfoStore {
+class PropertyInfoTable extends DBAccessBase implements PropertyInfoStore {
 
 	/**
 	 * @var string
 	 */
-	protected $table;
+	private $tableName;
 
 	/**
 	 * @var bool
 	 */
-	protected $readonly;
+	private $isReadonly;
 
 	/**
-	 * @param bool $readonly Whether the table can be modified.
+	 * @param bool $isReadonly Whether the table can be modified.
 	 * @param string|bool $wiki The wiki's database to connect to.
 	 *        Must be a value LBFactory understands. Defaults to false, which is the local wiki.
-	 */
-	public function __construct( $readonly, $wiki = false ) {
-		assert( is_bool( $readonly ) );
-		assert( is_string( $wiki ) || $wiki === false );
-
-		$this->table = 'wb_property_info';
-		$this->readonly = $readonly;
-		$this->wiki = $wiki;
-	}
-
-	/**
-	 * Register the updates needed for creating the appropriate table(s).
-	 *
-	 * @param \DatabaseUpdater $updater
-	 */
-	public static function registerDatabaseUpdates( \DatabaseUpdater $updater ) {
-		$table = 'wb_property_info';
-
-		if ( !$updater->tableExists( $table ) ) {
-			$type = $updater->getDB()->getType();
-			$fileBase = __DIR__ . '/' . $table;
-
-			$file = $fileBase . '.' . $type . '.sql';
-			if ( !file_exists( $file ) ) {
-				$file = $fileBase . '.sql';
-			}
-
-			$updater->addExtensionTable( $table, $file );
-
-			// populate the table after creating it
-			$updater->addExtensionUpdate( array(
-				array( 'Wikibase\PropertyInfoTable', 'rebuildPropertyInfo' )
-			) );
-		}
-	}
-
-	/**
-	 * Wrapper for invoking PropertyInfoTableBuilder from DatabaseUpdater
-	 * during a database update.
-	 *
-	 * @param DatabaseUpdater $updater
-	 */
-	public static function rebuildPropertyInfo( DatabaseUpdater $updater ) {
-		$reporter = new \ObservableMessageReporter();
-		$reporter->registerReporterCallback(
-			function ( $msg ) use ( $updater ) {
-				$updater->output( "..." . $msg . "\n" );
-			}
-		);
-
-		$table = new PropertyInfoTable( false );
-		$wikiPageEntityLookup = new WikiPageEntityLookup( false );
-		$cachingEntityLookup = new CachingEntityRevisionLookup( $wikiPageEntityLookup, new \HashBagOStuff() );
-
-		$builder = new PropertyInfoTableBuilder( $table, $cachingEntityLookup );
-		$builder->setReporter( $reporter );
-		$builder->setUseTransactions( false );
-
-		$updater->output( 'Populating ' . $table->getTableName() . "\n" );
-		$builder->rebuildPropertyInfo();
-	}
-
-	/**
-	 * @see PropertyInfoStore::getPropertyInfo
-	 *
-	 * @param PropertyId $propertyId
-	 *
-	 * @return array|null
 	 *
 	 * @throws InvalidArgumentException
-	 * @throws DBError
 	 */
-	public function getPropertyInfo( PropertyId $propertyId ) {
-		wfProfileIn( __METHOD__ );
-
-		$dbw = $this->getConnection( DB_SLAVE );
-
-		$res = $dbw->selectField(
-			$this->table,
-			'pi_info',
-			array( 'pi_property_id' => $propertyId->getNumericId() ),
-			__METHOD__
-		);
-
-		$this->releaseConnection( $dbw );
-
-		if ( $res === false ) {
-			$info = null;
-		} else {
-			$info = $this->decodeInfo( $res );
-
-			if ( $info === null ) {
-				wfLogWarning( "failed to decode property info blob for " . $propertyId . ": " . substr( $res, 0, 200 ) );
-			}
+	public function __construct( $isReadonly, $wiki = false ) {
+		if ( !is_bool( $isReadonly ) ) {
+			throw new InvalidArgumentException( '$isReadonly must be boolean.' );
+		}
+		if ( !is_string( $wiki ) && $wiki !== false ) {
+			throw new InvalidArgumentException( '$wiki must be a string or false.' );
 		}
 
-		wfProfileOut( __METHOD__ );
-		return $info;
+		parent::__construct( $wiki );
+		$this->tableName = 'wb_property_info';
+		$this->isReadonly = $isReadonly;
 	}
 
 	/**
 	 * Decodes an info blob.
 	 *
-	 * @param string|null|bool  $blob
+	 * @param string|null|bool $blob
 	 *
 	 * @return array|null The decoded blob as an associative array, or null if the blob
 	 *         could not be decoded.
 	 */
-	protected function decodeInfo( $blob ) {
+	private function decodeBlob( $blob ) {
 		if ( $blob === false || $blob === null ) {
 			return null;
 		}
@@ -155,27 +72,17 @@ class PropertyInfoTable extends \DBAccessBase implements PropertyInfoStore {
 	}
 
 	/**
-	 * @see   PropertyInfoStore::getAllPropertyInfo
+	 * Decodes a result with info blobs.
 	 *
-	 * @return array[]
+	 * @param ResultWrapper $res
 	 *
-	 * @throws \DBError
+	 * @return array[] The array of decoded blobs
 	 */
-	public function getAllPropertyInfo() {
-		wfProfileIn( __METHOD__ );
-		$dbw = $this->getConnection( DB_SLAVE );
-
-		$res = $dbw->select(
-			$this->table,
-			array( 'pi_property_id', 'pi_info' ),
-			array(),
-			__METHOD__
-		);
-
+	private function decodeResult( ResultWrapper $res ) {
 		$infos = array();
 
-		while ( $row = $res->fetchObject() ) {
-			$info = $this->decodeInfo( $row->pi_info );
+		while ( ( $row = $res->fetchObject() ) !== false ) {
+			$info = $this->decodeBlob( $row->pi_info );
 
 			if ( $info === null ) {
 				wfLogWarning( "failed to decode property info blob for property "
@@ -186,9 +93,91 @@ class PropertyInfoTable extends \DBAccessBase implements PropertyInfoStore {
 			$infos[$row->pi_property_id] = $info;
 		}
 
-		$this->releaseConnection( $dbw );
+		return $infos;
+	}
 
-		wfProfileOut( __METHOD__ );
+	/**
+	 * @see PropertyInfoStore::getPropertyInfo
+	 *
+	 * @param PropertyId $propertyId
+	 *
+	 * @return array|null
+	 *
+	 * @throws InvalidArgumentException
+	 * @throws DBError
+	 */
+	public function getPropertyInfo( PropertyId $propertyId ) {
+		$dbr = $this->getConnection( DB_SLAVE );
+
+		$res = $dbr->selectField(
+			$this->tableName,
+			'pi_info',
+			array( 'pi_property_id' => $propertyId->getNumericId() ),
+			__METHOD__
+		);
+
+		$this->releaseConnection( $dbr );
+
+		if ( $res === false ) {
+			$info = null;
+		} else {
+			$info = $this->decodeBlob( $res );
+
+			if ( $info === null ) {
+				wfLogWarning( "failed to decode property info blob for " . $propertyId . ": " . substr( $res, 0, 200 ) );
+			}
+		}
+
+		return $info;
+	}
+
+	/**
+	 * @see PropertyDataTypeLookup::getPropertyInfoForDataType
+	 *
+	 * @param string $dataType
+	 *
+	 * @return array[]
+	 *
+	 * @throws DBError
+	 */
+	public function getPropertyInfoForDataType( $dataType ) {
+		$dbr = $this->getConnection( DB_SLAVE );
+
+		$res = $dbr->select(
+			$this->tableName,
+			array( 'pi_property_id', 'pi_info' ),
+			array( 'pi_type' => $dataType ),
+			__METHOD__
+		);
+
+		$infos = $this->decodeResult( $res );
+
+		$this->releaseConnection( $dbr );
+
+		return $infos;
+	}
+
+	/**
+	 * @see PropertyInfoStore::getAllPropertyInfo
+	 *
+	 * @return array[]
+	 *
+	 * @throws DBError
+	 */
+	public function getAllPropertyInfo() {
+		$dbr = $this->getConnection( DB_SLAVE );
+
+		$res = $dbr->select(
+			$this->tableName,
+			array( 'pi_property_id', 'pi_info' ),
+			array(),
+			__METHOD__
+		);
+
+		$infos = $this->decodeResult( $res );
+
+		$this->releaseConnection( $dbr );
+
 		return $infos;
 	}
 
@@ -202,15 +191,13 @@ class PropertyInfoTable extends \DBAccessBase implements PropertyInfoStore {
 	 * @throws InvalidArgumentException
 	 */
 	public function setPropertyInfo( PropertyId $propertyId, array $info ) {
-		if ( $this->readonly ) {
+		if ( $this->isReadonly ) {
 			throw new DBError( 'Cannot write when in readonly mode' );
 		}
 
-		if ( !isset( $info[ PropertyInfoStore::KEY_DATA_TYPE ]) ) {
+		if ( !isset( $info[ PropertyInfoStore::KEY_DATA_TYPE ] ) ) {
 			throw new InvalidArgumentException( 'Missing required info field: ' . PropertyInfoStore::KEY_DATA_TYPE );
 		}
-
-		wfProfileIn( __METHOD__ );
 
 		$type = $info[ PropertyInfoStore::KEY_DATA_TYPE ];
 		$json = json_encode( $info );
@@ -218,7 +205,7 @@ class PropertyInfoTable extends \DBAccessBase implements PropertyInfoStore {
 		$dbw = $this->getConnection( DB_MASTER );
 
 		$dbw->replace(
-			$this->table,
+			$this->tableName,
 			array( 'pi_property_id' ),
 			array(
 				'pi_property_id' => $propertyId->getNumericId(),
@@ -229,8 +216,6 @@ class PropertyInfoTable extends \DBAccessBase implements PropertyInfoStore {
 		);
 
 		$this->releaseConnection( $dbw );
-
-		wfProfileOut( __METHOD__ );
 	}
 
 	/**
@@ -243,15 +228,14 @@ class PropertyInfoTable extends \DBAccessBase implements PropertyInfoStore {
 	 * @return bool
 	 */
 	public function removePropertyInfo( PropertyId $propertyId ) {
-		if ( $this->readonly ) {
+		if ( $this->isReadonly ) {
 			throw new DBError( 'Cannot write when in readonly mode' );
 		}
 
-		wfProfileIn( __METHOD__ );
 		$dbw = $this->getConnection( DB_MASTER );
 
 		$dbw->delete(
-			$this->table,
+			$this->tableName,
 			array( 'pi_property_id' => $propertyId->getNumericId() ),
 			__METHOD__
 		);
@@ -259,7 +243,6 @@ class PropertyInfoTable extends \DBAccessBase implements PropertyInfoStore {
 		$c = $dbw->affectedRows();
 		$this->releaseConnection( $dbw );
 
-		wfProfileOut( __METHOD__ );
 		return $c > 0;
 	}
 
@@ -283,6 +266,7 @@ class PropertyInfoTable extends \DBAccessBase implements PropertyInfoStore {
 	 * @return string
 	 */
 	public function getTableName() {
-		return $this->table;
+		return $this->tableName;
 	}
+
 }

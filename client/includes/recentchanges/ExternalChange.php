@@ -1,6 +1,8 @@
 <?php
 
-namespace Wikibase;
+namespace Wikibase\Client\RecentChanges;
+
+use Wikibase\DataModel\Entity\EntityId;
 
 /**
  * Represents an external change
@@ -39,7 +41,7 @@ class ExternalChange {
 	}
 
 	/**
-	 * return EntityId
+	 * @return EntityId
 	 */
 	public function getEntityId() {
 		return $this->entityId;

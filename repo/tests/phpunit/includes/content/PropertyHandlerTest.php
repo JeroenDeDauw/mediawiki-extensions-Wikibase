@@ -2,10 +2,16 @@
 
 namespace Wikibase\Test;
 
+use Title;
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Entity\Property;
+use Wikibase\DataModel\Entity\PropertyId;
 use Wikibase\PropertyContent;
+use Wikibase\Repo\Content\PropertyHandler;
+use Wikibase\SettingsArray;
 
 /**
- * @covers Wikibase\PropertyHandler
+ * @covers Wikibase\Repo\Content\PropertyHandler
  *
  * @group Wikibase
  * @group WikibaseRepo
@@ -31,7 +37,7 @@ class PropertyHandlerTest extends EntityHandlerTest {
 	 * @return string
 	 */
 	public function getClassName() {
-		return '\Wikibase\PropertyHandler';
+		return 'Wikibase\Repo\Content\PropertyHandler';
 	}
 
 	/**
@@ -48,6 +54,47 @@ class PropertyHandlerTest extends EntityHandlerTest {
 		$contents[] = array( $content );
 
 		return $contents;
+	}
+
+	public function testGetTitleForId() {
+		$handler = $this->getHandler();
+		$id = new PropertyId( 'P123' );
+
+		$title = $handler->getTitleForId( $id );
+		$this->assertEquals( $id->getSerialization(), $title->getText() );
+	}
+
+	public function testGetIdForTitle() {
+		$handler = $this->getHandler();
+		$title = Title::makeTitle( $handler->getEntityNamespace(), 'P123' );
+
+		$id = $handler->getIdForTitle( $title );
+		$this->assertEquals( $title->getText(), $id->getSerialization() );
+	}
+
+	protected function newEntity( EntityId $id = null ) {
+		if ( !$id ) {
+			$id = new PropertyId( 'P7' );
+		}
+
+		$property = Property::newFromType( 'string' );
+		$property->setId( $id );
+		return $property;
+	}
+
+	public function entityIdProvider() {
+		return array(
+			array( 'P7' )
+		);
+	}
+
+	/**
+	 * @param SettingsArray $settings
+	 *
+	 * @return PropertyHandler
+	 */
+	protected function getHandler( SettingsArray $settings = null ) {
+		return $this->getWikibaseRepo( $settings )->newPropertyHandler();
 	}
 
 }

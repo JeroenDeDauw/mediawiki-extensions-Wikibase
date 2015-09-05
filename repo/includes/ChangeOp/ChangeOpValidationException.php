@@ -4,8 +4,8 @@ namespace Wikibase\ChangeOp;
 
 use Exception;
 use InvalidArgumentException;
-use ValueValidators\Result;
 use ValueValidators\Error;
+use ValueValidators\Result;
 
 /**
  * Exception thrown when the validation of a change operation failed.
@@ -55,4 +55,5 @@ class ChangeOpValidationException extends ChangeOpException {
 
 		return $text;
 	}
+
 }

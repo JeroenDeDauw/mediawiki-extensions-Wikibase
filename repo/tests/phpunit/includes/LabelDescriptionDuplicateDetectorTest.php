@@ -7,9 +7,9 @@ use ValueValidators\Result;
 use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\ItemId;
 use Wikibase\DataModel\Entity\Property;
-use Wikibase\Term;
 use Wikibase\LabelDescriptionDuplicateDetector;
-use Wikibase\Validators\UniquenessViolation;
+use Wikibase\Repo\Validators\UniquenessViolation;
+use Wikibase\TermIndexEntry;
 
 /**
  * @covers Wikibase\LabelDescriptionDuplicateDetector
@@ -25,24 +25,32 @@ class LabelDescriptionDuplicateDetectorTest extends \PHPUnit_Framework_TestCase 
 	private function getWorld() {
 		$world = array();
 
-		$world[] = new Term( array(
-			'termType' => Term::TYPE_LABEL,
+		$world[] = new TermIndexEntry( array(
+			'termType' => TermIndexEntry::TYPE_LABEL,
 			'termLanguage' => 'en',
 			'entityId' => 42,
 			'entityType' => Item::ENTITY_TYPE,
 			'termText' => 'item label',
 		) );
 
-		$world[] = new Term( array(
-			'termType' => Term::TYPE_DESCRIPTION,
+		$world[] = new TermIndexEntry( array(
+			'termType' => TermIndexEntry::TYPE_DESCRIPTION,
 			'termLanguage' => 'en',
 			'entityId' => 42,
 			'entityType' => Item::ENTITY_TYPE,
 			'termText' => 'item description',
 		) );
 
-		$world[] = new Term( array(
-			'termType' => Term::TYPE_LABEL,
+		$world[] = new TermIndexEntry( array(
+			'termType' => TermIndexEntry::TYPE_ALIAS,
+			'termLanguage' => 'en',
+			'entityId' => 42,
+			'entityType' => Item::ENTITY_TYPE,
+			'termText' => 'item alias',
+		) );
+
+		$world[] = new TermIndexEntry( array(
+			'termType' => TermIndexEntry::TYPE_LABEL,
 			'termLanguage' => 'en',
 			'entityId' => 17,
 			'entityType' => Property::ENTITY_TYPE,
@@ -52,22 +60,69 @@ class LabelDescriptionDuplicateDetectorTest extends \PHPUnit_Framework_TestCase 
 		return $world;
 	}
 
-	private function makeItem( $id, $lang = null, $label = null, $description = null ) {
-		$item = Item::newEmpty();
-		$item->setId( new ItemId( $id ) );
+	public function provideDetectLabelDescriptionConflicts() {
+		$world = $this->getWorld();
 
-		if ( $label !== null ) {
-			$item->setLabel( $lang, $label );
-		}
+		$labelError = new UniquenessViolation(
+			new ItemId( 'Q42' ),
+			'Conflicting term!',
+			'label-with-description-conflict',
+			array(
+				'item label',
+				'en',
+				new ItemId( 'Q42' )
+			)
+		);
 
-		if ( $description !== null ) {
-			$item->setDescription( $lang, $description );
-		}
+		return array(
+			'no label/description conflict' => array(
+				$world,
+				Item::ENTITY_TYPE,
+				array( 'en' => 'item label' ),
+				array(),
+				null,
+				array()
+			),
 
-		return $item;
+			'label/description conflict' => array(
+				$world,
+				Item::ENTITY_TYPE,
+				array( 'en' => 'item label' ),
+				array( 'en' => 'item description' ),
+				null,
+				array( $labelError )
+			),
+
+			'ignored label/description conflict' => array(
+				$world,
+				Item::ENTITY_TYPE,
+				array( 'en' => 'item label' ),
+				array( 'en' => 'item description' ),
+				new ItemId( 'Q42' ),
+				array()
+			),
+		);
 	}
 
-	public function provideDetectTermConflicts() {
+	/**
+	 * @dataProvider provideDetectLabelDescriptionConflicts
+	 */
+	public function testDetectLabelDescriptionConflicts(
+		array $world,
+		$entityType,
+		array $labels,
+		array $descriptions,
+		$ignore,
+		array $expectedErrors
+	) {
+		$detector = new LabelDescriptionDuplicateDetector( new MockTermIndex( $world ) );
+
+		$result = $detector->detectLabelDescriptionConflicts( $entityType, $labels, $descriptions, $ignore );
+
+		$this->assertResult( $result, $expectedErrors );
+	}
+
+	public function provideDetectLabelConflicts() {
 		$world = $this->getWorld();
 
 		$labelError = new UniquenessViolation(
@@ -81,75 +136,133 @@ class LabelDescriptionDuplicateDetectorTest extends \PHPUnit_Framework_TestCase 
 			)
 		);
 
-		$descriptionError = new UniquenessViolation(
+		$aliasError = new UniquenessViolation(
 			new ItemId( 'Q42' ),
 			'Conflicting term!',
-			'label-with-description-conflict',
+			'label-conflict',
 			array(
-				'item label',
+				'item alias',
 				'en',
 				new ItemId( 'Q42' )
 			)
 		);
 
 		return array(
-			'no label conflict' => array(
+			'labels only: no conflict' => array(
 				$world,
-				array( 'en' => 'foo' ),
+				Item::ENTITY_TYPE,
+				array( 'en' => 'item alias' ),
 				null,
 				null,
 				array()
 			),
 
-			'label conflict' => array(
+			'labels only: conflict' => array(
 				$world,
+				Item::ENTITY_TYPE,
 				array( 'en' => 'item label' ),
 				null,
-				null,
+				new ItemId( 'Q55' ), // ignores Q55, but conflict is with Q42
 				array( $labelError )
 			),
 
-			'ignored label conflict' => array(
+			'labels only: other entity type' => array(
 				$world,
+				Property::ENTITY_TYPE,
+				array( 'en' => 'item label' ),
+				null,
+				null,
+				array()
+			),
+
+			'labels only: ignored conflict' => array(
+				$world,
+				Item::ENTITY_TYPE,
 				array( 'en' => 'item label' ),
 				null,
 				new ItemId( 'Q42' ),
 				array()
 			),
 
-			'no label/description conflict' => array(
+			'labels+aliases: no conflict' => array(
 				$world,
-				array( 'en' => 'item label' ),
+				Item::ENTITY_TYPE,
+				array( 'en' => 'foo' ),
+				array( 'en' => array( 'bar' ) ),
+				null,
+				array()
+			),
+
+			'labels+aliases: empty' => array(
+				$world,
+				Item::ENTITY_TYPE,
+				array(),
 				array(),
 				null,
 				array()
 			),
 
-			'label/description conflict' => array(
+			'labels+aliases: label conflict' => array(
 				$world,
+				Item::ENTITY_TYPE,
 				array( 'en' => 'item label' ),
-				array( 'en' => 'item description' ),
+				array(),
 				null,
-				array( $descriptionError )
+				array( $labelError )
 			),
 
-			'ignored label/description conflict' => array(
+			'labels+aliases: alias conflict' => array(
 				$world,
+				Item::ENTITY_TYPE,
+				array(),
+				array( 'en' => array( 'item alias' ) ),
+				new ItemId( 'Q55' ), // ignores Q55, but conflict is with Q42
+				array( $aliasError )
+			),
+
+			'labels+aliases: label conflicts with alias' => array(
+				$world,
+				Item::ENTITY_TYPE,
+				array( 'en' => 'item alias' ),
+				array(), // aliases must be enabled
+				null,
+				array( $aliasError )
+			),
+
+			'labels+aliases: alias conflicts with label' => array(
+				$world,
+				Item::ENTITY_TYPE,
+				array(),
+				array( 'en' => array( 'item label' ) ),
+				null,
+				array( $labelError )
+			),
+
+			'labels+aliases: other entity type' => array(
+				$world,
+				Property::ENTITY_TYPE,
 				array( 'en' => 'item label' ),
-				array( 'en' => 'item description' ),
-				new ItemId( 'Q42' ),
+				array( 'en' => array( 'item alias' ) ),
+				null,
 				array()
 			),
 		);
 	}
 
 	/**
-	 * @dataProvider provideDetectTermConflicts
+	 * @dataProvider provideDetectLabelConflicts
 	 */
-	public function testDetectTermConflicts( $world, $labels, $descriptions, $ignore, $expectedErrors ) {
+	public function testDetectLabelConflicts(
+		array $world,
+		$entityType,
+		array $labels,
+		array $aliases = null,
+		$ignore,
+		array $expectedErrors
+	) {
 		$detector = new LabelDescriptionDuplicateDetector( new MockTermIndex( $world ) );
 
-		$result = $detector->detectTermConflicts( $labels, $descriptions, $ignore );
+		$result = $detector->detectLabelConflicts( $entityType, $labels, $aliases, $ignore );
 
 		$this->assertResult( $result, $expectedErrors );
 	}
@@ -158,11 +271,11 @@ class LabelDescriptionDuplicateDetectorTest extends \PHPUnit_Framework_TestCase 
 	 * @param Result $result
 	 * @param Error[] $expectedErrors
 	 */
-	protected function assertResult( Result $result, $expectedErrors ) {
+	protected function assertResult( Result $result, array $expectedErrors ) {
 		$this->assertEquals( empty( $expectedErrors ), $result->isValid(), 'isValid()' );
 		$errors = $result->getErrors();
 
-		$this->assertEquals( count( $expectedErrors ), count( $errors ), 'Number of errors:' );
+		$this->assertSameSize( $expectedErrors, $errors, 'Number of errors:' );
 
 		foreach ( $expectedErrors as $i => $expectedError ) {
 			$error = $errors[$i];
@@ -170,7 +283,7 @@ class LabelDescriptionDuplicateDetectorTest extends \PHPUnit_Framework_TestCase 
 			$this->assertEquals( $expectedError->getCode(), $error->getCode(), 'Error code:' );
 			$this->assertEquals( $expectedError->getParameters(), $error->getParameters(), 'Error parameters:' );
 
-			$this->assertInstanceOf( 'Wikibase\Validators\UniquenessViolation', $error );
+			$this->assertInstanceOf( 'Wikibase\Repo\Validators\UniquenessViolation', $error );
 			$this->assertEquals( $expectedError->getConflictingEntity(), $error->getConflictingEntity() );
 		}
 	}

@@ -1,35 +1,84 @@
 /**
- * Replacing the native MediaWiki search suggestions with Wikibase's entity selector widget.
+ * Replacing the native MediaWiki search suggestions with the jQuery.wikibase.entitysearch widget.
  *
  * @license GNU GPL v2+
- * @author Jens Ohlig
  * @author H. Snater < mediawiki@snater.com >
  */
 ( function( $, mw ) {
 	'use strict';
 
-	$( document ).ready( function() {
+	$( function() {
 		var $form = $( '#searchform ' ),
-			$input = $( '#searchInput' );
+			$input = $( '#searchInput' ),
+			// Both inputs must be named "search" to support Firefox' smart keyword feature (T60467)
+			$hiddenInput = $( '<input type="hidden" name="search"/>' );
+
+		/**
+		 * @param {jQuery} $form
+		 * @return {string}
+		 */
+		function getHref( $form ) {
+			var href = $form.attr( 'action' ),
+				params = {};
+
+			href += href.indexOf( '?' ) === -1 ? '?' : '&';
+
+			$.each( $form.serializeArray(), function( i, param ) {
+				params[param.name] = param.value;
+			} );
+
+			params.search = $input.val();
+
+			return href + $.param( params );
+		}
 
 		/**
 		 * Updates the suggestion list special item that triggers a full-text search.
+		 *
+		 * @param {jQuery.ui.ooMenu.CustomItem} searchContaining
 		 */
-		function updateSuggestionSpecial() {
+		function updateSuggestionSpecial( searchContaining ) {
 			var $suggestionsSpecial = $( '.wb-entitysearch-suggestions .suggestions-special' );
 			$suggestionsSpecial.find( '.special-query' ).text( $input.val() );
+
+			searchContaining.setLink( getHref( $form ) + '&fulltext=1' );
 		}
 
 		/**
 		 * Removes the native search box suggestion list.
 		 *
-		 * @param {Object} input Search box node
+		 * @param {HTMLElement} input Search box node
 		 */
 		function removeSuggestionContext( input ) {
 			// Native fetch() updates/re-sets the data attribute with the suggestion context.
 			$.data( input, 'suggestionsContext' ).config.fetch = function() {};
 			$.removeData( input, 'suggestionsContext' );
 		}
+
+		var suggestionsPlaceholder = new $.ui.ooMenu.CustomItem(
+			$( '<div/>' ).append( $.createSpinner() )
+		);
+
+		var $searchContaining = $( '<div>' )
+			.addClass( 'suggestions-special' )
+			.append(
+				$( '<div>' )
+					.addClass( 'special-label' )
+					.text( mw.msg( 'searchsuggest-containing' ) ),
+				$( '<div>' )
+					.addClass( 'special-query' )
+			);
+
+		var searchContaining = new $.ui.ooMenu.CustomItem( $searchContaining, null, function() {
+			$form.submit();
+		}, 'wb-entitysearch-suggestions' );
+
+		var $searchMenu = $( '<ul/>' ).ooMenu( {
+			customItems: [searchContaining]
+		} );
+
+		// Must be placed in that order to support Firefox' smart keyword feature (T60467)
+		$input.before( $hiddenInput );
 
 		$input
 		.one( 'focus', function( event ) {
@@ -47,35 +96,26 @@
 				} );
 			}
 		} )
-		.entityselector( {
+		.entitysearch( {
 			url: mw.config.get( 'wgServer' ) + mw.config.get( 'wgScriptPath' ) + '/api.php',
-			emulateSearchBox: true,
-			customListItem: {
-				content: $( '<div>' )
-					.addClass( 'suggestions-special' )
-					.append(
-						$( '<div>' )
-							.addClass( 'special-label' )
-							.text( mw.msg( 'searchsuggest-containing' ) ),
-						$( '<div>' )
-							.addClass( 'special-query' )
-				),
-				action: function( event, entityselector ) {
-					$form.submit();
-				},
-				cssClass: 'wb-entitysearch-suggestions'
-			},
+			menu: $searchMenu.data( 'ooMenu' ),
 			position: $.extend(
 				{},
 				$.wikibase.entityselector.prototype.options.position,
 				{ offset: '-1 2' }
-			)
+			),
+			confineMinWidthTo: $form,
+			suggestionsPlaceholder: suggestionsPlaceholder
 		} )
 		.on( 'entityselectoropen', function( event ) {
-			updateSuggestionSpecial();
+			updateSuggestionSpecial( searchContaining );
 		} )
 		.on( 'eachchange', function( event, oldVal ) {
-			updateSuggestionSpecial();
+			$hiddenInput.val( '' );
+			updateSuggestionSpecial( searchContaining );
+		} )
+		.on( 'entityselectorselected', function( event, entityId ) {
+			$hiddenInput.val( entityId );
 		} );
 
 		// TODO: Re-evaluate entity selector input (e.g. hitting "Go" after having hit "Search"
@@ -93,7 +133,7 @@
 				|| event.keyCode === $.ui.keyCode.ENTER || event.keyCode === $.ui.keyCode.SPACE
 			) {
 				var entity = $input.data( 'entityselector' ).selectedEntity();
-				if ( entity && entity.url ){
+				if ( entity && entity.url ) {
 					event.preventDefault(); // Prevent default form submit action.
 					window.location.href = entity.url;
 				}

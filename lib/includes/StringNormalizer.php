@@ -2,7 +2,7 @@
 
 namespace Wikibase;
 
-use UtfNormal;
+use UtfNormal\Validator;
 
 /**
  * StringNormalizer provides several methods for normalizing strings.
@@ -23,7 +23,8 @@ class StringNormalizer {
 	 *
 	 * @todo: this was stolen from the Language class. Make that code reusable.
 	 *
-	 * @param $string String
+	 * @param string $string
+	 *
 	 * @return string
 	 */
 	protected function removeBadCharLast( $string ) {
@@ -50,7 +51,8 @@ class StringNormalizer {
 	 *
 	 * @todo: this was stolen from the Language class. Make that code reusable.
 	 *
-	 * @param $string String
+	 * @param string $string
+	 *
 	 * @return string
 	 */
 	protected function removeBadCharFirst( $string ) {
@@ -67,7 +69,7 @@ class StringNormalizer {
 	/**
 	 * Remove incomplete UTF-8 sequences from the beginning and end of the string.
 	 *
-	 * @param $string
+	 * @param string $string
 	 *
 	 * @return string
 	 */
@@ -78,7 +80,7 @@ class StringNormalizer {
 	}
 
 	/**
-	 * Trim initial and trailing whitespace and control chars, and optionally compress internal ones.
+	 * Trim initial and trailing whitespace and control chars, and compress some internal control chars.
 	 *
 	 * @param string $inputString The actual string to process.
 	 *
@@ -87,25 +89,25 @@ class StringNormalizer {
 	public function trimWhitespace( $inputString ) {
 		$inputString = $this->trimBadChars( $inputString );
 
-		// \p{Z} - whitespace
-		// \p{Cc} - control chars
 		// WARNING: *any* invalid UTF8 sequence causes preg_replace to return an empty string.
-		$trimmed = preg_replace( '/^[\p{Z}\p{Cc}]+|[\p{Z}\p{Cc}]+$/u', '', $inputString );
-		$trimmed = preg_replace( '/[\p{Cc}]+/u', ' ', $trimmed );
+		// \p{Cc} only includes general control characters.
+		$trimmed = preg_replace( '/\p{Cc}+/u', ' ', $inputString );
+		// \p{Z} includes all whitespace characters and invisible separators.
+		$trimmed = preg_replace( '/^\p{Z}+|\p{Z}+$/u', '', $trimmed );
 		return $trimmed;
 	}
 
 	/**
-	 * Normalize string into NFC by using the cleanup metod from UtfNormal.
+	 * Normalize string into NFC by using the cleanup method from UtfNormal.
 	 *
 	 * @param string $inputString The actual string to process.
 	 *
-	 * @return string where whitespace possibly are removed.
+	 * @return string
 	 */
 	public function cleanupToNFC( $inputString ) {
 		$cleaned = $inputString;
 		$cleaned = $this->trimBadChars( $cleaned );
-		$cleaned = UtfNormal::cleanUp( $cleaned );
+		$cleaned = Validator::cleanUp( $cleaned );
 		return $cleaned;
 	}
 
@@ -119,6 +121,5 @@ class StringNormalizer {
 	public function trimToNFC( $inputString ) {
 		return $this->cleanupToNFC( $this->trimWhitespace( $inputString ) );
 	}
-
 
 }

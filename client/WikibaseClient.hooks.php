@@ -7,33 +7,30 @@ use BaseTemplate;
 use ChangesList;
 use FormOptions;
 use IContextSource;
-use JobQueueGroup;
 use Message;
-use MovePageForm;
-use MWException;
 use OutputPage;
 use Parser;
-use ParserOutput;
 use QuickTemplate;
 use RecentChange;
-use RecursiveDirectoryIterator;
-use RecursiveIteratorIterator;
-use RuntimeException;
-use SpecialWatchlist;
-use SplFileInfo;
 use Skin;
 use SpecialRecentChanges;
-use StripState;
+use SpecialWatchlist;
 use Title;
 use UnexpectedValueException;
 use User;
 use Wikibase\Client\Hooks\BaseTemplateAfterPortletHandler;
 use Wikibase\Client\Hooks\BeforePageDisplayHandler;
+use Wikibase\Client\Hooks\ChangesPageWikibaseFilterHandler;
+use Wikibase\Client\Hooks\DeletePageNoticeCreator;
 use Wikibase\Client\Hooks\InfoActionHookHandler;
 use Wikibase\Client\Hooks\SpecialWatchlistQueryHandler;
-use Wikibase\Client\MovePageNotice;
-use Wikibase\Client\Hooks\OtherProjectsSidebarGenerator;
+use Wikibase\Client\RecentChanges\ChangeLineFormatter;
+use Wikibase\Client\RecentChanges\ExternalChangeFactory;
+use Wikibase\Client\RecentChanges\RecentChangesFilterOptions;
+use Wikibase\Client\RepoItemLinkGenerator;
 use Wikibase\Client\WikibaseClient;
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\SiteLink;
 
 /**
  * File defining the hook handlers for the Wikibase Client extension.
@@ -48,6 +45,7 @@ use Wikibase\Client\WikibaseClient;
  * @author Tobias Gritschacher
  * @author Jeroen De Dauw < jeroendedauw@gmail.com >
  * @author Marius Hoch < hoo@online.de >
+ * @author Bene* < benestar.wikimedia@gmail.com >
  */
 final class ClientHooks {
 
@@ -68,125 +66,12 @@ final class ClientHooks {
 	 *
 	 * @since 0.1
 	 *
-	 * @param array $files
+	 * @param string[] &$paths
 	 *
 	 * @return bool
 	 */
-	public static function registerUnitTests( array &$files ) {
-		// @codeCoverageIgnoreStart
-		$directoryIterator = new RecursiveDirectoryIterator( __DIR__ . '/tests/phpunit/' );
-
-		/**
-		 * @var SplFileInfo $fileInfo
-		 */
-		foreach ( new RecursiveIteratorIterator( $directoryIterator ) as $fileInfo ) {
-			if ( substr( $fileInfo->getFilename(), -8 ) === 'Test.php' ) {
-				$files[] = $fileInfo->getPathname();
-			}
-		}
-
-		return true;
-		// @codeCoverageIgnoreEnd
-	}
-
-	/**
-	 * Deletes all the data stored on the repository.
-	 *
-	 * @since 0.2
-	 *
-	 * @param callable $reportMessage // takes a string param and echos it
-	 *
-	 * @return bool
-	 */
-	public static function onWikibaseDeleteData( $reportMessage ) {
-		wfProfileIn( __METHOD__ );
-
-		$store = WikibaseClient::getDefaultInstance()->getStore();
-		$stores = array_flip( $GLOBALS['wgWBClientStores'] );
-
-		$reportMessage( "Deleting data from the " . $stores[get_class( $store )] . " store..." );
-
-		$store->clear();
-
-		// @todo filter by something better than RC_EXTERNAL, in case something else uses that someday
-		$dbw = wfGetDB( DB_MASTER );
-		$dbw->delete(
-			'recentchanges',
-			array( 'rc_type' => RC_EXTERNAL ),
-			__METHOD__
-		);
-
-		$reportMessage( "done!\n" );
-
-		wfProfileOut( __METHOD__ );
-		return true;
-	}
-
-	/**
-	 * Rebuilds all the data stored on the repository.
-	 * This hook will probably be called manually when the
-	 * rebuildAllData script is run on the client.
-	 *
-	 * @since 0.2
-	 *
-	 * @param callable $reportMessage // takes a string parameter and echos it
-	 *
-	 * @return bool
-	 */
-	public static function onWikibaseRebuildData( $reportMessage ) {
-		wfProfileIn( __METHOD__ );
-
-		$store = WikibaseClient::getDefaultInstance()->getStore();
-		$stores = array_flip( $GLOBALS['wgWBClientStores'] );
-		$reportMessage( "Rebuilding all data in the " . $stores[get_class( $store )]
-			. " store on the client..." );
-		$store->rebuild();
-		$changes = ChangesTable::singleton();
-		$changes = $changes->select(
-			null,
-			array(),
-			array(),
-			__METHOD__
-		);
-		ChangeHandler::singleton()->handleChanges( iterator_to_array( $changes ) );
-		$reportMessage( "done!\n" );
-
-		wfProfileOut( __METHOD__ );
-		return true;
-	}
-
-	/**
-	 * Hook for injecting a message on [[Special:MovePage]]
-	 * @see https://www.mediawiki.org/wiki/Manual:Hooks/SpecialMovepageAfterMove
-	 *
-	 * @since 0.3
-	 *
-	 * @param MovePageForm $movePage
-	 * @param Title &$oldTitle
-	 * @param Title &$newTitle
-	 *
-	 * @return bool
-	 */
-	public static function onSpecialMovepageAfterMove( MovePageForm $movePage, Title &$oldTitle,
-		Title &$newTitle ) {
-		$wikibaseClient = WikibaseClient::getDefaultInstance();
-		$siteLinkLookup = $wikibaseClient->getStore()->getSiteLinkTable();
-		$repoLinker = $wikibaseClient->newRepoLinker();
-
-		$movePageNotice = new MovePageNotice(
-			$siteLinkLookup,
-			$wikibaseClient->getSettings()->getSetting( 'siteGlobalID' ),
-			$repoLinker
-		);
-
-		$html = $movePageNotice->getPageMoveNoticeHtml(
-			$oldTitle,
-			$newTitle
-		);
-
-		$out = $movePage->getOutput();
-		$out->addModules( 'wikibase.client.page-move' );
-		$out->addHTML( $html );
+	public static function registerUnitTests( array &$paths ) {
+		$paths[] = __DIR__ . '/tests/phpunit/';
 
 		return true;
 	}
@@ -203,8 +88,8 @@ final class ClientHooks {
 	public static function onScribuntoExternalLibraries( $engine, array &$extraLibraries ) {
 		$allowDataTransclusion = WikibaseClient::getDefaultInstance()->getSettings()->getSetting( 'allowDataTransclusion' );
 		if ( $engine == 'lua' && $allowDataTransclusion === true ) {
-			$extraLibraries['mw.wikibase'] = 'Scribunto_LuaWikibaseLibrary';
-			$extraLibraries['mw.wikibase.entity'] = 'Scribunto_LuaWikibaseEntityLibrary';
+			$extraLibraries['mw.wikibase'] = 'Wikibase\Client\DataAccess\Scribunto\Scribunto_LuaWikibaseLibrary';
+			$extraLibraries['mw.wikibase.entity'] = 'Wikibase\Client\DataAccess\Scribunto\Scribunto_LuaWikibaseEntityLibrary';
 		}
 
 		return true;
@@ -216,27 +101,24 @@ final class ClientHooks {
 	 *
 	 * @since 0.2
 	 *
-	 * @param &$conds[]
-	 * @param &$tables[]
-	 * @param &$join_conds[]
+	 * @param array &$conds
+	 * @param string[] &$tables
+	 * @param array &$join_conds
 	 * @param FormOptions $opts
-	 * @param &$query_options[]
-	 * @param &$fields[]
+	 * @param array &$query_options
+	 * @param string[] &$fields
 	 *
 	 * @return bool
 	 */
 	public static function onSpecialRecentChangesQuery( array &$conds, array &$tables,
 		array &$join_conds, FormOptions $opts, array &$query_options, array &$fields
 	) {
-		wfProfileIn( __METHOD__ );
-
 		$rcFilterOpts = new RecentChangesFilterOptions( $opts );
 
 		if ( $rcFilterOpts->showWikibaseEdits() === false ) {
 			$conds[] = 'rc_type != ' . RC_EXTERNAL;
 		}
 
-		wfProfileOut( __METHOD__ );
 		return true;
 	}
 
@@ -255,8 +137,6 @@ final class ClientHooks {
 	 */
 	public static function onOldChangesListRecentChangesLine( ChangesList &$changesList, &$s,
 		RecentChange $rc, &$classes = array() ) {
-
-		wfProfileIn( __METHOD__ );
 
 		$type = $rc->getAttribute( 'rc_type' );
 
@@ -293,7 +173,6 @@ final class ClientHooks {
 		// OutputPage will ignore multiple calls
 		$changesList->getOutput()->addModuleStyles( 'wikibase.client.changeslist.css' );
 
-		wfProfileOut( __METHOD__ );
 		return true;
 	}
 
@@ -307,7 +186,7 @@ final class ClientHooks {
 	 * @param array &$tables
 	 * @param array &$join_conds
 	 * @param array &$fields
-	 * @param FormOptions|null $opts
+	 * @param FormOptions|array|null $opts MediaWiki 1.22 used an array and MobileFrontend still does.
 	 *
 	 * @return bool
 	 */
@@ -315,87 +194,13 @@ final class ClientHooks {
 		array &$join_conds, array &$fields, $opts
 	) {
 		$db = wfGetDB( DB_SLAVE );
-		$handler = new SpecialWatchlistQueryHandler( $GLOBALS['wgUser'], $db );
+		$settings = WikibaseClient::getDefaultInstance()->getSettings();
+		$showExternalChanges = $settings->getSetting( 'showExternalRecentChanges' );
+
+		$handler = new SpecialWatchlistQueryHandler( $GLOBALS['wgUser'], $db, $showExternalChanges );
 
 		$conds = $handler->addWikibaseConditions( $GLOBALS['wgRequest'], $conds, $opts );
 
-		return true;
-	}
-
-	/**
-	 * Hook runs after internal parsing
-	 * @see https://www.mediawiki.org/wiki/Manual:Hooks/ParserAfterParse
-	 *
-	 * @since 0.1
-	 *
-	 * @param Parser $parser
-	 * @param string $text
-	 * @param StripState $stripState
-	 *
-	 * @return bool
-	 */
-	public static function onParserAfterParse( Parser &$parser, &$text, StripState $stripState ) {
-		// this hook tries to access repo SiteLinkTable
-		// it interferes with any test that parses something, like a page or a message
-		if ( defined( 'MW_PHPUNIT_TEST' ) ) {
-			return true;
-		}
-
-		if ( !self::isWikibaseEnabled( $parser->getTitle()->getNamespace() ) ) {
-			// shorten out
-			return true;
-		}
-
-		wfProfileIn( __METHOD__ );
-
-		// @todo split up the multiple responsibilities here and in lang link handler
-
-		$parserOutput = $parser->getOutput();
-
-		// only run this once, for the article content and not interface stuff
-		//FIXME: this also runs for messages in EditPage::showEditTools! Ugh!
-		if ( $parser->getOptions()->getInterfaceMessage() ) {
-			wfProfileOut( __METHOD__ );
-			return true;
-		}
-
-		$wikibaseClient = WikibaseClient::getDefaultInstance();
-		$settings = $wikibaseClient->getSettings();
-
-		$langLinkHandler = new LangLinkHandler(
-			$settings->getSetting( 'siteGlobalID' ),
-			$wikibaseClient->getNamespaceChecker(),
-			$wikibaseClient->getStore()->getSiteLinkTable(),
-			$wikibaseClient->getSiteStore(),
-			$wikibaseClient->getLangLinkSiteGroup()
-		);
-
-		$useRepoLinks = $langLinkHandler->useRepoLinks( $parser->getTitle(), $parser->getOutput() );
-
-		try {
-			if ( $useRepoLinks ) {
-				// add links
-				$langLinkHandler->addLinksFromRepository( $parser->getTitle(), $parser->getOutput() );
-			}
-
-			$langLinkHandler->updateItemIdProperty( $parser->getTitle(), $parser->getOutput() );
-		} catch ( \Exception $e ) {
-			wfWarn( 'Failed to add repo links: ' . $e->getMessage() );
-		}
-
-		if ( $useRepoLinks || $settings->getSetting( 'alwaysSort' ) ) {
-			// sort links
-			$interwikiSorter = new InterwikiSorter(
-				$settings->getSetting( 'sort' ),
-				$settings->getSetting( 'interwikiSortOrders' ),
-				$settings->getSetting( 'sortPrepend' )
-			);
-			$interwikiLinks = $parserOutput->getLanguageLinks();
-			$sortedLinks = $interwikiSorter->sortLinks( $interwikiLinks );
-			$parserOutput->setLanguageLinks( $sortedLinks );
-		}
-
-		wfProfileOut( __METHOD__ );
 		return true;
 	}
 
@@ -404,29 +209,56 @@ final class ClientHooks {
 	 *
 	 * @since 0.4
 	 *
-	 * @param QuickTemplate &$sk
-	 * @param array &$toolbox
+	 * @param BaseTemplate $baseTemplate
+	 * @param array $toolbox
 	 *
-	 * @return boolean
+	 * @return bool
 	 */
-	public static function onBaseTemplateToolbox( QuickTemplate &$sk, &$toolbox ) {
-		$prefixedId = $sk->getSkin()->getOutput()->getProperty( 'wikibase_item' );
+	public static function onBaseTemplateToolbox( BaseTemplate $baseTemplate, array &$toolbox ) {
+		$wikibaseClient = WikibaseClient::getDefaultInstance();
+		$skin = $baseTemplate->getSkin();
+		$idString = $skin->getOutput()->getProperty( 'wikibase_item' );
+		$entityId = null;
 
-		if ( $prefixedId !== null ) {
-			$entityIdParser = WikibaseClient::getDefaultInstance()->getEntityIdParser();
-			$entityId = $entityIdParser->parse( $prefixedId );
+		if ( $idString !== null ) {
+			$entityIdParser = $wikibaseClient->getEntityIdParser();
+			$entityId = $entityIdParser->parse( $idString );
+		} elseif ( Action::getActionName( $skin ) !== 'view' ) {
+			// Try to load the item ID from Database, but only do so on non-article views,
+			// (where the article's OutputPage isn't available to us).
+			$entityId = self::getEntityIdForTitle( $skin->getTitle() );
+		}
 
-			$repoLinker = WikibaseClient::getDefaultInstance()->newRepoLinker();
-			$itemLink = $repoLinker->getEntityUrl( $entityId );
-
+		if ( $entityId !== null ) {
+			$repoLinker = $wikibaseClient->newRepoLinker();
 			$toolbox['wikibase'] = array(
-				'text' => $sk->getMsg( 'wikibase-dataitem' )->text(),
-				'href' => $itemLink,
+				'text' => $baseTemplate->getMsg( 'wikibase-dataitem' )->text(),
+				'href' => $repoLinker->getEntityUrl( $entityId ),
 				'id' => 't-wikibase'
 			);
 		}
 
 		return true;
+	}
+
+	/**
+	 * @param Title|null $title
+	 *
+	 * @return EntityId|null
+	 */
+	private static function getEntityIdForTitle( Title $title = null ) {
+		if ( $title === null || !self::isWikibaseEnabled( $title->getNamespace() ) ) {
+			return null;
+		}
+
+		$wikibaseClient = WikibaseClient::getDefaultInstance();
+		$siteLinkLookup = $wikibaseClient->getStore()->getSiteLinkLookup();
+		return $siteLinkLookup->getItemIdForSiteLink(
+			new SiteLink(
+				$wikibaseClient->getSettings()->getSetting( 'siteGlobalID' ),
+				$title->getFullText()
+			)
+		);
 	}
 
 	/**
@@ -439,7 +271,7 @@ final class ClientHooks {
 	 *
 	 * @return bool
 	 */
-	 public static function onBeforePageDisplayAddJsConfig( OutputPage &$out, Skin &$skin ) {
+	public static function onBeforePageDisplayAddJsConfig( OutputPage &$out, Skin &$skin ) {
 		$prefixedId = $out->getProperty( 'wikibase_item' );
 
 		if ( $prefixedId !== null ) {
@@ -461,48 +293,11 @@ final class ClientHooks {
 	 * @return bool
 	 */
 	public static function onBeforePageDisplay( OutputPage &$out, Skin &$skin ) {
-		wfProfileIn( __METHOD__ );
-
 		$namespaceChecker = WikibaseClient::getDefaultInstance()->getNamespaceChecker();
 		$beforePageDisplayHandler = new BeforePageDisplayHandler( $namespaceChecker );
 
 		$actionName = Action::getActionName( $skin->getContext() );
-		$beforePageDisplayHandler->addModules( $out, $skin, $actionName );
-
-		wfProfileOut( __METHOD__ );
-
-		return true;
-	}
-
-	/**
-	 * Add output page property if repo links are suppressed, and property for item id
-	 *
-	 * @since 0.4
-	 *
-	 * @param OutputPage &$out
-	 * @param ParserOutput $pout
-	 *
-	 * @return bool
-	 */
-	public static function onOutputPageParserOutput( OutputPage &$out, ParserOutput $pout ) {
-		if ( !self::isWikibaseEnabled( $out->getTitle()->getNamespace() ) ) {
-			// shorten out
-			return true;
-		}
-
-		$langLinkHandler = WikibaseClient::getDefaultInstance()->getLangLinkHandler();
-
-		$noExternalLangLinks = $langLinkHandler->getNoExternalLangLinks( $pout );
-
-		if ( $noExternalLangLinks !== array() ) {
-			$out->setProperty( 'noexternallanglinks', $noExternalLangLinks );
-		}
-
-		$itemId = $pout->getProperty( 'wikibase_item' );
-
-		if ( $itemId !== false ) {
-			$out->setProperty( 'wikibase_item', $itemId );
-		}
+		$beforePageDisplayHandler->addModules( $out, $actionName );
 
 		return true;
 	}
@@ -520,79 +315,86 @@ final class ClientHooks {
 	public static function onSkinTemplateOutputPageBeforeExec( Skin &$skin, QuickTemplate &$template ) {
 		$title = $skin->getContext()->getTitle();
 		$wikibaseClient = WikibaseClient::getDefaultInstance();
-		$settings = $wikibaseClient->getSettings();
 
 		if ( !self::isWikibaseEnabled( $title->getNamespace() ) ) {
 			// shorten out
 			return true;
 		}
 
-		wfProfileIn( __METHOD__ );
-
 		$repoLinker = $wikibaseClient->newRepoLinker();
 		$entityIdParser = $wikibaseClient->getEntityIdParser();
 
-		$siteGroup = $wikibaseClient->getSiteGroup();
+		$siteGroup = $wikibaseClient->getLangLinkSiteGroup();
+
+		$languageUrls = $template->get( 'language_urls' );
+		$hasLangLinks = $languageUrls !== false && !empty( $languageUrls );
 
 		$langLinkGenerator = new RepoItemLinkGenerator(
 			WikibaseClient::getDefaultInstance()->getNamespaceChecker(),
 			$repoLinker,
 			$entityIdParser,
-			$siteGroup
+			$siteGroup,
+			$wikibaseClient->getSettings()->getSetting( 'siteGlobalID' )
 		);
 
 		$action = Action::getActionName( $skin->getContext() );
 
-		$isAnon = ! $skin->getContext()->getUser()->isLoggedIn();
 		$noExternalLangLinks = $skin->getOutput()->getProperty( 'noexternallanglinks' );
 		$prefixedId = $skin->getOutput()->getProperty( 'wikibase_item' );
 
-		$editLink = $langLinkGenerator->getLink( $title, $action, $isAnon, $noExternalLangLinks, $prefixedId );
+		$editLink = $langLinkGenerator->getLink( $title, $action, $hasLangLinks, $noExternalLangLinks, $prefixedId );
 
 		// there will be no link in some situations, like add links widget disabled
 		if ( $editLink ) {
 			$template->set( 'wbeditlanglinks', $editLink );
 		}
 
-		// needed to have "Other languages" section display, so we can add "add links"
-		// by default, the css then hides it if the widget is not enabled for a page or user
-		if ( $template->get( 'language_urls' ) === false && $title->exists() ) {
+		// Needed to have "Other languages" section display, so we can add "add links".
+		// Only force the section to display if we are going to actually add such a link:
+		// Where external langlinks aren't suppressed and where action == 'view'.
+		if ( $languageUrls === false && $title->exists()
+			&& ( $noExternalLangLinks === null || !in_array( '*', $noExternalLangLinks ) )
+			&& $action === 'view'
+		) {
 			$template->set( 'language_urls', array() );
 		}
 
-		wfProfileOut( __METHOD__ );
 		return true;
 	}
 
 	/**
-	 * Displays a sidebar section for other project links.
+	 * Initialise beta feature preferences
 	 *
 	 * @since 0.5
 	 *
-	 * @param Skin $skin
-	 * @param array $bar
+	 * @param User $user
+	 * @param array $betaPreferences
 	 *
 	 * @return bool
 	 */
-	public static function onSkinBuildSidebar( Skin $skin, &$bar ) {
-		$settings = WikibaseClient::getDefaultInstance()->getSettings();
+	public static function onGetBetaFeaturePreferences( User $user, array &$betaPreferences ) {
+		global $wgExtensionAssetsPath;
 
-		$siteIdsToOutput = $settings->getSetting( 'otherProjectsLinks' );
-		if ( count( $siteIdsToOutput ) === 0 ) {
+		preg_match( '+' . preg_quote( DIRECTORY_SEPARATOR ) . '(?:vendor|extensions)'
+			. preg_quote( DIRECTORY_SEPARATOR ) . '.*+', __DIR__, $remoteExtPath );
+
+		$assetsPath = $wgExtensionAssetsPath . DIRECTORY_SEPARATOR . '..' . $remoteExtPath[0];
+
+		$settings = WikibaseClient::getDefaultInstance()->getSettings();
+		if ( !$settings->getSetting( 'otherProjectsLinksBeta' ) || $settings->getSetting( 'otherProjectsLinksByDefault' ) ) {
 			return true;
 		}
 
-		$generator = new OtherProjectsSidebarGenerator(
-			$settings->getSetting( 'siteGlobalID' ),
-			WikibaseClient::getDefaultInstance()->getStore()->getSiteLinkTable(),
-			WikibaseClient::getDefaultInstance()->getSiteStore(),
-			$siteIdsToOutput
+		$betaPreferences['wikibase-otherprojects'] = array(
+			'label-message' => 'wikibase-otherprojects-beta-message',
+			'desc-message' => 'wikibase-otherprojects-beta-description',
+			'screenshot' => array(
+				'ltr' => $assetsPath . '/resources/images/wb-otherprojects-beta-ltr.svg',
+				'rtl' => $assetsPath . '/resources/images/wb-otherprojects-beta-rtl.svg'
+			),
+			'info-link' => 'https://www.mediawiki.org/wiki/Wikibase/Beta_Features/Other_projects_sidebar',
+			'discussion-link' => 'https://www.mediawiki.org/wiki/Talk:Wikibase/Beta_Features/Other_projects_sidebar'
 		);
-
-		$otherProjectsSidebar = $generator->buildProjectLinkSidebar( $skin->getContext()->getTitle() );
-		if ( count( $otherProjectsSidebar ) !== 0 ) {
-			$bar['wikibase-otherprojects'] = $otherProjectsSidebar;
-		}
 
 		return true;
 	}
@@ -606,15 +408,41 @@ final class ClientHooks {
 	 * @return bool
 	 */
 	public static function onSpecialRecentChangesFilters( SpecialRecentChanges $special, array &$filters ) {
-		$context = $special->getContext();
+		$hookHandler = new ChangesPageWikibaseFilterHandler(
+			$special->getContext(),
+			WikibaseClient::getDefaultInstance()->getSettings()->getSetting( 'showExternalRecentChanges' ),
+			'hidewikidata',
+			'rcshowwikidata',
+			'wikibase-rc-hide-wikidata'
+		);
 
-		if ( $context->getRequest()->getBool( 'enhanced', $context->getUser()->getOption( 'usenewrc' ) ) === false ) {
-			$showWikidata = $special->getUser()->getOption( 'rcshowwikidata' );
-			$default = $showWikidata ? false : true;
-			if ( $context->getUser()->getOption( 'usenewrc' ) === 0 ) {
-				$filters['hidewikidata'] = array( 'msg' => 'wikibase-rc-hide-wikidata', 'default' => $default );
-			}
-		}
+		// @fixme remove wikidata-specific stuff!
+		$filters = $hookHandler->addFilterIfEnabled( $filters );
+
+		return true;
+	}
+
+	/**
+	 * Modifies watchlist options to show a toggle for Wikibase changes
+	 * @see https://www.mediawiki.org/wiki/Manual:Hooks/SpecialWatchlistFilters
+	 *
+	 * @since 0.4
+	 *
+	 * @param SpecialWatchlist $special
+	 * @param array $filters
+	 *
+	 * @return bool
+	 */
+	public static function onSpecialWatchlistFilters( $special, &$filters ) {
+		$hookHandler = new ChangesPageWikibaseFilterHandler(
+			$special->getContext(),
+			WikibaseClient::getDefaultInstance()->getSettings()->getSetting( 'showExternalRecentChanges' ),
+			'hideWikibase',
+			'wlshowwikibase',
+			'wikibase-rc-hide-wikidata'
+		);
+
+		$filters = $hookHandler->addFilterIfEnabled( $filters );
 
 		return true;
 	}
@@ -623,11 +451,17 @@ final class ClientHooks {
 	 * Adds a preference for showing or hiding Wikidata entries in recent changes
 	 *
 	 * @param User $user
-	 * @param &$prefs[]
+	 * @param array[] &$prefs
 	 *
 	 * @return bool
 	 */
 	public static function onGetPreferences( User $user, array &$prefs ) {
+		$settings = WikibaseClient::getDefaultInstance()->getSettings();
+
+		if ( !$settings->getSetting( 'showExternalRecentChanges' ) ) {
+			return true;
+		}
+
 		$prefs['rcshowwikidata'] = array(
 			'type' => 'toggle',
 			'label-message' => 'wikibase-rc-show-wikidata-pref',
@@ -651,12 +485,7 @@ final class ClientHooks {
 	 * @return bool
 	 */
 	public static function onParserFirstCallInit( Parser &$parser ) {
-		$parser->setFunctionHook( 'noexternallanglinks', '\Wikibase\NoLangLinkHandler::handle', SFH_NO_HASH );
-		$allowDataTransclusion = WikibaseClient::getDefaultInstance()->getSettings()->getSetting( 'allowDataTransclusion' );
-
-		if ( $allowDataTransclusion === true ) {
-			$parser->setFunctionHook( 'property', array( '\Wikibase\PropertyParserFunction', 'render' ) );
-		}
+		WikibaseClient::getDefaultInstance()->getParserFunctionRegistrant()->register( $parser );
 
 		return true;
 	}
@@ -674,10 +503,10 @@ final class ClientHooks {
 	/**
 	 * Apply the magic word.
 	 */
-	public static function onParserGetVariableValueSwitch( &$parser, &$cache, &$magicWordId, &$ret ) {
-		if ( $magicWordId == 'noexternallanglinks' ) {
+	public static function onParserGetVariableValueSwitch( Parser &$parser, &$cache, &$magicWordId, &$ret ) {
+		if ( $magicWordId === 'noexternallanglinks' ) {
 			NoLangLinkHandler::handle( $parser, '*' );
-		} elseif ( $magicWordId == 'wbreponame' ) {
+		} elseif ( $magicWordId === 'wbreponame' ) {
 			// @todo factor out, with tests
 			$wikibaseClient = WikibaseClient::getDefaultInstance();
 			$settings = $wikibaseClient->getSettings();
@@ -693,31 +522,6 @@ final class ClientHooks {
 			}
 		}
 
-		return true;
-	}
-
-	/**
-	 * Modifies watchlist options to show a toggle for Wikibase changes
-	 * @see https://www.mediawiki.org/wiki/Manual:Hooks/SpecialWatchlistFilters
-	 *
-	 * @since 0.4
-	 *
-	 * @param SpecialWatchlist $special
-	 * @param array $filters
-	 *
-	 * @return bool
-	 */
-	public static function onSpecialWatchlistFilters( $special, &$filters ) {
-		$user = $special->getContext()->getUser();
-
-		if ( $special->getContext()->getRequest()->getBool( 'enhanced',
-			$user->getOption( 'usenewrc' ) ) === false ) {
-			// Allow toggling wikibase changes in case the enhanced watchlist is disabled
-			$filters['hideWikibase'] = array(
-				'msg' => 'wikibase-rc-hide-wikidata',
-				'default' => !$user->getBoolOption( 'wlshowwikibase' )
-			);
-		}
 		return true;
 	}
 
@@ -743,7 +547,7 @@ final class ClientHooks {
 		$infoActionHookHandler = new InfoActionHookHandler(
 			$namespaceChecker,
 			$wikibaseClient->newRepoLinker(),
-			$wikibaseClient->getStore()->getSiteLinkTable(),
+			$wikibaseClient->getStore()->getSiteLinkLookup(),
 			$settings->getSetting( 'siteGlobalID' )
 		);
 
@@ -753,78 +557,29 @@ final class ClientHooks {
 	}
 
 	/**
-	 * After a page has been moved also update the item on the repo
-	 * This only works with CentralAuth
+	 * Notify the user that we have automatically updated the repo or that they
+	 * need to do that per hand.
 	 *
-	 * @see https://www.mediawiki.org/wiki/Manual:Hooks/TitleMoveComplete
-	 *
-	 * @param Title $oldTitle
-	 * @param Title $newTitle
-	 * @param User $user
-	 * @param integer $pageId database ID of the page that's been moved
-	 * @param integer $redirectId database ID of the created redirect
+	 * @param Title $title
+	 * @param OutputPage $out
 	 *
 	 * @return bool
 	 */
-	public static function onTitleMoveComplete( Title $oldTitle, Title $newTitle, User $user,
-		$pageId, $redirectId ) {
-
-		if ( !self::isWikibaseEnabled( $oldTitle->getNamespace() )
-			&& !self::isWikibaseEnabled( $newTitle->getNamespace() ) ) {
-			// shorten out
-			return true;
-		}
-
-		wfProfileIn( __METHOD__ );
-
+	public static function onArticleDeleteAfterSuccess( Title $title, OutputPage $out ) {
 		$wikibaseClient = WikibaseClient::getDefaultInstance();
-		$settings = $wikibaseClient->getSettings();
+		$siteLinkLookup = $wikibaseClient->getStore()->getSiteLinkLookup();
+		$repoLinker = $wikibaseClient->newRepoLinker();
 
-		if ( $settings->getSetting( 'propagateChangesToRepo' ) !== true ) {
-			wfProfileOut( __METHOD__ );
-			return true;
-		}
-
-		$repoDB = $settings->getSetting( 'repoDatabase' );
-		$siteLinkLookup = $wikibaseClient->getStore()->getSiteLinkTable();
-		$jobQueueGroup = JobQueueGroup::singleton( $repoDB );
-
-		if ( !$jobQueueGroup ) {
-			wfLogWarning( "Failed to acquire a JobQueueGroup for $repoDB" );
-			wfProfileOut( __METHOD__ );
-			return true;
-		}
-
-		$updateRepo = new UpdateRepoOnMove(
-			$repoDB,
+		$deletePageNotice = new DeletePageNoticeCreator(
 			$siteLinkLookup,
-			$user,
-			$settings->getSetting( 'siteGlobalID' ),
-			$oldTitle,
-			$newTitle
+			$wikibaseClient->getSettings()->getSetting( 'siteGlobalID' ),
+			$repoLinker
 		);
 
-		if ( !$updateRepo || !$updateRepo->getEntityId() || !$updateRepo->userIsValidOnRepo() ) {
-			wfProfileOut( __METHOD__ );
-			return true;
-		}
+		$html = $deletePageNotice->getPageDeleteNoticeHtml( $title );
 
-		try {
-			$updateRepo->injectJob( $jobQueueGroup );
+		$out->addHTML( $html );
 
-			// To be able to find out about this in the SpecialMovepageAfterMove hook
-			$newTitle->wikibasePushedMoveToRepo = true;
-		} catch( MWException $e ) {
-			// This is not a reason to let an exception bubble up, we just
-			// show a message to the user that the Wikibase item needs to be
-			// manually updated.
-			wfLogWarning( $e->getMessage() );
-		} catch( RuntimeException $e ) {
-			// B/C for MediaWiki 1.23
-			wfLogWarning( $e->getMessage() );
-		}
-
-		wfProfileOut( __METHOD__ );
 		return true;
 	}
 
@@ -837,10 +592,17 @@ final class ClientHooks {
 	 */
 	public static function onBaseTemplateAfterPortlet( BaseTemplate $skinTemplate, $name, &$html ) {
 		$handler = new BaseTemplateAfterPortletHandler();
-		$link = $handler->makeEditLink( $skinTemplate, $name );
+		$link = $handler->getEditLink( $skinTemplate, $name );
 
 		if ( $link ) {
 			$html .= $link;
 		}
 	}
+
+	public static function onwgQueryPages( &$queryPages ) {
+		$queryPages[] = array( 'Wikibase\Client\Specials\SpecialUnconnectedPages', 'UnconnectedPages' );
+		$queryPages[] = array( 'Wikibase\Client\Specials\SpecialPagesWithBadges', 'Badges' );
+		return true;
+	}
+
 }

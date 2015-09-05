@@ -2,12 +2,13 @@
 
 namespace Wikibase\ChangeOp;
 
-use Wikibase\DataModel\Claim\ClaimGuidParser;
-use Wikibase\Lib\ClaimGuidGenerator;
-use Wikibase\Lib\ClaimGuidValidator;
-use Wikibase\Validators\EntityConstraintProvider;
-use Wikibase\Validators\SnakValidator;
-use Wikibase\Validators\TermValidatorFactory;
+use SiteLookup;
+use Wikibase\DataModel\Services\Statement\GuidGenerator;
+use Wikibase\DataModel\Services\Statement\StatementGuidParser;
+use Wikibase\DataModel\Services\Statement\StatementGuidValidator;
+use Wikibase\Repo\Validators\EntityConstraintProvider;
+use Wikibase\Repo\Validators\SnakValidator;
+use Wikibase\Repo\Validators\TermValidatorFactory;
 
 /**
  * Provider for ChangeOpFactories.
@@ -25,17 +26,17 @@ class ChangeOpFactoryProvider {
 	private $constraintProvider;
 
 	/**
-	 * @var ClaimGuidGenerator
+	 * @var GuidGenerator
 	 */
 	private $guidGenerator;
 
 	/**
-	 * @var ClaimGuidValidator
+	 * @var StatementGuidValidator
 	 */
 	private $guidValidator;
 
 	/**
-	 * @var ClaimGuidParser
+	 * @var StatementGuidParser
 	 */
 	private $guidParser;
 
@@ -50,20 +51,27 @@ class ChangeOpFactoryProvider {
 	private $termValidatorFactory;
 
 	/**
+	 * @var SiteLookup
+	 */
+	private $siteLookup;
+
+	/**
 	 * @param EntityConstraintProvider $constraintProvider
-	 * @param ClaimGuidGenerator $guidGenerator
-	 * @param ClaimGuidValidator $guidValidator
-	 * @param ClaimGuidParser $guidParser
+	 * @param GuidGenerator $guidGenerator
+	 * @param StatementGuidValidator $guidValidator
+	 * @param StatementGuidParser $guidParser
 	 * @param SnakValidator $snakValidator
 	 * @param TermValidatorFactory $termValidatorFactory
+	 * @param SiteLookup $siteLookup
 	 */
 	public function __construct(
 		EntityConstraintProvider $constraintProvider,
-		ClaimGuidGenerator $guidGenerator,
-		ClaimGuidValidator $guidValidator,
-		ClaimGuidParser $guidParser,
+		GuidGenerator $guidGenerator,
+		StatementGuidValidator $guidValidator,
+		StatementGuidParser $guidParser,
 		SnakValidator $snakValidator,
-		TermValidatorFactory $termValidatorFactory
+		TermValidatorFactory $termValidatorFactory,
+		SiteLookup $siteLookup
 	) {
 		$this->constraintProvider = $constraintProvider;
 
@@ -73,6 +81,8 @@ class ChangeOpFactoryProvider {
 
 		$this->snakValidator = $snakValidator;
 		$this->termValidatorFactory = $termValidatorFactory;
+
+		$this->siteLookup = $siteLookup;
 	}
 
 	/**
@@ -85,22 +95,16 @@ class ChangeOpFactoryProvider {
 	}
 
 	/**
-	 * @return ClaimChangeOpFactory
-	 */
-	public function getClaimChangeOpFactory() {
-		return new ClaimChangeOpFactory(
-			$this->guidGenerator,
-			$this->guidValidator,
-			$this->guidParser,
-			$this->snakValidator
-		);
-	}
-
-	/**
 	 * @return StatementChangeOpFactory
 	 */
 	public function getStatementChangeOpFactory() {
-		return new StatementChangeOpFactory( $this->snakValidator );
+		return new StatementChangeOpFactory(
+			$this->guidGenerator,
+			$this->guidValidator,
+			$this->guidParser,
+			$this->snakValidator,
+			$this->snakValidator
+		);
 	}
 
 	/**
@@ -117,7 +121,9 @@ class ChangeOpFactoryProvider {
 	public function getMergeChangeOpFactory() {
 		return new MergeChangeOpsFactory(
 			$this->constraintProvider,
-			$this
+			$this,
+			$this->siteLookup
 		);
 	}
+
 }

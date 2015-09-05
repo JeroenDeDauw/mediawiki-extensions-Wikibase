@@ -1,7 +1,10 @@
 <?php
 
 namespace Wikibase;
+
 use LoggedUpdateMaintenance;
+use Wikibase\Lib\Reporting\ObservableMessageReporter;
+use Wikibase\Repo\WikibaseRepo;
 
 $basePath = getenv( 'MW_INSTALL_PATH' ) !== false ? getenv( 'MW_INSTALL_PATH' ) : __DIR__ . '/../../../..';
 
@@ -30,7 +33,7 @@ class RebuildTermsSearchKey extends LoggedUpdateMaintenance {
 	/**
 	 * @see LoggedUpdateMaintenance::doDBUpdates
 	 *
-	 * @return boolean
+	 * @return bool
 	 */
 	public function doDBUpdates() {
 		if ( !defined( 'WB_VERSION' ) ) {
@@ -38,18 +41,18 @@ class RebuildTermsSearchKey extends LoggedUpdateMaintenance {
 			exit;
 		}
 
-		$reporter = new \ObservableMessageReporter();
+		$reporter = new ObservableMessageReporter();
 		$reporter->registerReporterCallback(
 			array( $this, 'report' )
 		);
 
-		$table = StoreFactory::getStore( 'sqlstore' )->getTermIndex();
+		$table = WikibaseRepo::getDefaultInstance()->getStore()->getTermIndex();
 		$builder = new TermSearchKeyBuilder( $table );
 		$builder->setReporter( $reporter );
 
-		$builder->setBatchSize( intval( $this->getOption( 'batch-size', 100 ) ) );
+		$builder->setBatchSize( (int)$this->getOption( 'batch-size', 100 ) );
 		$builder->setRebuildAll( !$this->getOption( 'only-missing', false ) );
-		$builder->setFromId( intval( $this->getOption( 'start-row', 1 ) ) );
+		$builder->setFromId( (int)$this->getOption( 'start-row', 1 ) );
 
 		$n = $builder->rebuildSearchKey();
 
@@ -72,7 +75,7 @@ class RebuildTermsSearchKey extends LoggedUpdateMaintenance {
 	 *
 	 * @since 0.4
 	 *
-	 * @param $msg
+	 * @param string $msg
 	 */
 	public function report( $msg ) {
 		$this->output( "$msg\n" );
@@ -81,4 +84,4 @@ class RebuildTermsSearchKey extends LoggedUpdateMaintenance {
 }
 
 $maintClass = 'Wikibase\RebuildTermsSearchKey';
-require_once( RUN_MAINTENANCE_IF_MAIN );
+require_once RUN_MAINTENANCE_IF_MAIN;

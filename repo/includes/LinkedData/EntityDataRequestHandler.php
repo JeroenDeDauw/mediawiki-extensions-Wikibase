@@ -1,20 +1,24 @@
 <?php
 
-namespace Wikibase\LinkedData;
+namespace Wikibase\Repo\LinkedData;
 
-use Wikibase\DataModel\Entity\EntityId;
-use Wikibase\DataModel\Entity\EntityIdParser;
-use Wikibase\DataModel\Entity\EntityIdParsingException;
-use Wikibase\EntityRevisionLookup;
-use Wikibase\EntityTitleLookup;
-use Wikibase\HttpAcceptNegotiator;
-use Wikibase\HttpAcceptParser;
+use HttpError;
+use OutputPage;
+use SquidUpdate;
 use WebRequest;
 use WebResponse;
-use OutputPage;
-use HttpError;
-use SquidUpdate;
-use Wikibase\StorageException;
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Entity\EntityRedirect;
+use Wikibase\DataModel\Entity\EntityIdParser;
+use Wikibase\DataModel\Entity\EntityIdParsingException;
+use Wikibase\DataModel\Services\Lookup\EntityRedirectLookup;
+use Wikibase\EntityRevision;
+use Wikibase\Lib\Store\BadRevisionException;
+use Wikibase\Lib\Store\EntityRevisionLookup;
+use Wikibase\Lib\Store\EntityTitleLookup;
+use Wikibase\Lib\Store\StorageException;
+use Wikibase\Lib\Store\UnresolvedRedirectException;
+use Wikibase\RedirectRevision;
 
 /**
  * Request handler implementing a linked data interface for Wikibase entities.
@@ -31,67 +35,80 @@ class EntityDataRequestHandler {
 	/**
 	 * @var int Cache duration in seconds
 	 */
-	protected $maxAge = 0;
+	private $maxAge = 0;
 
 	/**
 	 * @var EntityDataSerializationService
 	 */
-	protected $serializationService;
+	private $serializationService;
 
 	/**
 	 * @var EntityDataUriManager
 	 */
-	protected $uriManager;
+	private $uriManager;
 
 	/**
 	 * @var EntityIdParser
 	 */
-	protected $entityIdParser;
+	private $entityIdParser;
 
 	/**
 	 * @var EntityRevisionLookup
 	 */
-	protected $entityRevisionLookup;
+	private $entityRevisionLookup;
+
+	/**
+	 * @var EntityRedirectLookup
+	 */
+	private $entityRedirectLookup;
 
 	/**
 	 * @var EntityTitleLookup
 	 */
-	protected $entityTitleLookup;
+	private $entityTitleLookup;
+
+	/**
+	 * @var EntityDataFormatProvider
+	 */
+	private $entityDataFormatProvider;
 
 	/**
 	 * @var string
 	 */
-	protected $defaultFormat;
+	private $defaultFormat;
 
 	/**
 	 * @var bool
 	 */
-	protected $useSquids;
+	private $useSquids;
 
 	/**
 	 * @var string|null
 	 */
-	protected $frameOptionsHeader;
+	private $frameOptionsHeader;
 
 	/**
 	 * @since 0.4
 	 *
-	 * @param EntityDataUriManager           $uriManager
-	 * @param EntityTitleLookup              $entityTitleLookup
-	 * @param EntityIdParser                 $entityIdParser
-	 * @param EntityRevisionLookup           $entityRevisionLookup
+	 * @param EntityDataUriManager $uriManager
+	 * @param EntityTitleLookup $entityTitleLookup
+	 * @param EntityIdParser $entityIdParser
+	 * @param EntityRevisionLookup $entityRevisionLookup
+	 * @param EntityRedirectLookup $entityRedirectLookup
 	 * @param EntityDataSerializationService $serializationService
-	 * @param string                         $defaultFormat
-	 * @param int                            $maxAge number of seconds to cache entity data
-	 * @param bool                           $useSquids do we have web caches configured?
-	 * @param string|null                    $frameOptionsHeader for X-Frame-Options
+	 * @param string $defaultFormat
+	 * @param int $maxAge number of seconds to cache entity data
+	 * @param bool $useSquids do we have web caches configured?
+	 * @param string|null $frameOptionsHeader for X-Frame-Options
 	 */
 	public function __construct(
 		EntityDataUriManager $uriManager,
 		EntityTitleLookup $entityTitleLookup,
 		EntityIdParser $entityIdParser,
 		EntityRevisionLookup $entityRevisionLookup,
+		EntityRedirectLookup $entityRedirectLookup,
 		EntityDataSerializationService $serializationService,
+		EntityDataFormatProvider $entityDataFormatProvider,
 		$defaultFormat,
 		$maxAge,
 		$useSquids,
@@ -101,7 +118,9 @@ class EntityDataRequestHandler {
 		$this->entityTitleLookup = $entityTitleLookup;
 		$this->entityIdParser = $entityIdParser;
 		$this->entityRevisionLookup = $entityRevisionLookup;
+		$this->entityRedirectLookup = $entityRedirectLookup;
 		$this->serializationService = $serializationService;
+		$this->entityDataFormatProvider = $entityDataFormatProvider;
 		$this->defaultFormat = $defaultFormat;
 		$this->maxAge = $maxAge;
 		$this->useSquids = $useSquids;
@@ -197,16 +216,12 @@ class EntityDataRequestHandler {
 
 		if ( $format === null || $format === '' ) {
 			// if no format is given, apply content negotiation and return.
-
 			$this->httpContentNegotiation( $request, $output, $entityId, $revision );
 			return;
-		} else {
-			//NOTE: will trigger a 415 if the format is not supported
-			$format = $this->getCanonicalFormat( $format );
 		}
 
-		// we should know the format now.
-		assert( $format !== null && $format !== '' );
+		//NOTE: will trigger a 415 if the format is not supported
+		$format = $this->getCanonicalFormat( $format );
 
 		if ( $doc !== null && $doc !== '' ) {
 			// if subpage syntax is used, always enforce the canonical form
@@ -235,7 +250,7 @@ class EntityDataRequestHandler {
 	 * @param string $format
 	 *
 	 * @return string
-	 * @throws \HttpError code 415 if the format is not supported.
+	 * @throws HttpError code 415 if the format is not supported.
 	 *
 	 */
 	public function getCanonicalFormat( $format ) {
@@ -247,7 +262,7 @@ class EntityDataRequestHandler {
 		}
 
 		// normalize format name (note that HTML may not be known to the service)
-		$canonicalFormat = $this->serializationService->getFormatName( $format );
+		$canonicalFormat = $this->entityDataFormatProvider->getFormatName( $format );
 
 		if ( $canonicalFormat === null ) {
 			throw new \HttpError( 415, wfMessage( 'wikibase-entitydata-unsupported-format' )->params( $format ) );
@@ -293,8 +308,8 @@ class EntityDataRequestHandler {
 				'*' => 0.1 // just to make extra sure
 			);
 
-			$defaultFormat = $this->serializationService->getFormatName( $this->defaultFormat );
-			$defaultMime = $this->serializationService->getMimeType( $defaultFormat );
+			$defaultFormat = $this->entityDataFormatProvider->getFormatName( $this->defaultFormat );
+			$defaultMime = $this->entityDataFormatProvider->getMimeType( $defaultFormat );
 
 			// prefer the default
 			if ( $defaultMime != null ) {
@@ -302,14 +317,14 @@ class EntityDataRequestHandler {
 			}
 		}
 
-		$mimeTypes = $this->serializationService->getSupportedMimeTypes();
+		$mimeTypes = $this->entityDataFormatProvider->getSupportedMimeTypes();
 		$mimeTypes[] = 'text/html'; // HTML is handled by the normal page URL
 
 		$negotiator = new HttpAcceptNegotiator( $mimeTypes );
 		$format = $negotiator->getBestSupportedKey( $accept, null );
 
 		if ( $format === null ) {
-			$mimeTypes = implode( ', ', $this->serializationService->getSupportedMimeTypes() );
+			$mimeTypes = implode( ', ', $this->entityDataFormatProvider->getSupportedMimeTypes() );
 			throw new \HttpError( 406, wfMessage( 'wikibase-entitydata-not-acceptable' )->params( $mimeTypes ) );
 		}
 
@@ -320,32 +335,95 @@ class EntityDataRequestHandler {
 	}
 
 	/**
+	 * Loads the requested Entity. Redirects are resolved if no specific revision
+	 * is requested.
+	 *
+	 * @param EntityId $id
+	 * @param int $revision The revision ID (use 0 for the current revision).
+	 *
+	 * @return array list( EntityRevision, RedirectRevision|null )
+	 * @throws HttpError
+	 */
+	private function getEntityRevision( EntityId $id, $revision ) {
+		$prefixedId = $id->getSerialization();
+
+		if ( $revision === 0 ) {
+			$revision = EntityRevisionLookup::LATEST_FROM_SLAVE;
+		}
+
+		$redirectRevision = null;
+
+		try {
+			$entityRevision = $this->entityRevisionLookup->getEntityRevision( $id, $revision );
+
+			if ( $entityRevision === null ) {
+				wfDebugLog( __CLASS__, __FUNCTION__ . ": entity not found: $prefixedId" );
+				throw new HttpError( 404, wfMessage( 'wikibase-entitydata-not-found' )->params( $prefixedId ) );
+			}
+		} catch ( UnresolvedRedirectException $ex ) {
+			$redirectRevision = new RedirectRevision(
+				new EntityRedirect( $id, $ex->getRedirectTargetId() ),
+				$ex->getRevisionId(), $ex->getRevisionTimestamp()
+			);
+
+			if ( is_string( $revision ) ) {
+				// If no specific revision is requested, resolve the redirect.
+				list( $entityRevision, ) = $this->getEntityRevision( $ex->getRedirectTargetId(), $revision );
+			} else {
+				// The requested revision is a redirect
+				wfDebugLog( __CLASS__, __FUNCTION__ . ": revision $revision of $prefixedId is a redirect: $ex" );
+				$msg = wfMessage( 'wikibase-entitydata-bad-revision' );
+				throw new HttpError( 400, $msg->params( $prefixedId, $revision ) );
+			}
+		} catch ( BadRevisionException $ex ) {
+			wfDebugLog( __CLASS__, __FUNCTION__ . ": could not load revision $revision or $prefixedId: $ex" );
+			$msg = wfMessage( 'wikibase-entitydata-bad-revision' );
+			throw new HttpError( 404, $msg->params( $prefixedId, $revision ) );
+		} catch ( StorageException $ex ) {
+			wfDebugLog( __CLASS__, __FUNCTION__ . ": failed to load $prefixedId: $ex (revision $revision)" );
+			$msg = wfMessage( 'wikibase-entitydata-storage-error' );
+			throw new \HttpError( 500, $msg->params( $prefixedId, $revision ) );
+		}
+
+		return array( $entityRevision, $redirectRevision );
+	}
+
+	/**
+	 * Loads incoming redirects referring to the given entity ID.
+	 *
+	 * @param EntityId $id
+	 *
+	 * @return EntityId[]
+	 * @throws HttpError
+	 */
+	private function getIncomingRedirects( EntityId $id ) {
+		try {
+			return $this->entityRedirectLookup->getRedirectIds( $id );
+		} catch ( StorageException $ex ) {
+			$prefixedId = $id->getSerialization();
+			wfDebugLog( __CLASS__, __FUNCTION__ . ": failed to load incoming redirects of $prefixedId: $ex" );
+			return array();
+		}
+	}
+
+	/**
 	 * Output entity data.
 	 *
 	 * @param WebRequest $request
 	 * @param OutputPage $output
 	 * @param string $format The name (mime type of file extension) of the format to use
 	 * @param EntityId $id The entity ID
-	 * @param int $revision The entity revision
+	 * @param int $revision The revision ID (use 0 for the current revision).
 	 *
 	 * @throws HttpError
 	 */
 	public function showData( WebRequest $request, OutputPage $output, $format, EntityId $id, $revision ) {
 
-		$prefixedId = $id->getSerialization();
+		$flavor = $request->getVal( "flavor" );
 
-		try {
-			$entityRevision = $this->entityRevisionLookup->getEntityRevision( $id, $revision );
-
-			if ( $entityRevision === null ) {
-				wfDebugLog( __CLASS__, __FUNCTION__ . ": entity not found: $prefixedId"  );
-				throw new \HttpError( 404, wfMessage( 'wikibase-entitydata-not-found' )->params( $prefixedId ) );
-			}
-		} catch ( StorageException $ex ) {
-			wfDebugLog( __CLASS__, __FUNCTION__ . ": could not load: $prefixedId: $ex revision $revision"  );
-			$msg = wfMessage( 'wikibase-entitydata-bad-revision' );
-			throw new \HttpError( 404, $msg->params( $prefixedId, $revision ) );
-		}
+		/** @var EntityRevision $entityRevision */
+		/** @var RedirectRevision $followedRedirectRevision */
+		list( $entityRevision, $followedRedirectRevision ) = $this->getEntityRevision( $id, $revision );
 
 		// handle If-Modified-Since
 		$imsHeader = $request->getHeader( 'IF-MODIFIED-SINCE' );
@@ -359,8 +437,20 @@ class EntityDataRequestHandler {
 			}
 		}
 
+		if ( $flavor === 'dump' || $revision > 0 ) {
+			// In dump mode and when fetching a specific revision, don't include incoming redirects.
+			$incomingRedirects = array();
+		} else {
+			// Get the incoming redirects of the entity (if we followed a redirect, use the target id).
+			$incomingRedirects = $this->getIncomingRedirects( $entityRevision->getEntity()->getId() );
+		}
+
 		list( $data, $contentType ) = $this->serializationService->getSerializedData(
-			$format, $entityRevision
+			$format,
+			$entityRevision,
+			$followedRedirectRevision,
+			$incomingRedirects,
+			$flavor
 		);
 
 		$output->disable();
@@ -394,12 +484,13 @@ class EntityDataRequestHandler {
 		$smaxage = max( 0, min( 60 * 60 * 24 * 31, $smaxage ) );
 
 		$response->header( 'Content-Type: ' . $contentType . '; charset=UTF-8' );
+		$response->header( 'Access-Control-Allow-Origin: *' );
 
 		if ( $lastModified ) {
 			$response->header( 'Last-Modified: ' . wfTimestamp( TS_RFC2822, $lastModified ) );
 		}
 
-		//Set X-Frame-Options API results (bug 39180)
+		//Set X-Frame-Options API results (bug T41180)
 		if ( $this->frameOptionsHeader !== null && $this->frameOptionsHeader !== '' ) {
 			$response->header( "X-Frame-Options: $this->frameOptionsHeader" );
 		}
@@ -414,4 +505,5 @@ class EntityDataRequestHandler {
 
 		// exit normally here, keeping all levels of output buffering.
 	}
+
 }

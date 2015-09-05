@@ -1,22 +1,32 @@
 <?php
 
-namespace Wikibase\Api;
+namespace Wikibase\Repo\Api;
 
 use ApiBase;
 use ApiMain;
+use InvalidArgumentException;
 use LogicException;
 use Status;
 use UsageException;
+use User;
 use Wikibase\ChangeOp\ChangeOp;
 use Wikibase\ChangeOp\ChangeOpException;
 use Wikibase\ChangeOp\ChangeOpValidationException;
 use Wikibase\DataModel\Entity\Entity;
+use Wikibase\DataModel\Entity\EntityDocument;
 use Wikibase\DataModel\Entity\EntityId;
-use Wikibase\DataModel\Entity\EntityIdParsingException;
 use Wikibase\DataModel\Entity\ItemId;
+use Wikibase\DataModel\Entity\EntityIdParser;
+use Wikibase\DataModel\Entity\EntityIdParsingException;
 use Wikibase\EntityRevision;
+use Wikibase\Lib\Store\EntityRevisionLookup;
+use Wikibase\Lib\Store\EntityStore;
+use Wikibase\Lib\Store\EntityTitleLookup;
+use Wikibase\Lib\Store\SiteLinkLookup;
+use Wikibase\Lib\Store\StorageException;
+use Wikibase\Repo\SiteLinkTargetProvider;
+use Wikibase\Repo\Store\EntityPermissionChecker;
 use Wikibase\Repo\WikibaseRepo;
-use Wikibase\SiteLinkLookup;
 use Wikibase\StringNormalizer;
 use Wikibase\Summary;
 
@@ -30,7 +40,7 @@ use Wikibase\Summary;
  * @author Daniel Kinzler
  * @author Michał Łazowik
  */
-abstract class ModifyEntity extends ApiWikibase {
+abstract class ModifyEntity extends ApiBase {
 
 	/**
 	 * @var StringNormalizer
@@ -48,9 +58,19 @@ abstract class ModifyEntity extends ApiWikibase {
 	protected $siteLinkLookup;
 
 	/**
+	 * @var EntityTitleLookup
+	 */
+	private $titleLookup;
+
+	/**
+	 * @var EntityStore
+	 */
+	private $entityStore;
+
+	/**
 	 * @since 0.5
 	 *
-	 * @var array
+	 * @var string[]
 	 */
 	protected $siteLinkGroups;
 
@@ -58,6 +78,46 @@ abstract class ModifyEntity extends ApiWikibase {
 	 * @var string[]
 	 */
 	protected $badgeItems;
+
+	/**
+	 * @var ApiErrorReporter
+	 */
+	private $errorReporter;
+
+	/**
+	 * @var EntityPermissionChecker
+	 */
+	private $permissionChecker;
+
+	/**
+	 * @var EntityRevisionLookup
+	 */
+	private $revisionLookup;
+
+	/**
+	 * @var ResultBuilder
+	 */
+	private $resultBuilder;
+
+	/**
+	 * @var EntitySavingHelper
+	 */
+	private $entitySavingHelper;
+
+	/**
+	 * @var EntityIdParser
+	 */
+	private $idParser;
+
+	/**
+	 * Flags to pass to EditEntity::attemptSave; use with the EDIT_XXX constants.
+	 *
+	 * @see EditEntity::attemptSave
+	 * @see WikiPage::doEditContent
+	 *
+	 * @var int
+	 */
+	protected $flags;
 
 	/**
 	 * @param ApiMain $mainModule
@@ -69,55 +129,113 @@ abstract class ModifyEntity extends ApiWikibase {
 	public function __construct( ApiMain $mainModule, $moduleName, $modulePrefix = '' ) {
 		parent::__construct( $mainModule, $moduleName, $modulePrefix );
 
-		$repo = WikibaseRepo::getDefaultInstance();
+		$wikibaseRepo = WikibaseRepo::getDefaultInstance();
+		$apiHelperFactory = $wikibaseRepo->getApiHelperFactory( $this->getContext() );
+		$settings = $wikibaseRepo->getSettings();
 
 		//TODO: provide a mechanism to override the services
-		$this->stringNormalizer = $repo->getStringNormalizer();
-		$this->siteLinkTargetProvider = new SiteLinkTargetProvider( $repo->getSiteStore() );
+		$this->errorReporter = $apiHelperFactory->getErrorReporter( $this );
+		$this->resultBuilder = $apiHelperFactory->getResultBuilder( $this );
+		$this->entitySavingHelper = $apiHelperFactory->getEntitySavingHelper( $this );
+		$this->stringNormalizer = $wikibaseRepo->getStringNormalizer();
+		$this->idParser = $wikibaseRepo->getEntityIdParser();
 
-		$this->siteLinkGroups = $repo->getSettings()->getSetting( 'siteLinkGroups' );
-		$this->siteLinkLookup = $repo->getStore()->newSiteLinkCache();
-		$this->badgeItems = $repo->getSettings()->getSetting( 'badgeItems' );
+		$this->setServices( new SiteLinkTargetProvider(
+			$wikibaseRepo->getSiteStore(),
+			$settings->getSetting( 'specialSiteLinkGroups' )
+		) );
+
+		$this->revisionLookup = $wikibaseRepo->getEntityRevisionLookup( 'uncached' );
+		$this->permissionChecker = $wikibaseRepo->getEntityPermissionChecker();
+		$this->entityStore = $wikibaseRepo->getEntityStore();
+		$this->titleLookup = $wikibaseRepo->getEntityTitleLookup();
+		$this->siteLinkGroups = $settings->getSetting( 'siteLinkGroups' );
+		$this->siteLinkLookup = $wikibaseRepo->getStore()->newSiteLinkStore();
+		$this->badgeItems = $settings->getSetting( 'badgeItems' );
+	}
+
+	public function setServices( SiteLinkTargetProvider $siteLinkTargetProvider ) {
+		$this->siteLinkTargetProvider = $siteLinkTargetProvider;
 	}
 
 	/**
-	 * Flags to pass to EditEntity::attemptSave; use with the EDIT_XXX constants.
-	 *
-	 * @see EditEntity::attemptSave
-	 * @see WikiPage::doEditContent
-	 *
-	 * @var integer $flags
+	 * @see EntitySavingHelper::attemptSaveEntity
 	 */
-	protected $flags;
+	protected function attemptSaveEntity( Entity $entity, $summary, $flags = 0 ) {
+		return $this->entitySavingHelper->attemptSaveEntity( $entity, $summary, $flags );
+	}
+
+	/**
+	 * @return EntityTitleLookup
+	 */
+	protected function getTitleLookup() {
+		return $this->titleLookup;
+	}
+
+	/**
+	 * @return EntityStore
+	 */
+	protected function getEntityStore() {
+		return $this->entityStore;
+	}
+
+	/**
+	 * @return ResultBuilder
+	 */
+	protected function getResultBuilder() {
+		return $this->resultBuilder;
+	}
 
 	/**
 	 * Get the entity using the id, site and title params passed to the api
-	 *
-	 * @since 0.1
 	 *
 	 * @param array $params
 	 *
 	 * @return EntityRevision Found existing entity
 	 */
 	protected function getEntityRevisionFromApiParams( array $params ) {
-		if ( isset( $params['id'] ) ) {
-			$id = $params['id'];
-			$entityId = $this->getEntityIdFromString( $id );
-		} elseif ( isset( $params['site'] ) && isset( $params['title'] ) ) {
-			$entityId = $this->getEntityIdFromSiteTitleCombination( $params['site'],  $params['title'] );
-		} else {
-			//Things that use this method assume null means we want a new entity
-			return null;
-		}
+		$entityRevision = null;
+		$entityId = $this->getEntityIdFromParams( $params );
 
-		$baseRevisionId = isset( $params['baserevid'] ) ? intval( $params['baserevid'] ) : 0;
-		$entityRevision = $this->entityLookup->getEntityRevision( $entityId, $baseRevisionId );
+		// Things that use this method assume null means we want a new entity
+		if ( $entityId !== null ) {
+			$baseRevisionId = isset( $params['baserevid'] ) ? (int)$params['baserevid'] : 0;
 
-		if ( is_null( $entityRevision ) ) {
-			$this->dieUsage( "Can't access entity " . $entityId->getSerialization() . ", revision may have been deleted.", 'no-such-entity' );
+			if ( $baseRevisionId === 0 ) {
+				$baseRevisionId = EntityRevisionLookup::LATEST_FROM_MASTER;
+			}
+
+			try {
+				$entityRevision = $this->revisionLookup->getEntityRevision( $entityId, $baseRevisionId );
+			} catch ( StorageException $ex ) {
+				$this->errorReporter->dieException( $ex, 'no-such-entity' );
+			}
+
+			if ( $entityRevision === null ) {
+				$this->errorReporter->dieError( "Can't access entity " . $entityId
+					. ', revision may have been deleted.', 'no-such-entity' );
+			}
 		}
 
 		return $entityRevision;
+	}
+
+	/**
+	 * @param string[] $params
+	 *
+	 * @return EntityId|null
+	 */
+	private function getEntityIdFromParams( array $params ) {
+		if ( isset( $params['id'] ) ) {
+			return $this->getEntityIdFromString( $params['id'] );
+		} elseif ( isset( $params['site'] ) && isset( $params['title'] ) ) {
+			return $this->getEntityIdFromSiteTitleCombination(
+				$params['site'],
+				$params['title']
+			);
+		}
+
+		return null;
 	}
 
 	/**
@@ -127,17 +245,16 @@ abstract class ModifyEntity extends ApiWikibase {
 	 * @param string $id
 	 *
 	 * @throws UsageException
-	 * @throws LogicException
 	 * @return EntityId
 	 */
 	protected function getEntityIdFromString( $id ) {
 		try {
 			return $this->idParser->parse( $id );
 		} catch ( EntityIdParsingException $ex ) {
-			$this->dieUsage( $ex->getMessage(), 'no-such-entity-id' );
+			$this->errorReporter->dieException( $ex, 'no-such-entity-id' );
 		}
 
-		throw new LogicException( 'ApiBase::dieUsage did not throw a UsageException' );
+		return null;
 	}
 
 	/**
@@ -146,13 +263,15 @@ abstract class ModifyEntity extends ApiWikibase {
 	 *
 	 * @param string $site
 	 * @param string $title
+	 *
 	 * @return EntityId
 	 */
 	protected function getEntityIdFromSiteTitleCombination( $site, $title ) {
 		$itemId = $this->siteLinkLookup->getItemIdForLink( $site, $title );
 
 		if ( $itemId === null ) {
-			$this->dieUsage( 'No entity found matching site link ' . $site . ':' . $title , 'no-such-entity-link' );
+			$this->errorReporter->dieError( 'No entity found matching site link ' . $site . ':' . $title,
+				'no-such-entity-link' );
 		}
 
 		return $itemId;
@@ -161,7 +280,7 @@ abstract class ModifyEntity extends ApiWikibase {
 	/**
 	 * Validates badges from params and turns them into an array of ItemIds.
 	 *
-	 * @param array $badgesParams
+	 * @param string[] $badgesParams
 	 *
 	 * @return ItemId[]
 	 */
@@ -170,24 +289,25 @@ abstract class ModifyEntity extends ApiWikibase {
 
 		foreach ( $badgesParams as $badgeSerialization ) {
 			try {
-				$badgeId = $this->idParser->parse( $badgeSerialization );
-			} catch( EntityIdParsingException $e ) {
-				$this->dieUsage( "Badges: could not parse '{$badgeSerialization}', the id is invalid", 'no-such-entity-id' );
-				$badgeId = null;
+				$badgeId = new ItemId( $badgeSerialization );
+			} catch ( InvalidArgumentException $ex ) {
+				$this->errorReporter->dieError( 'Badges: could not parse "' . $badgeSerialization
+					. '", the id is invalid', 'invalid-entity-id' );
+				continue;
 			}
 
-			if ( !( $badgeId instanceof ItemId ) ) {
-				$this->dieUsage( "Badges: entity with id '{$badgeSerialization}' is not an item", 'not-item' );
+			if ( !array_key_exists( $badgeId->getSerialization(), $this->badgeItems ) ) {
+				$this->errorReporter->dieError( 'Badges: item "' . $badgeSerialization . '" is not a badge',
+					'not-badge' );
 			}
 
-			if ( !array_key_exists( $badgeId->getPrefixedId(), $this->badgeItems ) ) {
-				$this->dieUsage( "Badges: item '{$badgeSerialization}' is not a badge", 'not-badge' );
-			}
-
-			$itemTitle = $this->titleLookup->getTitleForId( $badgeId );
+			$itemTitle = $this->getTitleLookup()->getTitleForId( $badgeId );
 
 			if ( is_null( $itemTitle ) || !$itemTitle->exists() ) {
-				$this->dieUsage( "Badges: no item found matching id '{$badgeSerialization}'", 'no-such-entity' );
+				$this->errorReporter->dieError(
+					'Badges: no item found matching id "' . $badgeSerialization . '"',
+					'no-such-entity'
+				);
 			}
 
 			$badges[] = $badgeId;
@@ -201,11 +321,12 @@ abstract class ModifyEntity extends ApiWikibase {
 	 *
 	 * @since 0.1
 	 *
-	 * @param array $params
+	 * @param string $entityType
+	 *
 	 * @return Entity Newly created entity
 	 */
-	protected function createEntity( array $params ) {
-		$this->dieUsage( 'Could not find an existing entity' , 'no-such-entity' );
+	protected function createEntity( $entityType ) {
+		$this->errorReporter->dieError( 'Could not find an existing entity', 'no-such-entity' );
 	}
 
 	/**
@@ -217,9 +338,7 @@ abstract class ModifyEntity extends ApiWikibase {
 	 */
 	protected function createSummary( array $params ) {
 		$summary = new Summary( $this->getModuleName() );
-		if ( !is_null( $params['summary'] ) ) {
-			$summary->setUserSummary( $params['summary'] );
-		}
+		$summary->setUserSummary( $params['summary'] );
 		return $summary;
 	}
 
@@ -234,7 +353,7 @@ abstract class ModifyEntity extends ApiWikibase {
 	 *
 	 * @return Summary|null a summary of the modification, or null to indicate failure.
 	 */
-	protected abstract function modifyEntity( Entity &$entity, array $params, $baseRevId );
+	abstract protected function modifyEntity( Entity &$entity, array $params, $baseRevId );
 
 	/**
 	 * Applies the given ChangeOp to the given Entity.
@@ -271,8 +390,11 @@ abstract class ModifyEntity extends ApiWikibase {
 	 */
 	protected function validateParameters( array $params ) {
 		// note that this is changed back and could fail
-		if ( !( isset( $params['id'] ) XOR ( isset( $params['site'] ) && isset( $params['title'] ) ) ) ) {
-			$this->dieUsage( 'Either provide the item "id" or pairs of "site" and "title" for a corresponding page' , 'param-illegal' );
+		if ( !( isset( $params['id'] ) xor ( isset( $params['site'] ) && isset( $params['title'] ) ) ) ) {
+			$this->errorReporter->dieError(
+				'Either provide the item "id" or pairs of "site" and "title" for a corresponding page',
+				'param-illegal'
+			);
 		}
 	}
 
@@ -282,8 +404,6 @@ abstract class ModifyEntity extends ApiWikibase {
 	 * @since 0.1
 	 */
 	public function execute() {
-		wfProfileIn( __METHOD__ );
-
 		$params = $this->extractRequestParams();
 		$user = $this->getUser();
 		$this->flags = 0;
@@ -293,28 +413,27 @@ abstract class ModifyEntity extends ApiWikibase {
 		// Try to find the entity or fail and create it, or die in the process
 		$entityRev = $this->getEntityRevisionFromApiParams( $params );
 		if ( is_null( $entityRev ) ) {
-			$entity = $this->createEntity( $params );
+			$entity = $this->createEntity( $params['new'] );
 			$entityRevId = 0;
 
 			// HACK: We need to assign an ID early, for things like the ClaimIdGenerator.
 			if ( $entity->getId() === null ) {
-				$this->entityStore->assignFreshId( $entity );
+				$this->getEntityStore()->assignFreshId( $entity );
 			}
 		} else {
 			$entity = $entityRev->getEntity();
-			$entityRevId = $entityRev->getRevision();
+			$entityRevId = $entityRev->getRevisionId();
 		}
 
 		if ( $entity->getId() === null ) {
-			throw new \LogicException( 'The Entity should have an ID at this point!' );
+			throw new LogicException( 'The Entity should have an ID at this point!' );
 		}
 
 		// At this point only change/edit rights should be checked
-		$status = $this->checkPermissions( $entity, $user, $params );
+		$status = $this->checkPermissions( $entity, $user );
 
 		if ( !$status->isOK() ) {
-			wfProfileOut( __METHOD__ );
-			$this->dieUsage( 'You do not have sufficient permissions' , 'permissiondenied' );
+			$this->errorReporter->dieError( 'You do not have sufficient permissions', 'permissiondenied' );
 		}
 
 		$summary = $this->modifyEntity( $entity, $params, $entityRevId );
@@ -322,12 +441,7 @@ abstract class ModifyEntity extends ApiWikibase {
 		if ( !$summary ) {
 			//XXX: This could rather be used for "silent" failure, i.e. in cases where
 			//     there was simply nothing to do.
-			wfProfileOut( __METHOD__ );
-			$this->dieUsage( 'Attempted modification of the item failed' , 'failed-modify' );
-		}
-
-		if ( $summary === true ) { // B/C, for implementations of modifyEntity that return true on success.
-			$summary = new Summary( $this->getModuleName() );
+			$this->errorReporter->dieError( 'Attempted modification of the item failed', 'failed-modify' );
 		}
 
 		$this->addFlags( $entity->getId() === null );
@@ -341,10 +455,40 @@ abstract class ModifyEntity extends ApiWikibase {
 		);
 
 		$this->addToOutput( $entity, $status );
-
-		wfProfileOut( __METHOD__ );
 	}
 
+	/**
+	 * Check the rights for the user accessing the module.
+	 *
+	 * @param $entity EntityDocument the entity to check
+	 * @param $user User doing the action
+	 *
+	 * @return Status the check's result
+	 */
+	private function checkPermissions( EntityDocument $entity, User $user ) {
+		$permissions = $this->getRequiredPermissions( $entity );
+		$status = Status::newGood();
+
+		foreach ( array_unique( $permissions ) as $perm ) {
+			$permStatus = $this->permissionChecker->getPermissionStatusForEntity( $user, $perm, $entity );
+			$status->merge( $permStatus );
+		}
+
+		return $status;
+	}
+
+	/**
+	 * @param EntityDocument $entity
+	 *
+	 * @return string[]
+	 */
+	protected function getRequiredPermissions( EntityDocument $entity ) {
+		return $this->isWriteMode() ? array( 'read', 'edit' ) : array( 'read' );
+	}
+
+	/**
+	 * @param bool $entityIsNew
+	 */
 	protected function addFlags( $entityIsNew ) {
 		// if the entity is not up for creation, set the EDIT_UPDATE flags
 		if ( !$entityIsNew && ( $this->flags & EDIT_NEW ) === 0 ) {
@@ -372,24 +516,15 @@ abstract class ModifyEntity extends ApiWikibase {
 	}
 
 	/**
-	 * @see ApiBase::getPossibleErrors()
+	 * @see ApiBase::getAllowedParams
 	 */
-	public function getPossibleErrors() {
-		return array_merge( parent::getPossibleErrors(), array(
-			array( 'code' => 'no-such-entity-id', 'info' => $this->msg( 'wikibase-api-no-such-entity-id' )->text() ),
-			array( 'code' => 'no-such-entity-link', 'info' => $this->msg( 'wikibase-api-no-such-entity-link' )->text() ),
-			array( 'code' => 'no-such-entity', 'info' => $this->msg( 'wikibase-api-no-such-entity' )->text() ),
-			array( 'code' => 'param-illegal', 'info' => $this->msg( 'wikibase-api-param-illegal' )->text() ),
-			array( 'code' => 'permissiondenied', 'info' => $this->msg( 'wikibase-api-permissiondenied' )->text() ),
-			array( 'code' => 'failed-modify', 'info' => $this->msg( 'wikibase-api-failed-modify' )->text() ),
-		) );
-	}
-
-	/**
-	 * @see ApiBase::isWriteMode()
-	 */
-	public function isWriteMode() {
-		return true;
+	protected function getAllowedParams() {
+		return array_merge(
+			parent::getAllowedParams(),
+			$this->getAllowedParamsForId(),
+			$this->getAllowedParamsForSiteLink(),
+			$this->getAllowedParamsForEntity()
+		);
 	}
 
 	/**
@@ -398,12 +533,12 @@ abstract class ModifyEntity extends ApiWikibase {
 	 *
 	 * @since 0.1
 	 *
-	 * @return array the allowed params
+	 * @return array[]
 	 */
-	public function getAllowedParamsForId() {
+	protected function getAllowedParamsForId() {
 		return array(
 			'id' => array(
-				ApiBase::PARAM_TYPE => 'string',
+				self::PARAM_TYPE => 'string',
 			),
 		);
 	}
@@ -414,16 +549,17 @@ abstract class ModifyEntity extends ApiWikibase {
 	 *
 	 * @since 0.1
 	 *
-	 * @return array the allowed params
+	 * @return array[]
 	 */
-	public function getAllowedParamsForSiteLink() {
+	protected function getAllowedParamsForSiteLink() {
 		$sites = $this->siteLinkTargetProvider->getSiteList( $this->siteLinkGroups );
+
 		return array(
 			'site' => array(
-				ApiBase::PARAM_TYPE => $sites->getGlobalIdentifiers(),
+				self::PARAM_TYPE => $sites->getGlobalIdentifiers(),
 			),
 			'title' => array(
-				ApiBase::PARAM_TYPE => 'string',
+				self::PARAM_TYPE => 'string',
 			),
 		);
 	}
@@ -433,81 +569,18 @@ abstract class ModifyEntity extends ApiWikibase {
 	 *
 	 * @since 0.1
 	 *
-	 * @return array the allowed params
+	 * @return array
 	 */
-	public function getAllowedParamsForEntity() {
+	protected function getAllowedParamsForEntity() {
 		return array(
 			'baserevid' => array(
-				ApiBase::PARAM_TYPE => 'integer',
+				self::PARAM_TYPE => 'integer',
 			),
 			'summary' => array(
-				ApiBase::PARAM_TYPE => 'string',
+				self::PARAM_TYPE => 'string',
 			),
 			'token' => null,
 			'bot' => false,
-		);
-	}
-
-	/**
-	 * Get param descriptions for identification of the entity
-	 * Lookup through an id is common for all entities
-	 *
-	 * @since 0.1
-	 *
-	 * @return array the param descriptions
-	 */
-	protected function getParamDescriptionForId() {
-		return array(
-			'id' => array( 'The identifier for the entity, including the prefix.',
-				"Use either 'id' or 'site' and 'title' together."
-			),
-		);
-	}
-
-	/**
-	 * Get param descriptions for identification by a sitelink pair
-	 * Lookup through the sitelink object is not used in every subclasses
-	 *
-	 * @since 0.1
-	 *
-	 * @return array the param descriptions
-	 */
-	protected function getParamDescriptionForSiteLink() {
-		return array(
-			'site' => array( 'An identifier for the site on which the page resides.',
-				"Use together with 'title' to make a complete sitelink."
-			),
-			'title' => array( 'Title of the page to associate.',
-				"Use together with 'site' to make a complete sitelink."
-			),
-		);
-	}
-
-	/**
-	 * Get param descriptions for the entity in general
-	 *
-	 * @since 0.1
-	 *
-	 * @return array the param descriptions
-	 */
-	protected function getParamDescriptionForEntity() {
-		return array(
-			'baserevid' => array( 'The numeric identifier for the revision to base the modification on.',
-				"This is used for detecting conflicts during save."
-			),
-			'summary' => array( 'Summary for the edit.',
-				"Will be prepended by an automatically generated comment. The length limit of the
-				autocomment together with the summary is 260 characters. Be aware that everything above that
-				limit will be cut off."
-			),
-			'type' => array( 'A specific type of entity.',
-				"Will default to 'item' as this will be the most common type."
-			),
-			'token' => array( 'A "edittoken" token previously obtained through the token module (prop=info).',
-			),
-			'bot' => array( 'Mark this edit as bot',
-				'This URL flag will only be respected if the user belongs to the group "bot".'
-			),
 		);
 	}
 

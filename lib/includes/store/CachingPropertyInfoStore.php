@@ -39,7 +39,7 @@ class CachingPropertyInfoStore implements PropertyInfoStore {
 	/**
 	 * Maps properties to info arrays
 	 *
-	 * @var array[]
+	 * @var array[]|null
 	 */
 	protected $propertyInfo = null;
 
@@ -90,6 +90,26 @@ class CachingPropertyInfoStore implements PropertyInfoStore {
 	}
 
 	/**
+	 * @see PropertyInfoStore::getPropertyInfoForDataType
+	 *
+	 * @param string $dataType
+	 *
+	 * @return array[]
+	 */
+	public function getPropertyInfoForDataType( $dataType ) {
+		$propertyInfo = $this->getAllPropertyInfo();
+		$propertyInfoForDataType = array();
+
+		foreach ( $propertyInfo as $id => $info ) {
+			if ( $info[PropertyInfoStore::KEY_DATA_TYPE] === $dataType ) {
+				$propertyInfoForDataType[$id] = $info;
+			}
+		}
+
+		return $propertyInfoForDataType;
+	}
+
+	/**
 	 * @see PropertyInfoStore::getAllPropertyInfo
 	 *
 	 * @return array[]
@@ -107,7 +127,6 @@ class CachingPropertyInfoStore implements PropertyInfoStore {
 			}
 		}
 
-		assert( is_array( $this->propertyInfo ) );
 		return $this->propertyInfo;
 	}
 
@@ -120,7 +139,7 @@ class CachingPropertyInfoStore implements PropertyInfoStore {
 	 * @throws InvalidArgumentException
 	 */
 	public function setPropertyInfo( PropertyId $propertyId, array $info ) {
-		if ( !isset( $info[ PropertyInfoStore::KEY_DATA_TYPE ]) ) {
+		if ( !isset( $info[ PropertyInfoStore::KEY_DATA_TYPE ] ) ) {
 			throw new InvalidArgumentException( 'Missing required info field: ' . PropertyInfoStore::KEY_DATA_TYPE );
 		}
 
@@ -184,4 +203,5 @@ class CachingPropertyInfoStore implements PropertyInfoStore {
 
 		return true;
 	}
+
 }

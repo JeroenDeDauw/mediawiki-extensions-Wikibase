@@ -2,7 +2,8 @@
 	"@metadata": {
 		"authors": [
 			"Iwan Novirion",
-			"Shirayuki"
+			"Shirayuki",
+			"Macofe"
 		]
 	},
 	"wikibase-edit": "suntiang",
@@ -22,7 +23,6 @@
 	"wikibase-description-input-help-message": "Masuakan deskripsi singkek di $1.",
 	"wikibase-statements": "Panyataan",
 	"wikibase-terms": "Dalam bahaso lain",
-	"wikibase-sitelinks-add": "tambahkan interwiki ka pautan situs",
 	"wikibase-sitelinks-empty": "Alun ado interwiki untuak item ko.",
 	"wikibase-remove": "hapuih",
 	"wikibase-aliases-label": "Namo lain:",
@@ -35,8 +35,6 @@
 	"wikibase-snakview-variations-somevalue-label": "nilai indak dikatahui",
 	"wikibase-snakview-variations-novalue-label": "indak ado nilai",
 	"wikibase-snakview-snaktypeselector-value": "nilai kostum",
-	"wikibase-snakview-snaktypeselector-somevalue": "nilai indak dikatahui",
-	"wikibase-snakview-snaktypeselector-novalue": "indak ado nilai",
 	"wikibase-entityselector-more": "kambangan",
 	"wikibase-move-error": "Sanak indak dapek mamindahan laman pado ruangnamo data, dan Sanak indak dapek mamindahan laman ka dalamnyo.",
 	"special-itembytitle": "Cari item",
@@ -44,10 +42,9 @@
 	"wikibase-itembytitle-lookup-site": "Wiki:",
 	"wikibase-itembytitle-lookup-page": "Laman:",
 	"wikibase-itembytitle-submit": "Cari",
-	"wikibase-itembytitle-description": "Wiki adolah kode bahaso, misalnyo \"enwiki\".",
 	"special-itemdisambiguation": "Item disambiguasi",
 	"wikibase-itemdisambiguation-lookup-fieldset": "Cari item manuruik bahaso jo label",
-	"wikibase-itemdisambiguation-lookup-language": "Bahaso:",
+	"wikibase-itemdisambiguation-lookup-language": "Kode bahaso:",
 	"wikibase-itemdisambiguation-lookup-label": "Label:",
 	"wikibase-itemdisambiguation-submit": "Cari",
 	"wikibase-itemdisambiguation-nothing-found": "Maaf, item jo label tasabuik indak basuo.",
@@ -71,8 +68,8 @@
 	"wikibase-setaliases-label": "Namo lain:",
 	"wikibase-setaliases-submit": "Buek namo lain",
 	"wikibase-modifyentity-id": "ID:",
-	"wikibase-modifyterm-language": "Bahaso:",
-	"wikibase-entitieswithoutlabel-label-language": "Bahaso:",
+	"wikibase-modifyterm-language": "Kode bahaso:",
+	"wikibase-entitieswithoutlabel-label-language": "Kode bahaso:",
 	"wikibase-entitieswithoutlabel-label-type": "Jenis:",
 	"wikibase-entitieswithoutlabel-label-alltypes": "sadonyo",
 	"wikibase-entitieswithoutlabel-submit": "Cari",
@@ -103,5 +100,6 @@
 	"content-model-wikibase-item": "Item Wikibase",
 	"content-model-wikibase-property": "Properti Wikibase",
 	"content-model-wikibase-query": "Pamintaan Wikibase",
-	"right-property-create": "Buek properti"
+	"right-property-create": "Buek properti",
+	"action-property-create": "buek properti"
 }

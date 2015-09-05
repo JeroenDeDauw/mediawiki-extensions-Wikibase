@@ -1,14 +1,15 @@
 <?php
 
-namespace Wikibase\Test;
+namespace Wikibase\Client\Tests;
 
 use Language;
 use MediaWikiSite;
 use SiteStore;
-use ValueFormatters\FormatterOptions;
 use Wikibase\Client\WikibaseClient;
-use Wikibase\Lib\SnakFormatter;
+use Wikibase\DataModel\Entity\Item;
+use Wikibase\Lib\DataTypeDefinitions;
 use Wikibase\SettingsArray;
+use Wikibase\Test\MockSiteStore;
 
 /**
  * @covers Wikibase\Client\WikibaseClient
@@ -16,6 +17,7 @@ use Wikibase\SettingsArray;
  * @group Wikibase
  * @group WikibaseClient
  * @group WikibaseClientTest
+ * @group Database
  *
  * @licence GNU GPL v2+
  * @author Jeroen De Dauw < jeroendedauw@gmail.com >
@@ -25,84 +27,92 @@ use Wikibase\SettingsArray;
 class WikibaseClientTest extends \PHPUnit_Framework_TestCase {
 
 	public function testGetDataTypeFactoryReturnType() {
-		$returnValue = $this->getDefaultInstance()->getDataTypeFactory();
+		$returnValue = $this->getWikibaseClient()->getDataTypeFactory();
 		$this->assertInstanceOf( 'DataTypes\DataTypeFactory', $returnValue );
 	}
 
 	public function testGetEntityIdParserReturnType() {
-		$returnValue = $this->getDefaultInstance()->getEntityIdParser();
+		$returnValue = $this->getWikibaseClient()->getEntityIdParser();
 		$this->assertInstanceOf( 'Wikibase\DataModel\Entity\EntityIdParser', $returnValue );
 	}
 
-	public function testEntityIdLabelFormatterReturnType() {
-		$returnValue = $this->getDefaultInstance()->newEntityIdLabelFormatter( 'en' );
-		$this->assertInstanceOf( 'Wikibase\Lib\EntityIdLabelFormatter', $returnValue );
-	}
-
 	public function testGetPropertyDataTypeLookupReturnType() {
-		$returnValue = $this->getDefaultInstance()->getPropertyDataTypeLookup();
-		$this->assertInstanceOf( 'Wikibase\Lib\PropertyDataTypeLookup', $returnValue );
-	}
-
-	public function testNewSnakFormatterReturnType() {
-		$returnValue = $this->getDefaultInstance()->newSnakFormatter(
-			SnakFormatter::FORMAT_PLAIN,
-			new FormatterOptions()
-		);
-		$this->assertInstanceOf( 'Wikibase\Lib\SnakFormatter', $returnValue );
+		$returnValue = $this->getWikibaseClient()->getPropertyDataTypeLookup();
+		$this->assertInstanceOf( 'Wikibase\DataModel\Services\Lookup\PropertyDataTypeLookup', $returnValue );
 	}
 
 	public function testGetStringNormalizerReturnType() {
-		$returnValue = $this->getDefaultInstance()->getStringNormalizer();
+		$returnValue = $this->getWikibaseClient()->getStringNormalizer();
 		$this->assertInstanceOf( 'Wikibase\StringNormalizer', $returnValue );
 	}
 
 	public function testNewRepoLinkerReturnType() {
-		$returnValue = $this->getDefaultInstance()->newRepoLinker();
-		$this->assertInstanceOf( 'Wikibase\RepoLinker', $returnValue );
+		$returnValue = $this->getWikibaseClient()->newRepoLinker();
+		$this->assertInstanceOf( 'Wikibase\Client\RepoLinker', $returnValue );
 	}
 
 	public function testGetLanguageFallbackChainFactoryReturnType() {
-		$returnValue = $this->getDefaultInstance()->getLanguageFallbackChainFactory();
+		$returnValue = $this->getWikibaseClient()->getLanguageFallbackChainFactory();
 		$this->assertInstanceOf( 'Wikibase\LanguageFallbackChainFactory', $returnValue );
 	}
 
 	public function testGetStoreReturnType() {
-		$returnValue = $this->getDefaultInstance()->getStore();
+		$returnValue = $this->getWikibaseClient()->getStore();
 		$this->assertInstanceOf( 'Wikibase\ClientStore', $returnValue );
 	}
 
 	public function testGetContentLanguageReturnType() {
-		$returnValue = $this->getDefaultInstance()->getContentLanguage();
+		$returnValue = $this->getWikibaseClient()->getContentLanguage();
 		$this->assertInstanceOf( 'Language', $returnValue );
 	}
 
 	public function testGetSettingsReturnType() {
-		$returnValue = $this->getDefaultInstance()->getSettings();
+		$returnValue = $this->getWikibaseClient()->getSettings();
 		$this->assertInstanceOf( 'Wikibase\SettingsArray', $returnValue );
 	}
 
 	public function testGetSiteReturnType() {
-		$returnValue = $this->getDefaultInstance()->getSite();
+		$returnValue = $this->getWikibaseClient()->getSite();
 		$this->assertInstanceOf( 'Site', $returnValue );
+	}
+
+	public function testGetLangLinkHandlerReturnType() {
+		$settings = clone WikibaseClient::getDefaultInstance()->getSettings();
+
+		$settings->setSetting( 'siteGroup', 'wikipedia' );
+		$settings->setSetting( 'siteGlobalID', 'enwiki' );
+		$settings->setSetting( 'languageLinkSiteGroup', 'wikipedia' );
+
+		$wikibaseClient = new WikibaseClient( $settings, Language::factory( 'en' ), new DataTypeDefinitions(), $this->getSiteStore() );
+
+		$returnValue = $wikibaseClient->getLangLinkHandler();
+		$this->assertInstanceOf( 'Wikibase\LangLinkHandler', $returnValue );
+	}
+
+	public function testGetParserOutputDataUpdaterType() {
+		$returnValue = $this->getWikibaseClient()->getParserOutputDataUpdater();
+		$this->assertInstanceOf( 'Wikibase\Client\ParserOutputDataUpdater', $returnValue );
 	}
 
 	/**
 	 * @dataProvider getLangLinkSiteGroupProvider
 	 */
-	public function testGetLangLinkSiteGroup( $expected, $settings, $siteStore ) {
-		$client = new WikibaseClient( $settings, Language::factory( 'en' ), $siteStore );
+	public function testGetLangLinkSiteGroup( $expected, SettingsArray $settings, SiteStore $siteStore ) {
+		$client = new WikibaseClient( $settings, Language::factory( 'en' ), new DataTypeDefinitions(), $siteStore );
 		$this->assertEquals( $expected, $client->getLangLinkSiteGroup() );
 	}
 
 	public function getLangLinkSiteGroupProvider() {
-		$siteStore = $this->getMockSiteStore();
+		$siteStore = $this->getSiteStore();
 
 		$settings = clone WikibaseClient::getDefaultInstance()->getSettings();
+
+		$settings->setSetting( 'siteGroup', 'wikipedia' );
 		$settings->setSetting( 'siteGlobalID', 'enwiki' );
 		$settings->setSetting( 'languageLinkSiteGroup', null );
 
 		$settings2 = clone $settings;
+		$settings2->setSetting( 'siteGroup', 'wikipedia' );
 		$settings2->setSetting( 'siteGlobalID', 'enwiki' );
 		$settings2->setSetting( 'languageLinkSiteGroup', 'wikivoyage' );
 
@@ -116,17 +126,18 @@ class WikibaseClientTest extends \PHPUnit_Framework_TestCase {
 	 * @dataProvider getSiteGroupProvider
 	 */
 	public function testGetSiteGroup( $expected, SettingsArray $settings, SiteStore $siteStore ) {
-		$client = new WikibaseClient( $settings, Language::factory( 'en' ), $siteStore );
+		$client = new WikibaseClient( $settings, Language::factory( 'en' ), new DataTypeDefinitions(), $siteStore );
 		$this->assertEquals( $expected, $client->getSiteGroup() );
 	}
 
 	/**
 	 * @return SiteStore
 	 */
-	public function getMockSiteStore() {
+	private function getSiteStore() {
 		$siteStore = new MockSiteStore();
 
-		$site = MediaWikiSite::newFromGlobalId( 'enwiki' );
+		$site = new MediaWikiSite();
+		$site->setGlobalId( 'enwiki' );
 		$site->setGroup( 'wikipedia' );
 
 		$siteStore->saveSite( $site );
@@ -143,7 +154,7 @@ class WikibaseClientTest extends \PHPUnit_Framework_TestCase {
 		$settings2->setSetting( 'siteGroup', 'wikivoyage' );
 		$settings2->setSetting( 'siteGlobalID', 'enwiki' );
 
-		$siteStore = $this->getMockSiteStore();
+		$siteStore = $this->getSiteStore();
 
 		return array(
 			array( 'wikipedia', $settings, $siteStore ),
@@ -152,13 +163,38 @@ class WikibaseClientTest extends \PHPUnit_Framework_TestCase {
 	}
 
 	public function testGetSnakFormatterFactoryReturnType() {
-		$returnValue = $this->getDefaultInstance()->getSnakFormatterFactory();
+		$returnValue = $this->getWikibaseClient()->getSnakFormatterFactory();
 		$this->assertInstanceOf( 'Wikibase\Lib\OutputFormatSnakFormatterFactory', $returnValue );
 	}
 
 	public function testGetValueFormatterFactoryReturnType() {
-		$returnValue = $this->getDefaultInstance()->getValueFormatterFactory();
+		$returnValue = $this->getWikibaseClient()->getValueFormatterFactory();
 		$this->assertInstanceOf( 'Wikibase\Lib\OutputFormatValueFormatterFactory', $returnValue );
+	}
+
+	public function testGetDeserializerFactoryReturnType() {
+		$returnValue = $this->getWikibaseClient()->getDeserializerFactory();
+		$this->assertInstanceOf( 'Wikibase\DataModel\DeserializerFactory', $returnValue );
+	}
+
+	public function testGetLanguageLinkBadgeDisplay() {
+		$returnValue = $this->getWikibaseClient()->getLanguageLinkBadgeDisplay();
+		$this->assertInstanceOf( 'Wikibase\Client\Hooks\LanguageLinkBadgeDisplay', $returnValue );
+	}
+
+	public function testGetOtherProjectsSidebarGeneratorFactoryReturnType() {
+		$settings = $this->getWikibaseClient()->getSettings();
+		$settings->setSetting( 'otherProjectsLinks', array( 'my_wiki' ) );
+
+		$this->assertInstanceOf(
+			'Wikibase\Client\Hooks\OtherProjectsSidebarGeneratorFactory',
+			$this->getWikibaseClient()->getOtherProjectsSidebarGeneratorFactory()
+		);
+	}
+
+	public function testGetOtherProjectsSitesProvider() {
+		$returnValue = $this->getWikibaseClient()->getOtherProjectsSitesProvider();
+		$this->assertInstanceOf( 'Wikibase\Client\OtherProjectsSitesProvider', $returnValue );
 	}
 
 	public function testGetDefaultInstance() {
@@ -167,10 +203,57 @@ class WikibaseClientTest extends \PHPUnit_Framework_TestCase {
 			WikibaseClient::getDefaultInstance() );
 	}
 
+	public function testGetEntityContentDataCodec() {
+		$codec = $this->getWikibaseClient()->getEntityContentDataCodec();
+		$this->assertInstanceOf( 'Wikibase\Lib\Store\EntityContentDataCodec', $codec );
+
+		$this->setExpectedException( 'RuntimeException' );
+		$codec->encodeEntity( new Item(), CONTENT_FORMAT_JSON );
+	}
+
+	public function testGetInternalEntityDeserializer() {
+		$deserializer = $this->getWikibaseClient()->getInternalEntityDeserializer();
+		$this->assertInstanceOf( 'Deserializers\Deserializer', $deserializer );
+	}
+
+	public function testGetEntityChangeFactory() {
+		$factory = $this->getWikibaseClient()->getEntityChangeFactory();
+		$this->assertInstanceOf( 'Wikibase\Lib\Changes\EntityChangeFactory', $factory );
+	}
+
+	public function testGetChangeHandler() {
+		$handler = $this->getWikibaseClient()->getChangeHandler();
+		$this->assertInstanceOf( 'Wikibase\Client\Changes\ChangeHandler', $handler );
+	}
+
+	public function testGetParserFunctionRegistrant() {
+		$registrant = $this->getWikibaseClient()->getParserFunctionRegistrant();
+		$this->assertInstanceOf( 'Wikibase\Client\Hooks\ParserFunctionRegistrant', $registrant );
+	}
+
+	public function testGetPropertyParserFunctionRunner() {
+		$runner = $this->getWikibaseClient()->getPropertyParserFunctionRunner();
+		$this->assertInstanceOf( 'Wikibase\Client\DataAccess\PropertyParserFunction\Runner', $runner );
+	}
+
+	public function testGetTermsLanguages() {
+		$langs = $this->getWikibaseClient()->getTermsLanguages();
+		$this->assertInstanceOf( 'Wikibase\Lib\ContentLanguages', $langs );
+	}
+
+	public function testGetRestrictedEntityLookup() {
+		$restrictedEntityLookup = $this->getWikibaseClient()->getRestrictedEntityLookup();
+		$this->assertInstanceOf( 'Wikibase\Client\DataAccess\RestrictedEntityLookup', $restrictedEntityLookup );
+	}
+
 	/**
 	 * @return WikibaseClient
 	 */
-	private function getDefaultInstance() {
-		return WikibaseClient::getDefaultInstance();
+	private function getWikibaseClient() {
+		$settings = new SettingsArray( WikibaseClient::getDefaultInstance()->getSettings()->getArrayCopy() );
+		$sites = new MockSiteStore( array() );
+		$dataTypeDefinitions = new DataTypeDefinitions();
+		return new WikibaseClient( $settings, Language::factory( 'en' ), $dataTypeDefinitions, $sites );
 	}
+
 }

@@ -5,15 +5,39 @@ namespace Wikibase;
 use DatabaseBase;
 use DatabaseUpdater;
 use DBQueryError;
+use HashBagOStuff;
 use MWException;
 use ObjectCache;
-use Wikibase\DataModel\Entity\BasicEntityIdParser;
+use Revision;
+use Wikibase\DataModel\Entity\EntityIdParser;
+use Wikibase\DataModel\Services\Lookup\EntityLookup;
+use Wikibase\DataModel\Services\Lookup\EntityRedirectLookup;
+use Wikibase\Lib\Reporting\ObservableMessageReporter;
+use Wikibase\Lib\Store\CachingEntityRevisionLookup;
+use Wikibase\Lib\Store\EntityContentDataCodec;
+use Wikibase\Lib\Store\EntityInfoBuilderFactory;
+use Wikibase\Lib\Store\EntityRevisionLookup;
+use Wikibase\Lib\Store\EntityStore;
+use Wikibase\Lib\Store\EntityStoreWatcher;
+use Wikibase\Lib\Store\EntityTitleLookup;
+use Wikibase\Lib\Store\LabelConflictFinder;
+use Wikibase\Lib\Store\RedirectResolvingEntityLookup;
+use Wikibase\Lib\Store\RevisionBasedEntityLookup;
+use Wikibase\Lib\Store\SiteLinkConflictLookup;
+use Wikibase\Lib\Store\SiteLinkStore;
+use Wikibase\Lib\Store\SiteLinkTable;
+use Wikibase\Lib\Store\Sql\PrefetchingWikiPageEntityMetaDataAccessor;
+use Wikibase\Lib\Store\Sql\SqlEntityInfoBuilderFactory;
+use Wikibase\Lib\Store\Sql\WikiPageEntityMetaDataLookup;
+use Wikibase\Lib\Store\WikiPageEntityRevisionLookup;
+use Wikibase\Repo\Store\DispatchingEntityStoreWatcher;
+use Wikibase\Repo\Store\EntityPerPage;
+use Wikibase\Repo\Store\SQL\EntityPerPageTable;
+use Wikibase\Repo\Store\SQL\WikiPageEntityRedirectLookup;
+use Wikibase\Repo\Store\WikiPageEntityStore;
 use Wikibase\Repo\WikibaseRepo;
-use Wikibase\store\CachingEntityRevisionLookup;
-use Wikibase\store\DispatchingEntityStoreWatcher;
-use Wikibase\store\EntityStore;
-use Wikibase\store\EntityStoreWatcher;
-use Wikibase\store\WikiPageEntityStore;
+use Wikibase\Store\EntityIdLookup;
+use WikiPage;
 
 /**
  * Implementation of the store interface using an SQL backend via MediaWiki's
@@ -21,50 +45,84 @@ use Wikibase\store\WikiPageEntityStore;
  *
  * @since 0.1
  * @licence GNU GPL v2+
- * @author Jeroen De Dauw < jeroendedauw@gmail.com >
  * @author Daniel Kinzler
  */
 class SqlStore implements Store {
 
 	/**
-	 * @var EntityRevisionLookup
+	 * @var EntityContentDataCodec
+	 */
+	private $contentCodec;
+
+	/**
+	 * @var EntityIdParser
+	 */
+	private $entityIdParser;
+
+	/**
+	 * @var EntityRevisionLookup|null
 	 */
 	private $entityRevisionLookup = null;
 
 	/**
-	 * @var EntityRevisionLookup
+	 * @var EntityRevisionLookup|null
 	 */
 	private $rawEntityRevisionLookup = null;
 
 	/**
-	 * @var EntityStore
+	 * @var EntityStore|null
 	 */
 	private $entityStore = null;
 
 	/**
-	 * @var DispatchingEntityStoreWatcher
+	 * @var DispatchingEntityStoreWatcher|null
 	 */
 	private $entityStoreWatcher = null;
 
 	/**
-	 * @var EntityInfoBuilder
+	 * @var EntityInfoBuilderFactory|null
 	 */
-	private $entityInfoBuilder = null;
+	private $entityInfoBuilderFactory = null;
 
 	/**
-	 * @var PropertyInfoTable
+	 * @var PropertyInfoStore|null
 	 */
-	private $propertyInfoTable = null;
+	private $propertyInfoStore = null;
 
 	/**
-	 * @var TermIndex
+	 * @var ChangesTable|null
+	 */
+	private $changesTable = null;
+
+	/**
+	 * @var string|bool false for local, or a database id that wfGetLB understands.
+	 */
+	private $changesDatabase;
+
+	/**
+	 * @var TermIndex|null
 	 */
 	private $termIndex = null;
 
 	/**
+	 * @var PrefetchingWikiPageEntityMetaDataAccessor|null
+	 */
+	private $entityPrefetcher = null;
+
+	/**
+	 * @var EntityIdLookup
+	 */
+	private $entityIdLookup;
+
+	/**
+	 * @var EntityTitleLookup
+	 */
+	private $entityTitleLookup;
+
+	/**
 	 * @var string
 	 */
-	private $cachePrefix;
+	private $cacheKeyPrefix;
 
 	/**
 	 * @var int
@@ -76,15 +134,41 @@ class SqlStore implements Store {
 	 */
 	private $cacheDuration;
 
-	public function __construct() {
-		$settings = WikibaseRepo::getDefaultInstance()->getSettings();
-		$cachePrefix = $settings->getSetting( 'sharedCacheKeyPrefix' );
-		$cacheDuration = $settings->getSetting( 'sharedCacheDuration' );
-		$cacheType = $settings->getSetting( 'sharedCacheType' );
+	/**
+	 * @var bool
+	 */
+	private $useRedirectTargetColumn;
 
-		$this->cachePrefix = $cachePrefix;
-		$this->cacheDuration = $cacheDuration;
-		$this->cacheType = $cacheType;
+	/**
+	 * @var int[]
+	 */
+	private $idBlacklist;
+
+	/**
+	 * @param EntityContentDataCodec $contentCodec
+	 * @param EntityIdParser $entityIdParser
+	 * @param EntityIdLookup $entityIdLookup
+	 * @param EntityTitleLookup $entityTitleLookup
+	 */
+	public function __construct(
+		EntityContentDataCodec $contentCodec,
+		EntityIdParser $entityIdParser,
+		EntityIdLookup $entityIdLookup,
+		EntityTitleLookup $entityTitleLookup
+	) {
+		$this->contentCodec = $contentCodec;
+		$this->entityIdParser = $entityIdParser;
+		$this->entityIdLookup = $entityIdLookup;
+		$this->entityTitleLookup = $entityTitleLookup;
+
+		//TODO: inject settings
+		$settings = WikibaseRepo::getDefaultInstance()->getSettings();
+		$this->changesDatabase = $settings->getSetting( 'changesDatabase' );
+		$this->cacheKeyPrefix = $settings->getSetting( 'sharedCacheKeyPrefix' );
+		$this->cacheType = $settings->getSetting( 'sharedCacheType' );
+		$this->cacheDuration = $settings->getSetting( 'sharedCacheDuration' );
+		$this->useRedirectTargetColumn = $settings->getSetting( 'useRedirectTargetColumn' );
+		$this->idBlacklist = $settings->getSetting( 'idBlacklist' );
 	}
 
 	/**
@@ -103,11 +187,18 @@ class SqlStore implements Store {
 	}
 
 	/**
-	 * @since 0.1
+	 * @see Store::getLabelConflictFinder
 	 *
+	 * @return LabelConflictFinder
+	 */
+	public function getLabelConflictFinder() {
+		return $this->getTermIndex();
+	}
+
+	/**
 	 * @return TermIndex
 	 */
-	protected function newTermIndex() {
+	private function newTermIndex() {
 		//TODO: Get $stringNormalizer from WikibaseRepo?
 		//      Can't really pass this via the constructor...
 		$stringNormalizer = new StringNormalizer();
@@ -120,7 +211,7 @@ class SqlStore implements Store {
 	 * @since 0.1
 	 */
 	public function clear() {
-		$this->newSiteLinkCache()->clear();
+		$this->newSiteLinkStore()->clear();
 		$this->getTermIndex()->clear();
 		$this->newEntityPerPage()->clear();
 	}
@@ -144,8 +235,8 @@ class SqlStore implements Store {
 		);
 
 		foreach ( $pages as $pageRow ) {
-			$page = \WikiPage::newFromID( $pageRow->page_id );
-			$revision = \Revision::newFromId( $pageRow->page_latest );
+			$page = WikiPage::newFromID( $pageRow->page_id );
+			$revision = Revision::newFromId( $pageRow->page_latest );
 			try {
 				$page->doEditUpdates( $revision, $GLOBALS['wgUser'] );
 			} catch ( DBQueryError $e ) {
@@ -159,6 +250,8 @@ class SqlStore implements Store {
 
 	/**
 	 * Updates the schema of the SQL store to it's latest version.
+	 *
+	 * @TODO: Make this a separatec class!
 	 *
 	 * @since 0.1
 	 *
@@ -184,8 +277,99 @@ class SqlStore implements Store {
 
 		$this->updateEntityPerPageTable( $updater, $db );
 		$this->updateTermsTable( $updater, $db );
+		$this->updateItemsPerSiteTable( $updater, $db );
+		$this->updateChangesTable( $updater, $db );
 
-		PropertyInfoTable::registerDatabaseUpdates( $updater );
+		$this->registerPropertyInfoTableUpdates( $updater );
+	}
+
+	/**
+	 * @param DatabaseUpdater $updater
+	 */
+	private function updateItemsPerSiteTable( DatabaseUpdater $updater, DatabaseBase $db ) {
+		// Make wb_items_per_site.ips_site_page VARCHAR(310) - T99459
+		// NOTE: this update doesn't work on SQLite, but it's not needed there anyway.
+		if ( $db->getType() !== 'sqlite' ) {
+			$updater->modifyExtensionField(
+				'wb_items_per_site',
+				'ips_site_page',
+				$this->getUpdateScriptPath( 'MakeIpsSitePageLarger', $db->getType() )
+			);
+		}
+	}
+
+	/**
+	 * @param DatabaseUpdater $updater
+	 */
+	private function updateChangesTable( DatabaseUpdater $updater, DatabaseBase $db ) {
+		// Make wb_changes.change_info MEDIUMBLOB - T108246
+		// NOTE: this update doesn't work on SQLite, but it's not needed there anyway.
+		if ( $db->getType() !== 'sqlite' ) {
+			$updater->modifyExtensionField(
+				'wb_changes',
+				'change_info',
+				$this->getUpdateScriptPath( 'MakeChangeInfoLarger', $db->getType() )
+			);
+		}
+	}
+
+	private function registerPropertyInfoTableUpdates( DatabaseUpdater $updater ) {
+		$table = 'wb_property_info';
+
+		if ( !$updater->tableExists( $table ) ) {
+			$type = $updater->getDB()->getType();
+			$fileBase = __DIR__ . '/../../../sql/' . $table;
+
+			$file = $fileBase . '.' . $type . '.sql';
+			if ( !file_exists( $file ) ) {
+				$file = $fileBase . '.sql';
+			}
+
+			$updater->addExtensionTable( $table, $file );
+
+			// populate the table after creating it
+			$updater->addExtensionUpdate( array(
+				array( __CLASS__, 'rebuildPropertyInfo' )
+			) );
+		}
+	}
+
+	/**
+	 * Wrapper for invoking PropertyInfoTableBuilder from DatabaseUpdater
+	 * during a database update.
+	 *
+	 * @param DatabaseUpdater $updater
+	 */
+	public static function rebuildPropertyInfo( DatabaseUpdater $updater ) {
+		$reporter = new ObservableMessageReporter();
+		$reporter->registerReporterCallback(
+			function ( $msg ) use ( $updater ) {
+				$updater->output( "..." . $msg . "\n" );
+			}
+		);
+
+		$table = new PropertyInfoTable( false );
+		$wikibaseRepo = WikibaseRepo::getDefaultInstance();
+
+		$contentCodec = $wikibaseRepo->getEntityContentDataCodec();
+		$propertyInfoBuilder = $wikibaseRepo->newPropertyInfoBuilder();
+		$useRedirectTargetColumn = $wikibaseRepo->getSettings()->getSetting( 'useRedirectTargetColumn' );
+
+		$wikiPageEntityLookup = new WikiPageEntityRevisionLookup(
+			$contentCodec,
+			new WikiPageEntityMetaDataLookup( $wikibaseRepo->getEntityIdParser() ),
+			false
+		);
+
+		$cachingEntityLookup = new CachingEntityRevisionLookup( $wikiPageEntityLookup, new \HashBagOStuff() );
+		$entityLookup = new RevisionBasedEntityLookup( $cachingEntityLookup );
+
+		$builder = new PropertyInfoTableBuilder( $table, $entityLookup, $propertyInfoBuilder, $useRedirectTargetColumn );
+		$builder->setReporter( $reporter );
+		$builder->setUseTransactions( false );
+
+		$updater->output( 'Populating ' . $table->getTableName() . "\n" );
+		$builder->rebuildPropertyInfo();
 	}
 
 	/**
@@ -258,13 +442,20 @@ class SqlStore implements Store {
 	private function updateEntityPerPageTable( DatabaseUpdater $updater, DatabaseBase $db ) {
 		// Update from 0.1. or 0.2.
 		if ( !$db->tableExists( 'wb_entity_per_page' ) ) {
-
 			$updater->addExtensionTable(
 				'wb_entity_per_page',
 				$this->getUpdateScriptPath( 'AddEntityPerPage', $db->getType() )
 			);
 
-			$updater->addPostDatabaseUpdateMaintenance( 'Wikibase\RebuildEntityPerPage' );
+			$updater->addPostDatabaseUpdateMaintenance(
+				'Wikibase\Repo\Maintenance\RebuildEntityPerPage'
+			);
+		} elseif ( $this->useRedirectTargetColumn ) {
+			$updater->addExtensionField(
+				'wb_entity_per_page',
+				'epp_redirect_target',
+				$this->getUpdateScriptPath( 'AddEppRedirectTarget', $db->getType() )
+			);
 		}
 	}
 
@@ -275,12 +466,8 @@ class SqlStore implements Store {
 	 * @param DatabaseBase $db
 	 */
 	private function updateTermsTable( DatabaseUpdater $updater, DatabaseBase $db ) {
-		$withoutTermSearchKey = WikibaseRepo::getDefaultInstance()->
-			getSettings()->getSetting( 'withoutTermSearchKey' );
-
 		// ---- Update from 0.1 or 0.2. ----
-		if ( !$db->fieldExists( 'wb_terms', 'term_search_key' ) && !$withoutTermSearchKey ) {
-
+		if ( !$db->fieldExists( 'wb_terms', 'term_search_key' ) ) {
 			$updater->addExtensionField(
 				'wb_terms',
 				'term_search_key',
@@ -333,17 +520,17 @@ class SqlStore implements Store {
 	 * @return IdGenerator
 	 */
 	public function newIdGenerator() {
-		return new SqlIdGenerator( 'wb_id_counters', wfGetDB( DB_MASTER ) );
+		return new SqlIdGenerator( wfGetLB(), $this->idBlacklist );
 	}
 
 	/**
-	 * @see Store::newSiteLinkCache
+	 * @see Store::newSiteLinkStore
 	 *
 	 * @since 0.1
 	 *
-	 * @return SiteLinkCache
+	 * @return SiteLinkStore
 	 */
-	public function newSiteLinkCache() {
+	public function newSiteLinkStore() {
 		return new SiteLinkTable( 'wb_items_per_site', false );
 	}
 
@@ -355,12 +542,32 @@ class SqlStore implements Store {
 	 * @return EntityPerPage
 	 */
 	public function newEntityPerPage() {
-		return new EntityPerPageTable();
+		return new EntityPerPageTable(
+			$this->entityIdParser,
+			$this->useRedirectTargetColumn
+		);
+	}
+
+	/**
+	 * @since 0.5
+	 *
+	 * @return EntityRedirectLookup
+	 */
+	public function getEntityRedirectLookup() {
+		$wikibaseRepo = WikibaseRepo::getDefaultInstance();
+
+		return new WikiPageEntityRedirectLookup(
+			$this->entityTitleLookup,
+			$this->entityIdLookup,
+			wfGetLB()
+		);
 	}
 
 	/**
 	 * @see Store::getEntityLookup
 	 * @see SqlStore::getEntityRevisionLookup
+	 *
+	 * The EntityLookup returned by this method will resolve redirects.
 	 *
 	 * @since 0.4
 	 *
@@ -369,7 +576,10 @@ class SqlStore implements Store {
 	 * @return EntityLookup
 	 */
 	public function getEntityLookup( $uncached = '' ) {
-		return $this->getEntityRevisionLookup( $uncached );
+		$revisionLookup = $this->getEntityRevisionLookup( $uncached );
+		$revisionBasedLookup = new RevisionBasedEntityLookup( $revisionLookup );
+		$resolvingLookup = new RedirectResolvingEntityLookup( $revisionBasedLookup );
+		return $resolvingLookup;
 	}
 
 	/**
@@ -405,16 +615,14 @@ class SqlStore implements Store {
 	/**
 	 * @return WikiPageEntityStore
 	 */
-	protected function newEntityStore() {
+	private function newEntityStore() {
 		$contentFactory = WikibaseRepo::getDefaultInstance()->getEntityContentFactory();
 		$idGenerator = $this->newIdGenerator();
-		$entityPerPage = $this->newEntityPerPage();
 
-		$store = new WikiPageEntityStore( $contentFactory, $idGenerator, $entityPerPage );
+		$store = new WikiPageEntityStore( $contentFactory, $idGenerator );
 		$store->registerWatcher( $this->getEntityStoreWatcher() );
 		return $store;
 	}
-
 
 	/**
 	 * @see Store::getEntityRevisionLookup
@@ -438,61 +646,74 @@ class SqlStore implements Store {
 	}
 
 	/**
-	 * Creates a new EntityRevisionLookup(s).
-	 * This returns a pair of lookup services, one being the raw uncached lookup, the other being the cached lookup.
+	 * Creates a strongly connected pair of EntityRevisionLookup services, the first being the raw
+	 * uncached lookup, the second being the cached lookup.
 	 *
-	 * @return array ( WikiPageEntityLookup, CachingEntityRevisionLookup )
+	 * @return array( WikiPageEntityRevisionLookup, CachingEntityRevisionLookup )
 	 */
-	protected function newEntityRevisionLookup() {
-		//NOTE: Keep in sync with DirectSqlStore::newEntityLookup on the client
-		$key = $this->cachePrefix . ':WikiPageEntityLookup';
-
-		$lookup = $rawLookup = new WikiPageEntityLookup( false );
+	private function newEntityRevisionLookup() {
+		// NOTE: Keep cache key in sync with DirectSqlStore::newEntityRevisionLookup in WikibaseClient
+		$cacheKeyPrefix = $this->cacheKeyPrefix . ':WikiPageEntityRevisionLookup';
 
 		// Maintain a list of watchers to be notified of changes to any entities,
 		// in order to update caches.
+		/** @var WikiPageEntityStore $dispatcher */
 		$dispatcher = $this->getEntityStoreWatcher();
 
+		$metaDataFetcher = $this->getEntityPrefetcher();
+		$dispatcher->registerWatcher( $metaDataFetcher );
+
+		$rawLookup = new WikiPageEntityRevisionLookup(
+			$this->contentCodec,
+			$metaDataFetcher,
+			false
+		);
+
 		// Lower caching layer using persistent cache (e.g. memcached).
+		$persistentCachingLookup = new CachingEntityRevisionLookup(
+			$rawLookup,
+			wfGetCache( $this->cacheType ),
+			$this->cacheDuration,
+			$cacheKeyPrefix
+		);
 		// We need to verify the revision ID against the database to avoid stale data.
-		$lookup = new CachingEntityRevisionLookup( $lookup, wfGetCache( $this->cacheType ), $this->cacheDuration, $key );
-		$lookup->setVerifyRevision( true );
-		$dispatcher->registerWatcher( $lookup ); // we know it's a WikiPageEntityStore
+		$persistentCachingLookup->setVerifyRevision( true );
+		$dispatcher->registerWatcher( $persistentCachingLookup );
 
 		// Top caching layer using an in-process hash.
+		$hashCachingLookup = new CachingEntityRevisionLookup(
+			$persistentCachingLookup,
+			new HashBagOStuff()
+		);
 		// No need to verify the revision ID, we'll ignore updates that happen during the request.
-		$lookup = new CachingEntityRevisionLookup( $lookup, new \HashBagOStuff() );
-		$lookup->setVerifyRevision( false );
-		$dispatcher->registerWatcher( $lookup ); // we know it's a WikiPageEntityStore
+		$hashCachingLookup->setVerifyRevision( false );
+		$dispatcher->registerWatcher( $hashCachingLookup );
 
-		return array( $rawLookup, $lookup );
+		return array( $rawLookup, $hashCachingLookup );
 	}
 
 	/**
-	 * @see Store::getEntityInfoBuilder
+	 * @see Store::getEntityInfoBuilderFactory
 	 *
-	 * @since 0.4
+	 * @since 0.5
 	 *
-	 * @return EntityInfoBuilder
+	 * @return EntityInfoBuilderFactory
 	 */
-	public function getEntityInfoBuilder() {
-		if ( !$this->entityInfoBuilder ) {
-			$this->entityInfoBuilder = $this->newEntityInfoBuilder();
+	public function getEntityInfoBuilderFactory() {
+		if ( !$this->entityInfoBuilderFactory ) {
+			$this->entityInfoBuilderFactory = $this->newEntityInfoBuilderFactory();
 		}
 
-		return $this->entityInfoBuilder;
+		return $this->entityInfoBuilderFactory;
 	}
 
 	/**
-	 * Creates a new EntityInfoBuilder
+	 * Creates a new EntityInfoBuilderFactory
 	 *
-	 * @return EntityInfoBuilder
+	 * @return EntityInfoBuilderFactory
 	 */
-	protected function newEntityInfoBuilder() {
-		//TODO: Get $idParser from WikibaseRepo?
-		$idParser = new BasicEntityIdParser();
-		$builder = new SqlEntityInfoBuilder( $idParser );
-		return $builder;
+	private function newEntityInfoBuilderFactory() {
+		return new SqlEntityInfoBuilderFactory( $this->useRedirectTargetColumn );
 	}
 
 	/**
@@ -503,31 +724,63 @@ class SqlStore implements Store {
 	 * @return PropertyInfoStore
 	 */
 	public function getPropertyInfoStore() {
-		if ( !$this->propertyInfoTable ) {
-			$this->propertyInfoTable = $this->newPropertyInfoTable();
+		if ( !$this->propertyInfoStore ) {
+			$this->propertyInfoStore = $this->newPropertyInfoStore();
 		}
 
-		return $this->propertyInfoTable;
+		return $this->propertyInfoStore;
 	}
 
 	/**
-	 * Creates a new PropertyInfoTable
+	 * Creates a new PropertyInfoStore
 	 *
-	 * @return PropertyInfoTable
+	 * @return PropertyInfoStore
 	 */
-	protected function newPropertyInfoTable() {
-		$usePropertyInfoTable = WikibaseRepo::getDefaultInstance()->
-			getSettings()->getSetting( 'usePropertyInfoTable' );
+	private function newPropertyInfoStore() {
+		$table = new PropertyInfoTable( false );
+		$cacheKey = $this->cacheKeyPrefix . ':CachingPropertyInfoStore';
 
-		if ( $usePropertyInfoTable ) {
-			$table = new PropertyInfoTable( false );
-			$key = $this->cachePrefix . ':CachingPropertyInfoStore';
-			return new CachingPropertyInfoStore( $table, ObjectCache::getInstance( $this->cacheType ),
-				$this->cacheDuration, $key );
-		} else {
-			// dummy info store
-			return new DummyPropertyInfoStore();
+		return new CachingPropertyInfoStore(
+			$table,
+			ObjectCache::getInstance( $this->cacheType ),
+			$this->cacheDuration,
+			$cacheKey
+		);
+	}
+
+	/**
+	 * Returns an ChangesTable
+	 *
+	 * @since 0.5
+	 *
+	 * @return ChangesTable
+	 */
+	public function getChangesTable() {
+		if ( $this->changesTable === null ) {
+			$this->changesTable = new ChangesTable( $this->changesDatabase );
 		}
+
+		return $this->changesTable;
+	}
+
+	/**
+	 * @return SiteLinkConflictLookup
+	 */
+	public function getSiteLinkConflictLookup() {
+		return new SiteLinkTable( 'wb_items_per_site', false );
+	}
+
+	/**
+	 * @return PrefetchingWikiPageEntityMetaDataAccessor
+	 */
+	public function getEntityPrefetcher() {
+		if ( $this->entityPrefetcher === null ) {
+			$this->entityPrefetcher = new PrefetchingWikiPageEntityMetaDataAccessor(
+				new WikiPageEntityMetaDataLookup( $this->entityIdParser )
+			);
+		}
+
+		return $this->entityPrefetcher;
 	}
 
 }

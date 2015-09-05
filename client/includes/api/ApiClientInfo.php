@@ -2,10 +2,8 @@
 
 namespace Wikibase;
 
-use ApiBase;
 use ApiQuery;
 use ApiQueryBase;
-use Wikibase\Client\WikibaseClient;
 
 /**
  * Provides url and path information for the associated Wikibase repo
@@ -16,6 +14,7 @@ use Wikibase\Client\WikibaseClient;
  *
  * @licence GNU GPL v2+
  * @author Katie Filbert < aude.wiki@gmail.com >
+ * @author Marius Hoch < hoo@online.de >
  */
 class ApiClientInfo extends ApiQueryBase {
 
@@ -27,14 +26,14 @@ class ApiClientInfo extends ApiQueryBase {
 	/**
 	 * @since 0.4
 	 *
+	 * @param SettingsArray $settings
 	 * @param ApiQuery $apiQuery
 	 * @param string $moduleName
 	 */
-	public function __construct( ApiQuery $apiQuery, $moduleName ) {
+	public function __construct( SettingsArray $settings, ApiQuery $apiQuery, $moduleName ) {
 		parent::__construct( $apiQuery, $moduleName, 'wb' );
 
-		// @todo inject this instead of using singleton here
-		$this->settings = WikibaseClient::getDefaultInstance()->getSettings();
+		$this->settings = $settings;
 	}
 
 	/**
@@ -45,46 +44,30 @@ class ApiClientInfo extends ApiQueryBase {
 	public function execute() {
 		$params = $this->extractRequestParams();
 
-		$apiData = $this->getRepoInfo( $params );
+		$apiData = $this->getInfo( $params );
 
 		$this->getResult()->addValue( 'query', 'wikibase', $apiData );
 	}
 
 	/**
-	 * Set settings for api module
-	 *
-	 * @since 0.4
-	 *
-	 * @param SettingsArray $settings
-	 */
-	public function setSettings( SettingsArray $settings ) {
-		$this->settings = $settings;
-	}
-
-	/**
 	 * Gets repo url info to inject into the api module
 	 *
-	 * @since 0.4
-	 *
-	 * @param array $params[]
+	 * @param array $params
 	 *
 	 * @return array
 	 */
-	public function getRepoInfo( array $params ) {
-		$data = array( 'repo' => array() );
-
-		$repoUrlArray = array(
-			'base' => $this->settings->getSetting( 'repoUrl' ),
-			'scriptpath' => $this->settings->getSetting( 'repoScriptPath' ),
-			'articlepath' => $this->settings->getSetting( 'repoArticlePath' ),
-		);
+	private function getInfo( array $params ) {
+		$data = array();
 
 		foreach ( $params['prop'] as $p ) {
 			switch ( $p ) {
 				case 'url':
-					$data['repo']['url'] = $repoUrlArray;
+					$data['repo'] = array(
+						'url' => $this->getRepoUrls()
+					);
 					break;
-				default;
+				case 'siteid':
+					$data['siteid'] = $this->settings->getSetting( 'siteGlobalID' );
 					break;
 			}
 		}
@@ -93,74 +76,39 @@ class ApiClientInfo extends ApiQueryBase {
 	}
 
 	/**
-	 * @see ApiBase::getAllowedParams
-	 *
-	 * @since 0.4
-	 *
-	 * @return array
+	 * @return string[]
 	 */
-	public function getAllowedParams() {
+	private function getRepoUrls() {
+		return array(
+			'base' => $this->settings->getSetting( 'repoUrl' ),
+			'scriptpath' => $this->settings->getSetting( 'repoScriptPath' ),
+			'articlepath' => $this->settings->getSetting( 'repoArticlePath' ),
+		);
+	}
+
+	/**
+	 * @see ApiBase::getAllowedParams
+	 */
+	protected function getAllowedParams() {
 		return array(
 			'prop' => array(
-				ApiBase::PARAM_DFLT => 'url',
-				ApiBase::PARAM_ISMULTI => true,
-				ApiBase::PARAM_TYPE => array(
-					'url',
+				self::PARAM_DFLT => 'url|siteid',
+				self::PARAM_ISMULTI => true,
+				self::PARAM_TYPE => array(
+					'url', 'siteid'
 				)
 			),
 		);
 	}
 
 	/**
-	 * @see ApiBase::getParamDescription
-	 *
-	 * @since 0.4
-	 *
-	 * @return array
+	 * @see ApiBase::getExamplesMessages()
 	 */
-	public function getParamDescription() {
+	protected function getExamplesMessages() {
 		return array(
-			'prop' => array(
-				'Which wikibase repository properties to get:',
-				' url          - Base url, script path and article path',
-			),
+			'action=query&meta=wikibase'
+				=> 'apihelp-query+wikibase-example',
 		);
-	}
-
-	/**
-	 * @see ApiBase::getExamples
-	 *
-	 * @since 0.4
-	 *
-	 * @return array
-	 */
-	protected function getExamples() {
-		return array(
-			'api.php?action=query&meta=wikibase' =>
-				'Get url path and other info for the Wikibase repo',
-		);
-	}
-
-	/**
-	 * @see ApiBase::getVersion
-	 *
-	 * @since 0.4
-	 *
-	 * @return string
-	 */
-	public function getVersion() {
-		return __CLASS__ . '-' . WBC_VERSION;
-	}
-
-	/**
-	 * @see ApiBase::getDescription
-	 *
-	 * @since 0.4
-	 *
-	 * @return string
-	 */
-	public function getDescription() {
-		return 'Get information about the Wikibase repository.';
 	}
 
 }

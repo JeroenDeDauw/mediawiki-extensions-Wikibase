@@ -3,7 +3,7 @@
 namespace Wikibase\Repo\Specials;
 
 use Html;
-use Wikibase\Lib\Specials\SpecialWikibasePage;
+use Wikibase\DispatchStats;
 
 /**
  * Page for displaying diagnostics about the dispatch process.
@@ -15,17 +15,14 @@ use Wikibase\Lib\Specials\SpecialWikibasePage;
 class SpecialDispatchStats extends SpecialWikibasePage {
 
 	/**
-	 * Constructor.
-	 *
 	 * @since 0.2
 	 */
 	public function __construct() {
 		parent::__construct( 'DispatchStats' );
-
 	}
 
 	protected function outputRow( $data, $tag = 'td', $attr = array() ) {
-		$this->getOutput()->addHTML( Html::openElement( 'tr' ));
+		$this->getOutput()->addHTML( Html::openElement( 'tr' ) );
 
 		foreach ( $data as $v ) {
 			if ( !isset( $attr['align'] ) ) {
@@ -36,10 +33,10 @@ class SpecialDispatchStats extends SpecialWikibasePage {
 				}
 			}
 
-			$this->getOutput()->addHTML( Html::element( $tag, $attr, $v ));
+			$this->getOutput()->addHTML( Html::element( $tag, $attr, $v ) );
 		}
 
-		$this->getOutput()->addHTML( Html::closeElement( 'tr' ));
+		$this->getOutput()->addHTML( Html::closeElement( 'tr' ) );
 	}
 
 	protected function outputStateRow( $label, $state ) {
@@ -59,12 +56,17 @@ class SpecialDispatchStats extends SpecialWikibasePage {
 		) );
 	}
 
+	/**
+	 * @see SpecialWikibasePage::execute
+	 *
+	 * @param string|null $subPage
+	 */
 	public function execute( $subPage ) {
 		parent::execute( $subPage );
 
 		$lang = $this->getContext()->getLanguage();
 
-		$stats = new \Wikibase\DispatchStats();
+		$stats = new DispatchStats();
 		$stats->load();
 
 		$this->getOutput()->addHTML( Html::rawElement( 'p', array(),
@@ -78,9 +80,9 @@ class SpecialDispatchStats extends SpecialWikibasePage {
 		}
 
 		// changes ------
-		$this->getOutput()->addHTML( Html::rawElement( 'h2', array(), $this->msg( 'wikibase-dispatchstats-changes' )->parse() ));
+		$this->getOutput()->addHTML( Html::rawElement( 'h2', array(), $this->msg( 'wikibase-dispatchstats-changes' )->parse() ) );
 
-		$this->getOutput()->addHTML( Html::openElement( 'table', array( 'class' => 'wikitable' ) ));
+		$this->getOutput()->addHTML( Html::openElement( 'table', array( 'class' => 'wikitable' ) ) );
 
 		$this->outputRow( array(
 			'',
@@ -100,12 +102,12 @@ class SpecialDispatchStats extends SpecialWikibasePage {
 			$lang->timeanddate( $stats->getMaxChangeTimestamp(), true ),
 		) );
 
-		$this->getOutput()->addHTML( Html::closeElement( 'table' ));
+		$this->getOutput()->addHTML( Html::closeElement( 'table' ) );
 
 		// dispatch stats ------
-		$this->getOutput()->addHTML( Html::rawElement( 'h2', array(), $this->msg( 'wikibase-dispatchstats-stats' )->parse() ));
+		$this->getOutput()->addHTML( Html::rawElement( 'h2', array(), $this->msg( 'wikibase-dispatchstats-stats' )->parse() ) );
 
-		$this->getOutput()->addHTML( Html::openElement( 'table', array( 'class' => 'wikitable' ) ));
+		$this->getOutput()->addHTML( Html::openElement( 'table', array( 'class' => 'wikitable' ) ) );
 
 		$this->outputRow( array(
 			'',
@@ -136,6 +138,7 @@ class SpecialDispatchStats extends SpecialWikibasePage {
 			$stats->getAverage()
 		);
 
-		$this->getOutput()->addHTML( Html::closeElement( 'table' ));
+		$this->getOutput()->addHTML( Html::closeElement( 'table' ) );
 	}
+
 }

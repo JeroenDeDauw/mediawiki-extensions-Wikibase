@@ -1,6 +1,6 @@
 <?php
 
-namespace Wikibase\Test\Api;
+namespace Wikibase\Test\Repo\Api;
 
 use ApiTestCase;
 use TestSites;
@@ -21,7 +21,7 @@ use Wikibase\Repo\WikibaseRepo;
  */
 class IntegrationApiTest extends ApiTestCase {
 
-	public function setUp() {
+	protected function setUp() {
 		parent::setUp();
 		$sitesTable = WikibaseRepo::getDefaultInstance()->getSiteStore();
 		$sitesTable->clear();
@@ -37,7 +37,7 @@ class IntegrationApiTest extends ApiTestCase {
 				),
 				array(
 					'entities' => array(
-						'-1' => array(
+						'Q919191919191' => array(
 							'id' => 'Q919191919191',
 							'missing' => '',
 						),

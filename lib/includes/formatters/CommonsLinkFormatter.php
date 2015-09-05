@@ -24,9 +24,12 @@ class CommonsLinkFormatter implements ValueFormatter {
 	/**
 	 * @var array HTML attributes to use on the generated <a> tags.
 	 */
-	protected $attributes;
+	private $attributes;
 
-	public function __construct( FormatterOptions $options ) {
+	/**
+	 * @param FormatterOptions|null $options
+	 */
+	public function __construct( FormatterOptions $options = null ) {
 		// @todo configure from options
 		$this->attributes = array(
 			'class' => 'extiw'
@@ -34,15 +37,16 @@ class CommonsLinkFormatter implements ValueFormatter {
 	}
 
 	/**
+	 * @see ValueFormatter::format
+	 *
 	 * Formats the given commons file name as an HTML link
 	 *
 	 * @since 0.5
 	 *
 	 * @param StringValue $value The commons file name to turn into a link
 	 *
-	 * @return string
-	 *
 	 * @throws InvalidArgumentException
+	 * @return string HTML
 	 */
 	public function format( $value ) {
 		if ( !( $value instanceof StringValue ) ) {

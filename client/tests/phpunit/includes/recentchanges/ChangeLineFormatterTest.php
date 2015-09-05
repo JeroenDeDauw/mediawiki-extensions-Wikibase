@@ -1,18 +1,19 @@
 <?php
 
-namespace Wikibase\Test;
+namespace Wikibase\Client\Tests\RecentChanges;
 
 use ChangesList;
+use DerivativeContext;
 use Language;
 use RecentChange;
 use RequestContext;
-use MediaWikiTestCase;
-use Wikibase\ChangeLineFormatter;
-use Wikibase\ExternalChangeFactory;
-use Wikibase\RepoLinker;
+use User;
+use Wikibase\Client\RecentChanges\ChangeLineFormatter;
+use Wikibase\Client\RecentChanges\ExternalChangeFactory;
+use Wikibase\Client\RepoLinker;
 
 /**
- * @covers Wikibase\ChangeLineFormatter
+ * @covers Wikibase\Client\RecentChanges\ChangeLineFormatter
  *
  * @group WikibaseClient
  * @group Wikibase
@@ -22,11 +23,11 @@ use Wikibase\RepoLinker;
  * @licence GNU GPL v2+
  * @author Katie Filbert < aude.wiki@gmail.com >
  */
-class ChangeLineFormatterTest extends MediaWikiTestCase {
+class ChangeLineFormatterTest extends \MediaWikiTestCase {
 
 	protected $repoLinker;
 
-	public function setUp() {
+	protected function setUp() {
 		parent::setUp();
 
 		// these are required because Linker is used in ChangeLineFormatter
@@ -53,16 +54,15 @@ class ChangeLineFormatterTest extends MediaWikiTestCase {
 	 * @dataProvider formatProvider
 	 */
 	public function testFormat( array $expectedTags, array $patterns, RecentChange $recentChange ) {
-		$context = new RequestContext();
+		$context = $this->getTestContext();
+
 		$changesList = ChangesList::newFromContext( $context );
-
 		$changeFactory = new ExternalChangeFactory( 'testrepo' );
-
 		$externalChange = $changeFactory->newFromRecentChange( $recentChange );
 
 		$formatter = new ChangeLineFormatter(
 			$changesList->getUser(),
-			$changesList->getLanguage(),
+			Language::factory( 'en' ),
 			$this->repoLinker
 		);
 
@@ -73,13 +73,21 @@ class ChangeLineFormatterTest extends MediaWikiTestCase {
 			$changesList->recentChangesFlags( array( 'wikibase-edit' => true ), '' )
 		);
 
-		foreach( $expectedTags as $key => $tag ) {
+		foreach ( $expectedTags as $key => $tag ) {
 			$this->assertTag( $tag, $formattedLine, $key );
 		}
 
-		foreach( $patterns as $pattern ) {
+		foreach ( $patterns as $pattern ) {
 			$this->assertRegExp( $pattern, $formattedLine );
 		}
+	}
+
+	private function getTestContext() {
+		$context = new DerivativeContext( RequestContext::getMain() );
+		$context->setLanguage( Language::factory( 'en' ) );
+		$context->setUser( User::newFromId( 0 ) );
+
+		return $context;
 	}
 
 	public function formatProvider() {

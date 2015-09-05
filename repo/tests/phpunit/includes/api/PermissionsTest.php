@@ -1,6 +1,6 @@
 <?php
 
-namespace Wikibase\Test\Api;
+namespace Wikibase\Test\Repo\Api;
 
 use FormatJson;
 
@@ -71,7 +71,7 @@ abstract class PermissionsTest extends PermissionsTestCase {
 	/**
 	 * @dataProvider provideReadPermissions
 	 */
-	public function testGetEntities( $permissions, $expectedError ) {
+	public function testGetEntities( array $permissions = null, $expectedError ) {
 		$params = array(
 			'ids' => EntityTestHelper::getId( 'Oslo' ),
 		);
@@ -96,9 +96,9 @@ abstract class PermissionsTest extends PermissionsTestCase {
 	/**
 	 * @dataProvider provideCreateEntityPermissions
 	 */
-	public function testCreateItem( $permissions, $expectedError ) {
+	public function testCreateItem( array $permissions = null, $expectedError ) {
 		$itemData = array(
-			'labels' => array("en" => array( "language" => 'en', "value" => 'Test' ) ),
+			'labels' => array( "en" => array( "language" => 'en', "value" => 'Test' ) ),
 		);
 
 		$params = array(
@@ -126,9 +126,9 @@ abstract class PermissionsTest extends PermissionsTestCase {
 	/**
 	 * @dataProvider provideCreatePropertyPermissions
 	 */
-	public function testCreateProperty( $permissions, $expectedError ) {
+	public function testCreateProperty( array $permissions = null, $expectedError ) {
 		$itemData = array(
-			'labels' => array("en" => array( "language" => 'en', "value" => 'Testttttttt' ) ),
+			'labels' => array( "en" => array( "language" => 'en', "value" => 'Testttttttt' ) ),
 			'datatype' => 'string',
 		);
 
@@ -157,7 +157,7 @@ abstract class PermissionsTest extends PermissionsTestCase {
 	/**
 	 * @dataProvider provideItemTermPermissions
 	 */
-	public function testSetLabel( $permissions, $expectedError ) {
+	public function testSetLabel( array $permissions = null, $expectedError ) {
 		$params = array(
 			'id' => EntityTestHelper::getId( 'Oslo' ),
 			'language' => 'de',
@@ -170,7 +170,7 @@ abstract class PermissionsTest extends PermissionsTestCase {
 	/**
 	 * @dataProvider provideItemTermPermissions
 	 */
-	public function testSetDescription( $permissions, $expectedError ) {
+	public function testSetDescription( array $permissions = null, $expectedError ) {
 		$params = array(
 			'id' => EntityTestHelper::getId( 'Oslo' ),
 			'language' => 'en',
@@ -197,7 +197,7 @@ abstract class PermissionsTest extends PermissionsTestCase {
 	/**
 	 * @dataProvider provideMergeItemsPermissions
 	 */
-	public function testMergeItems( $permissions, $expectedError ) {
+	public function testMergeItems( array $permissions = null, $expectedError ) {
 		$params = array(
 			'fromid' => EntityTestHelper::getId( 'Oslo' ),
 			'toid' => EntityTestHelper::getId( 'Empty' ),

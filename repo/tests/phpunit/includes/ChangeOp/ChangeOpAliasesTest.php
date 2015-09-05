@@ -3,9 +3,7 @@
 namespace Wikibase\Test;
 
 use InvalidArgumentException;
-use Wikibase\ChangeOp\ChangeOp;
 use Wikibase\ChangeOp\ChangeOpAliases;
-use Wikibase\DataModel\Entity\Entity;
 use Wikibase\DataModel\Entity\Item;
 use Wikibase\ItemContent;
 
@@ -21,7 +19,6 @@ use Wikibase\ItemContent;
  * @author Daniel Kinzler
  */
 class ChangeOpAliasesTest extends \PHPUnit_Framework_TestCase {
-
 
 	private function getTermValidatorFactory() {
 		$mockProvider = new ChangeOpTestMockProvider( $this );
@@ -56,60 +53,98 @@ class ChangeOpAliasesTest extends \PHPUnit_Framework_TestCase {
 		$validatorFactory = $this->getTermValidatorFactory();
 
 		$enAliases = array( 'en-alias1', 'en-alias2', 'en-alias3' );
-		$existingEnAliases = array ( 'en-existingAlias1', 'en-existingAlias2' );
-		$item = ItemContent::newEmpty();
-		$entity = $item->getEntity();
-		$entity->setAliases( 'en', $existingEnAliases );
+		$existingEnAliases = array( 'en-existingAlias1', 'en-existingAlias2' );
+		$itemContent = ItemContent::newEmpty();
+		$item = $itemContent->getEntity();
+		$item->setAliases( 'en', $existingEnAliases );
 
-		$args = array();
-		$args[] = array ( clone $entity, new ChangeOpAliases( 'en', $enAliases, 'add', $validatorFactory ), array_merge( $existingEnAliases, $enAliases ) );
-		$args[] = array ( clone $entity, new ChangeOpAliases( 'en', $enAliases, 'set', $validatorFactory ), $enAliases );
-		$args[] = array ( clone $entity, new ChangeOpAliases( 'en', $enAliases, '', $validatorFactory ), $enAliases );
-		$args[] = array ( clone $entity, new ChangeOpAliases( 'en', $existingEnAliases, 'remove', $validatorFactory ), array() );
-
-		return $args;
+		return array(
+			'add' => array(
+				$item->copy(),
+				new ChangeOpAliases( 'en', $enAliases, 'add', $validatorFactory ),
+				array_merge( $existingEnAliases, $enAliases )
+			),
+			'set' => array(
+				$item->copy(),
+				new ChangeOpAliases( 'en', $enAliases, 'set', $validatorFactory ),
+				$enAliases
+			),
+			'set (default)' => array(
+				$item->copy(),
+				new ChangeOpAliases( 'en', $enAliases, '', $validatorFactory ),
+				$enAliases
+			),
+			'remove' => array(
+				$item->copy(),
+				new ChangeOpAliases( 'en', $existingEnAliases, 'remove', $validatorFactory ),
+				null
+			),
+		);
 	}
 
 	/**
 	 * @dataProvider changeOpAliasesProvider
-	 *
-	 * @param Entity $entity
-	 * @param ChangeOpAliases $changeOpAliases
-	 * @param string $expectedAliases
 	 */
-	public function testApply( $entity, $changeOpAliases, $expectedAliases ) {
-		$changeOpAliases->apply( $entity );
-		$this->assertEquals( $expectedAliases, $entity->getAliases( 'en' ) );
+	public function testApply(
+		Item $item,
+		ChangeOpAliases $changeOpAliases,
+		array $expectedAliases = null
+	) {
+		$changeOpAliases->apply( $item );
+		$fingerprint = $item->getFingerprint();
+
+		if ( $expectedAliases === null ) {
+			$this->assertFalse( $fingerprint->hasAliasGroup( 'en' ) );
+		} else {
+			$this->assertEquals( $expectedAliases, $fingerprint->getAliasGroup( 'en' )->getAliases() );
+		}
 	}
 
 	public function validateProvider() {
 		// "INVALID" is invalid
 		$validatorFactory = $this->getTermValidatorFactory();
 
-		$args = array();
-		$args['set invalid alias'] = array ( new ChangeOpAliases( 'fr', array( 'INVALID' ), 'set', $validatorFactory ) );
-		$args['add invalid alias'] = array ( new ChangeOpAliases( 'fr', array( 'INVALID' ), 'add', $validatorFactory ) );
-		$args['set invalid language'] = array ( new ChangeOpAliases( 'INVALID', array( 'valid' ), 'set', $validatorFactory ) );
-		$args['add invalid language'] = array ( new ChangeOpAliases( 'INVALID', array( 'valid' ), 'add', $validatorFactory ) );
-		$args['remove invalid language'] = array ( new ChangeOpAliases( 'INVALID', array( 'valid' ), 'remove', $validatorFactory ) );
-
-		return $args;
+		return array(
+			'set invalid alias' => array(
+				new ChangeOpAliases( 'fr', array( 'INVALID' ), 'set', $validatorFactory )
+			),
+			'add invalid alias' => array(
+				new ChangeOpAliases( 'fr', array( 'INVALID' ), 'add', $validatorFactory )
+			),
+			'set invalid language' => array(
+				new ChangeOpAliases( 'INVALID', array( 'valid' ), 'set', $validatorFactory )
+			),
+			'add invalid language' => array(
+				new ChangeOpAliases( 'INVALID', array( 'valid' ), 'add', $validatorFactory )
+			),
+			'remove invalid language' => array(
+				new ChangeOpAliases( 'INVALID', array( 'valid' ), 'remove', $validatorFactory )
+			),
+		);
 	}
 
 	/**
 	 * @dataProvider validateProvider
 	 *
-	 * @param ChangeOp $changeOp
+	 * @param ChangeOpAliases $changeOpAliases
 	 */
-	public function testValidate( ChangeOp $changeOp ) {
-		$entity = Item::newEmpty();
+	public function testValidate( ChangeOpAliases $changeOpAliases ) {
+		$entity = new Item();
 
-		$result = $changeOp->validate( $entity );
+		$result = $changeOpAliases->validate( $entity );
 		$this->assertFalse( $result->isValid() );
 	}
 
+	public function testValidateLeavesEntityUntouched() {
+		$entity = new Item();
+		$validatorFactory = $this->getTermValidatorFactory();
+		$changeOpAliases = new ChangeOpAliases( 'de', array( 'test' ), 'set', $validatorFactory );
+		$changeOpAliases->validate( $entity );
+		$this->assertTrue( $entity->equals( new Item() ) );
+	}
+
 	public function testApplyWithInvalidAction() {
-		$entity = Item::newEmpty();
+		$entity = new Item();
 		$validatorFactory = $this->getTermValidatorFactory();
 
 		$changeOpAliases = new ChangeOpAliases( 'en', array( 'test' ), 'invalidAction', $validatorFactory );

@@ -1,21 +1,16 @@
 <?php
 
-namespace Wikibase\Api;
+namespace Wikibase\Repo\Api;
 
 use ApiMain;
 use InvalidArgumentException;
-use SiteSQLStore;
 use Wikibase\ChangeOp\ChangeOp;
-use Wikibase\ChangeOp\ChangeOpException;
+use Wikibase\ChangeOp\ChangeOpAliases;
 use Wikibase\ChangeOp\ChangeOps;
-use ApiBase;
 use Wikibase\ChangeOp\FingerprintChangeOpFactory;
 use Wikibase\DataModel\Entity\Entity;
-use Wikibase\DataModel\Entity\Item;
-use Wikibase\DataModel\Entity\Property;
+use Wikibase\DataModel\Entity\EntityDocument;
 use Wikibase\Repo\WikibaseRepo;
-use Wikibase\Utils;
-use Wikibase\ChangeOp\ChangeOpAliases;
 
 /**
  * API module to set the aliases for a Wikibase entity.
@@ -34,7 +29,12 @@ class SetAliases extends ModifyEntity {
 	/**
 	 * @var FingerprintChangeOpFactory
 	 */
-	protected $termChangeOpFactory;
+	private $termChangeOpFactory;
+
+	/**
+	 * @var ApiErrorReporter
+	 */
+	private $errorReporter;
 
 	/**
 	 * @param ApiMain $mainModule
@@ -44,56 +44,71 @@ class SetAliases extends ModifyEntity {
 	public function __construct( ApiMain $mainModule, $moduleName, $modulePrefix = '' ) {
 		parent::__construct( $mainModule, $moduleName, $modulePrefix );
 
-		$changeOpFactoryProvider = WikibaseRepo::getDefaultInstance()->getChangeOpFactoryProvider();
+		$wikibaseRepo = WikibaseRepo::getDefaultInstance();
+		$apiHelperFactory = $wikibaseRepo->getApiHelperFactory( $this->getContext() );
+		$changeOpFactoryProvider = $wikibaseRepo->getChangeOpFactoryProvider();
+
+		$this->errorReporter = $apiHelperFactory->getErrorReporter( $this );
 		$this->termChangeOpFactory = $changeOpFactoryProvider->getFingerprintChangeOpFactory();
 	}
 
 	/**
-	 * @see \Wikibase\Api\ModifyEntity::getRequiredPermissions()
+	 * @see ApiBase::needsToken
 	 *
-	 * @param Entity $entity
-	 * @param array $params
-	 *
-	 * @throws \InvalidArgumentException
-	 * @return array|\Status
+	 * @return string
 	 */
-	protected function getRequiredPermissions( Entity $entity, array $params ) {
-		$permissions = parent::getRequiredPermissions( $entity, $params );
-		if( $entity instanceof Item ) {
-			$type = 'item';
-		} else if ( $entity instanceof Property ) {
-			$type = 'property';
-		} else {
-			throw new InvalidArgumentException( 'Unexpected Entity type when checking special page term change permissions' );
-		}
-		$permissions[] = $type . '-term';
+	public function needsToken() {
+		return 'csrf';
+	}
+
+	/**
+	 * @see ApiBase::isWriteMode()
+	 *
+	 * @return bool Always true.
+	 */
+	public function isWriteMode() {
+		return true;
+	}
+
+	/**
+	 * @param EntityDocument $entity
+	 *
+	 * @throws InvalidArgumentException
+	 * @return string[] A list of permissions
+	 */
+	protected function getRequiredPermissions( EntityDocument $entity ) {
+		$permissions = $this->isWriteMode() ? array( 'read', 'edit' ) : array( 'read' );
+		$permissions[] = $entity->getType() . '-term';
 		return $permissions;
 	}
 
 	/**
-	 * @see \Wikibase\Api\ModifyEntity::validateParameters()
+	 * @see ModifyEntity::validateParameters
 	 */
 	protected function validateParameters( array $params ) {
 		parent::validateParameters( $params );
 
-		if ( !( ( !empty( $params['add'] ) || !empty( $params['remove'] ) ) xor isset( $params['set'] ) ) ) {
-			$this->dieUsage( "Parameters 'add' and 'remove' are not allowed to be set when parameter 'set' is provided" , 'invalid-list' );
+		if ( !( ( !empty( $params['add'] ) || !empty( $params['remove'] ) )
+			xor isset( $params['set'] )
+		) ) {
+			$this->errorReporter->dieError(
+				"Parameters 'add' and 'remove' are not allowed to be set when parameter 'set' is provided",
+				'invalid-list'
+			);
 		}
 	}
 
 	/**
-	 * @see ApiModifyEntity::createEntity()
+	 * @see ModifyEntity::createEntity
 	 */
-	protected function createEntity( array $params ) {
-		$this->dieUsage( 'Could not find an existing entity' , 'no-such-entity' );
+	protected function createEntity( $entityType ) {
+		$this->errorReporter->dieError( 'Could not find an existing entity', 'no-such-entity' );
 	}
 
 	/**
-	 * @see \Wikibase\Api\ModifyEntity::modifyEntity()
+	 * @see ModifyEntity::modifyEntity
 	 */
 	protected function modifyEntity( Entity &$entity, array $params, $baseRevId ) {
-		wfProfileIn( __METHOD__ );
-
 		$summary = $this->createSummary( $params );
 		$language = $params['language'];
 
@@ -113,20 +128,29 @@ class SetAliases extends ModifyEntity {
 			$summary->setLanguage( $language );
 
 			// Get the full list of current aliases
-			$summary->addAutoSummaryArgs( $entity->getAliases( $language ) );
+			$fingerprint = $entity->getFingerprint();
+			$aliases = $fingerprint->hasAliasGroup( $language )
+				? $fingerprint->getAliasGroup( $language )->getAliases()
+				: array();
+			$summary->addAutoSummaryArgs( $aliases );
 		}
 
-		$aliases = $entity->getAliases( $language );
-		if ( count( $aliases ) ) {
-			$this->getResultBuilder()->addAliases( array( $language => $aliases ), 'entity' );
+		$fingerprint = $entity->getFingerprint();
+		if ( $fingerprint->hasAliasGroup( $language ) ) {
+			$aliasGroupList = $fingerprint->getAliasGroups()->getWithLanguages( array( $language ) );
+			$this->getResultBuilder()->addAliasGroupList( $aliasGroupList, 'entity' );
 		}
 
-		wfProfileOut( __METHOD__ );
 		return $summary;
 	}
 
-	private function normalizeAliases( $aliases ) {
-		$stringNormalizer = $this->stringNormalizer; // hack for PHP fail.
+	/**
+	 * @param string[] $aliases
+	 *
+	 * @return string[]
+	 */
+	private function normalizeAliases( array $aliases ) {
+		$stringNormalizer = $this->stringNormalizer;
 
 		$aliases = array_map(
 			function( $str ) use ( $stringNormalizer ) {
@@ -146,13 +170,11 @@ class SetAliases extends ModifyEntity {
 	}
 
 	/**
-	 * @since 0.4
-	 *
 	 * @param array $params
+	 *
 	 * @return ChangeOpAliases
 	 */
-	protected function getChangeOps( array $params ) {
-		wfProfileIn( __METHOD__ );
+	private function getChangeOps( array $params ) {
 		$changeOps = array();
 		$language = $params['language'];
 
@@ -184,93 +206,52 @@ class SetAliases extends ModifyEntity {
 			}
 		}
 
-		wfProfileOut( __METHOD__ );
 		return $changeOps;
 	}
 
 	/**
-	 * @see ApiBase::getPossibleErrors()
+	 * @see ModifyEntity::getAllowedParams
 	 */
-	public function getPossibleErrors() {
-		return array_merge( parent::getPossibleErrors(), array(
-			array( 'code' => 'invalid-list', 'info' => $this->msg( 'wikibase-api-invalid-list' )->text() ),
-			array( 'code' => 'no-such-entity', 'info' => $this->msg( 'wikibase-api-no-such-entity' )->text() ),
-		) );
-	}
-
-	/**
-	 * @see ApiBase::getAllowedParams()
-	 */
-	public function getAllowedParams() {
+	protected function getAllowedParams() {
 		return array_merge(
 			parent::getAllowedParams(),
-			parent::getAllowedParamsForId(),
-			parent::getAllowedParamsForSiteLink(),
-			parent::getAllowedParamsForEntity(),
 			array(
 				'add' => array(
-					ApiBase::PARAM_TYPE => 'string',
-					ApiBase::PARAM_ISMULTI => true,
+					self::PARAM_TYPE => 'string',
+					self::PARAM_ISMULTI => true,
 				),
 				'remove' => array(
-					ApiBase::PARAM_TYPE => 'string',
-					ApiBase::PARAM_ISMULTI => true,
+					self::PARAM_TYPE => 'string',
+					self::PARAM_ISMULTI => true,
 				),
 				'set' => array(
-					ApiBase::PARAM_TYPE => 'string',
-					ApiBase::PARAM_ISMULTI => true,
+					self::PARAM_TYPE => 'string',
+					self::PARAM_ISMULTI => true,
 				),
 				'language' => array(
-					ApiBase::PARAM_TYPE => Utils::getLanguageCodes(),
-					ApiBase::PARAM_REQUIRED => true,
+					self::PARAM_TYPE => WikibaseRepo::getDefaultInstance()->getTermsLanguages()->getLanguages(),
+					self::PARAM_REQUIRED => true,
 				),
 			)
 		);
 	}
 
 	/**
-	 * @see ApiBase::getParamDescription()
+	 * @see ApiBase::getExamplesMessages
 	 */
-	public function getParamDescription() {
-		return array_merge(
-			parent::getParamDescription(),
-			parent::getParamDescriptionForId(),
-			parent::getParamDescriptionForSiteLink(),
-			parent::getParamDescriptionForEntity(),
-			array(
-				'add' => 'List of aliases to add (can be combined with remove)',
-				'remove' => 'List of aliases to remove (can be combined with add)',
-				'set' => 'A list of aliases that will replace the current list (can not be combined with neither add nor remove)',
-				'language' => 'The language of which to set the aliases',
-			)
-		);
-	}
-
-	/**
-	 * @see ApiBase::getDescription()
-	 */
-	public function getDescription() {
+	protected function getExamplesMessages() {
 		return array(
-			'API module to set the aliases for a Wikibase entity.'
-		);
-	}
+			'action=wbsetaliases&language=en&id=Q1&set=Foo|Bar'
+				=> 'apihelp-wbsetaliases-example-1',
 
-	/**
-	 * @see ApiBase::getExamples()
-	 */
-	protected function getExamples() {
-		return array(
-			'api.php?action=wbsetaliases&language=en&id=Q1&set=Foo|Bar'
-				=> 'Set the English aliases for the entity with id Q1 to Foo and Bar',
+			'action=wbsetaliases&language=en&id=Q1&add=Foo|Bar'
+				=> 'apihelp-wbsetaliases-example-2',
 
-			'api.php?action=wbsetaliases&language=en&id=Q1&add=Foo|Bar'
-				=> 'Add Foo and Bar to the list of English aliases for the entity with id Q1',
+			'action=wbsetaliases&language=en&id=Q1&remove=Foo|Bar'
+				=> 'apihelp-wbsetaliases-example-3',
 
-			'api.php?action=wbsetaliases&language=en&id=Q1&remove=Foo|Bar'
-				=> 'Remove Foo and Bar from the list of English aliases for the entity with id Q1',
-
-			'api.php?action=wbsetaliases&language=en&id=Q1&remove=Foo&add=Bar'
-				=> 'Remove Foo from the list of English aliases for the entity with id Q1 while adding Bar to it',
+			'action=wbsetaliases&language=en&id=Q1&remove=Foo&add=Bar'
+				=> 'apihelp-wbsetaliases-example-4',
 		);
 	}
 

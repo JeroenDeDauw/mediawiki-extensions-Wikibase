@@ -1,9 +1,10 @@
 <?php
 
 namespace Wikibase;
+
 use DataTypes\DataType;
-use MWException;
 use Html;
+use MWException;
 
 /**
  * DataType selector UI element.
@@ -18,16 +19,14 @@ class DataTypeSelector {
 	/**
 	 * @var DataType[]
 	 */
-	protected $dataTypes;
+	private $dataTypes;
 
 	/**
 	 * @var string
 	 */
-	protected $languageCode;
+	private $languageCode;
 
 	/**
-	 * Constructor.
-	 *
 	 * @since 0.4
 	 *
 	 * @param DataType[] $dataTypes
@@ -57,27 +56,12 @@ class DataTypeSelector {
 	 *
 	 * @param string $id
 	 * @param string $name
+	 * @param string $selectedTypeId
 	 *
 	 * @return string
 	 */
-	public function getHtml( $id = 'datatype', $name = 'datatype' ) {
-		$dataTypes = array();
-
-		foreach ( $this->dataTypes as $dataType ) {
-			$dataTypes[$dataType->getId()] = $dataType->getLabel( $this->languageCode );
-		}
-
-		natcasesort( $dataTypes );
-
-		$html = '';
-
-		foreach ( $dataTypes as $typeId => $typeLabel ) {
-			$html .= Html::element(
-				'option',
-				array( 'value' => $typeId ),
-				$typeLabel
-			);
-		}
+	public function getHtml( $id = 'datatype', $name = 'datatype', $selectedTypeId = '' ) {
+		$options = $this->getOptionsHtml( $selectedTypeId );
 
 		$html = Html::rawElement(
 			'select',
@@ -86,8 +70,53 @@ class DataTypeSelector {
 				'id' => $id,
 				'class' => 'wb-select'
 			),
-			$html
+			$options
 		);
+
+		return $html;
+	}
+
+	/**
+	 * Builds and returns the array for the options of the DataType selector.
+	 *
+	 * @return array
+	 */
+	public function getOptionsArray() {
+		$dataTypes = array();
+
+		foreach ( $this->dataTypes as $dataType ) {
+			$dataTypes[$dataType->getId()] = $dataType->getLabel( $this->languageCode );
+		}
+
+		natcasesort( $dataTypes );
+
+		return $dataTypes;
+	}
+
+	/**
+	 * Builds and returns the html for the options of the DataType selector.
+	 *
+	 * @since 0.5
+	 *
+	 * @param string $selectedTypeId
+	 *
+	 * @return string
+	 */
+	public function getOptionsHtml( $selectedTypeId = '' ) {
+		$dataTypes = $this->getOptionsArray();
+
+		$html = '';
+
+		foreach ( $dataTypes as $typeId => $typeLabel ) {
+			$html .= Html::element(
+				'option',
+				array(
+					'value' => $typeId,
+					'selected' => $typeId === $selectedTypeId
+				),
+				$typeLabel
+			);
+		}
 
 		return $html;
 	}

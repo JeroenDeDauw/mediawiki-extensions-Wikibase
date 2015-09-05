@@ -1,24 +1,30 @@
 <?php
 
-namespace Wikibase\LinkedData;
+namespace Wikibase\Repo\LinkedData;
 
-use Wikibase\Api\ResultBuilder;
-use Wikibase\EntityLookup;
-use Wikibase\EntityRevision;
-use MWException;
-use EasyRdf_Format;
 use ApiFormatBase;
 use ApiMain;
 use ApiResult;
-use ApiFormatXml;
 use DerivativeContext;
 use DerivativeRequest;
+use MWException;
 use RequestContext;
 use SiteList;
-use Wikibase\EntityTitleLookup;
-use Wikibase\Lib\Serializers\SerializationOptions;
-use Wikibase\Lib\Serializers\SerializerFactory;
-use Wikibase\RdfSerializer;
+use SiteStore;
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Entity\EntityRedirect;
+use Wikibase\DataModel\SerializerFactory;
+use Wikibase\DataModel\Services\Lookup\EntityLookup;
+use Wikibase\DataModel\Services\Lookup\PropertyDataTypeLookup;
+use Wikibase\EntityRevision;
+use Wikibase\Lib\Store\EntityTitleLookup;
+use Wikibase\Rdf\HashDedupeBag;
+use Wikibase\Rdf\RdfBuilder;
+use Wikibase\Rdf\RdfProducer;
+use Wikibase\Rdf\RdfVocabulary;
+use Wikibase\RedirectRevision;
+use Wikibase\Repo\Api\ResultBuilder;
+use Wikimedia\Purtle\RdfWriterFactory;
 
 /**
  * Service for serializing entity data.
@@ -27,7 +33,7 @@ use Wikibase\RdfSerializer;
  * representation of data entities. Using the ContentHandler to serialize the entity would expose
  * internal implementation details.
  *
- * For RDF output, this relies on the RdfSerializer class.
+ * For RDF output, this relies on the RdfBuilder class.
  *
  * @since 0.4
  *
@@ -39,19 +45,12 @@ use Wikibase\RdfSerializer;
 class EntityDataSerializationService {
 
 	/**
-	 * White list of supported formats.
-	 *
-	 * @var array
-	 */
-	protected $formatWhiteList = null;
-
-	/**
 	 * Attributes that should be included in the serialized form of the entity.
 	 * That is, all well known attributes.
 	 *
 	 * @var array
 	 */
-	protected $fieldsToShow = array(
+	private $fieldsToShow = array(
 		'labels',
 		'aliases',
 		'descriptions',
@@ -62,71 +61,98 @@ class EntityDataSerializationService {
 	);
 
 	/**
-	 * @var string
+	 * @var string|null
 	 */
-	protected $rdfBaseURI = null;
+	private $rdfBaseURI = null;
 
 	/**
-	 * @var string
+	 * @var string|null
 	 */
-	protected $rdfDataURI = null;
+	private $rdfDataURI = null;
 
 	/**
-	 * @var EntityLookup
+	 * @var EntityLookup|null
 	 */
-	protected $entityLookup = null;
-
-	/**
-	 * @var null|array Associative array from MIME type to format name
-	 * @note: initialized by initFormats()
-	 */
-	protected $mimeTypes = null;
-
-	/**
-	 * @var null|array Associative array from file extension to format name
-	 * @note: initialized by initFormats()
-	 */
-	protected $fileExtensions = null;
+	private $entityLookup = null;
 
 	/**
 	 * @var EntityTitleLookup
 	 */
-	protected $entityTitleLookup;
+	private $entityTitleLookup;
 
 	/**
 	 * @var SerializerFactory
 	 */
-	protected $serializerFactory;
+	private $serializerFactory;
+
+	/**
+	 * @var PropertyDataTypeLookup
+	 */
+	private $propertyLookup;
 
 	/**
 	 * @var SiteList
 	 */
-	protected $sites;
+	private $sites;
+
+	/**
+	 * @var EntityDataFormatProvider
+	 */
+	private $entityDataFormatProvider;
+
+	/**
+	 * @var RdfWriterFactory
+	 */
+	private $rdfWriterFactory;
+
+	/**
+	 * @var SiteStore
+	 */
+	private $siteStore;
+
+	/**
+	 * @var string[] Mapping of non-standard to canonical language codes.
+	 */
+	private $canonicalLanguageCodes;
 
 	/**
 	 * @param string $rdfBaseURI
 	 * @param string $rdfDataURI
 	 * @param EntityLookup $entityLookup
-	 *
 	 * @param EntityTitleLookup $entityTitleLookup
+	 * @param PropertyDataTypeLookup $propertyLookup
+	 * @param SiteList $sites
+	 * @param EntityDataFormatProvider $entityDataFormatProvider
 	 * @param SerializerFactory $serializerFactory
+	 * @param SiteStore $siteStore
+	 * @param string[] $canonicalLanguageCodes Mapping of non-standard to canonical language codes.
 	 *
-	 * @since    0.4
+	 * @since 0.4
 	 */
 	public function __construct(
 		$rdfBaseURI,
 		$rdfDataURI,
 		EntityLookup $entityLookup,
 		EntityTitleLookup $entityTitleLookup,
+		PropertyDataTypeLookup $propertyLookup,
+		SiteList $sites,
+		EntityDataFormatProvider $entityDataFormatProvider,
 		SerializerFactory $serializerFactory,
-		SiteList $sites
+		SiteStore $siteStore,
+		array $canonicalLanguageCodes = array()
 	) {
 		$this->rdfBaseURI = $rdfBaseURI;
 		$this->rdfDataURI = $rdfDataURI;
 		$this->entityLookup = $entityLookup;
 		$this->entityTitleLookup = $entityTitleLookup;
 		$this->serializerFactory = $serializerFactory;
+		$this->propertyLookup = $propertyLookup;
 		$this->sites = $sites;
+		$this->entityDataFormatProvider = $entityDataFormatProvider;
+		$this->siteStore = $siteStore;
+		$this->canonicalLanguageCodes = $canonicalLanguageCodes;
+
+		$this->rdfWriterFactory = new RdfWriterFactory();
 	}
 
 	/**
@@ -141,24 +167,6 @@ class EntityDataSerializationService {
 	 */
 	public function getFieldsToShow() {
 		return $this->fieldsToShow;
-	}
-
-	/**
-	 * @param array $formatWhiteList
-	 */
-	public function setFormatWhiteList( $formatWhiteList ) {
-		$this->formatWhiteList = $formatWhiteList;
-
-		// force re-init of format maps
-		$this->fileExtensions = null;
-		$this->mimeTypes = null;
-	}
-
-	/**
-	 * @return array
-	 */
-	public function getFormatWhiteList() {
-		return $this->formatWhiteList;
 	}
 
 	/**
@@ -190,171 +198,26 @@ class EntityDataSerializationService {
 	}
 
 	/**
-	 * Returns the list of supported MIME types that can be used to specify the
-	 * output format.
-	 *
-	 * @return string[]
-	 */
-	public function getSupportedMimeTypes() {
-		$this->initFormats();
-
-		return array_keys( $this->mimeTypes );
-	}
-
-	/**
-	 * Returns the list of supported file extensions that can be used
-	 * to specify a format.
-	 *
-	 * @return string[]
-	 */
-	public function getSupportedExtensions() {
-		$this->initFormats();
-
-		return array_keys( $this->fileExtensions );
-	}
-
-	/**
-	 * Returns the list of supported formats using their canonical names.
-	 *
-	 * @return string[]
-	 */
-	public function getSupportedFormats() {
-		$this->initFormats();
-
-		return array_unique( array_merge(
-			array_values( $this->mimeTypes ),
-			array_values( $this->fileExtensions )
-		) );
-	}
-
-	/**
-	 * Returns a canonical format name. Used to normalize the format identifier.
-	 *
-	 * @param string $format the format as a file extension or MIME type.
-	 *
-	 * @return string|null the canonical format name, or null of the format is not supported
-	 */
-	public function getFormatName( $format ) {
-		$this->initFormats();
-
-		$format = trim( strtolower( $format ) );
-
-		if ( array_key_exists( $format, $this->mimeTypes ) ) {
-			return $this->mimeTypes[$format];
-		}
-
-		if ( array_key_exists( $format, $this->fileExtensions ) ) {
-			return $this->fileExtensions[$format];
-		}
-
-		if ( in_array( $format, $this->mimeTypes ) ) {
-			return $format;
-		}
-
-		if ( in_array( $format, $this->fileExtensions ) ) {
-			return $format;
-		}
-
-		return null;
-	}
-
-	/**
-	 * Returns a file extension suitable for $format, or null if no such extension is known.
-	 *
-	 * @param string $format A canonical format name, as returned by getFormatName() or getSupportedFormats().
-	 *
-	 * @return string|null
-	 */
-	public function getExtension( $format ) {
-		$this->initFormats();
-
-		$ext = array_search( $format, $this->fileExtensions );
-		return $ext === false ? null : $ext;
-	}
-
-	/**
-	 * Returns a MIME type suitable for $format, or null if no such extension is known.
-	 *
-	 * @param string $format A canonical format name, as returned by getFormatName() or getSupportedFormats().
-	 *
-	 * @return string|null
-	 */
-	public function getMimeType( $format ) {
-		$this->initFormats();
-
-		$type = array_search( $format, $this->mimeTypes );
-
-		return $type === false ? null : $type;
-	}
-
-	/**
-	 * Initializes the internal mapping of MIME types and file extensions to format names.
-	 */
-	protected function initFormats() {
-		if ( $this->mimeTypes !== null
-			&& $this->fileExtensions !== null ) {
-			return;
-		}
-
-		$this->mimeTypes = array();
-		$this->fileExtensions = array();
-
-		$api = $this->newApiMain( "dummy" );
-		$formats = $api->getFormats();
-
-		foreach ( $formats as $name => $class ) {
-			if ( $this->formatWhiteList !== null && !in_array( $name, $this->formatWhiteList ) ) {
-				continue;
-			}
-
-			$mime = self::getApiMimeType( $name );
-			$ext = self::getApiFormatName( $name );
-
-			$this->mimeTypes[ $mime ] = $name;
-			$this->fileExtensions[ $ext ] = $name;
-		}
-
-		$formats = EasyRdf_Format::getFormats();
-
-		/* @var EasyRdf_Format $format */
-		foreach ( $formats as $format ) {
-			$name = $format->getName();
-
-			// check whitelist, and don't override API formats
-			if ( ( $this->formatWhiteList !== null
-					&& !in_array( $name, $this->formatWhiteList ) )
-				|| in_array( $name, $this->mimeTypes )
-				|| in_array( $name, $this->fileExtensions )) {
-				continue;
-			}
-
-			// use all mime types. to improve content negotiation
-			foreach ( array_keys( $format->getMimeTypes() ) as $mime ) {
-				$this->mimeTypes[ $mime ] = $name;
-			}
-
-			// use only one file extension, to keep purging simple
-			if ( $format->getExtensions() && $format->getDefaultExtension() ) {
-				$ext = $format->getDefaultExtension();
-				$this->fileExtensions[ $ext ] = $name;
-			}
-		}
-	}
-
-	/**
 	 * Output entity data.
 	 *
 	 * @param string $format The name (mime type of file extension) of the format to use
 	 * @param EntityRevision $entityRevision The entity
+	 * @param RedirectRevision|null $followedRedirect The redirect that led to the entity, or null
+	 * @param EntityId[] $incomingRedirects Incoming redirects to include in the output
+	 * @param string|null $flavor The type of the output provided by serializer
 	 *
 	 * @return array tuple of ( $data, $contentType )
-	 * @throws MWException if the format is not supported
+	 * @throws MWException
 	 */
-	public function getSerializedData( $format, EntityRevision $entityRevision ) {
+	public function getSerializedData(
+		$format,
+		EntityRevision $entityRevision,
+		RedirectRevision $followedRedirect = null,
+		array $incomingRedirects = array(),
+		$flavor = null
+	) {
 
-		//TODO: handle IfModifiedSince!
-
-		$formatName = $this->getFormatName( $format );
+		$formatName = $this->entityDataFormatProvider->getFormatName( $format );
 
 		if ( $formatName === null ) {
 			throw new MWException( "Unsupported format: $format" );
@@ -362,70 +225,103 @@ class EntityDataSerializationService {
 
 		$serializer = $this->createApiSerializer( $formatName );
 
-		if ( !$serializer ) {
-			$serializer = $this->createRdfSerializer( $formatName );
-		}
-
-		if ( !$serializer ) {
-			throw new MWException( "Could not create serializer for $formatName" );
-		}
-
-		if( $serializer instanceof ApiFormatBase ) {
+		if ( $serializer ) {
 			$data = $this->apiSerialize( $entityRevision, $serializer );
 			$contentType = $serializer->getIsHtml() ? 'text/html' : $serializer->getMimeType();
 		} else {
-			$data = $serializer->serializeEntityRevision( $entityRevision );
-			$contentType = $serializer->getDefaultMimeType();
+			$rdfBuilder = $this->createRdfBuilder( $formatName, $flavor );
+
+			if ( !$rdfBuilder ) {
+				throw new MWException( "Could not create serializer for $formatName" );
+			} else {
+				$data = $this->rdfSerialize( $entityRevision, $followedRedirect, $incomingRedirects, $rdfBuilder, $flavor );
+
+				$mimeTypes = $this->rdfWriterFactory->getMimeTypes( $formatName );
+				$contentType = reset( $mimeTypes );
+			}
 		}
 
 		return array( $data, $contentType );
 	}
 
 	/**
-	 * Normalizes the format specifier; Converts mime types to API format names.
+	 * @param EntityRevision $entityRevision
+	 * @param RedirectRevision|null $followedRedirect a redirect leading to the entity for use in the output
+	 * @param EntityId[] $incomingRedirects Incoming redirects to include in the output
+	 * @param RdfBuilder $rdfBuilder
+	 * @param string|null $flavor The type of the output provided by serializer
 	 *
-	 * @param String $format the format as supplied in the request
-	 *
-	 * @return String|null the normalized format name, or null if the format is unknown
+	 * @return string RDF
 	 */
-	protected static function getApiFormatName( $format ) {
-		$format = trim( strtolower( $format ) );
+	private function rdfSerialize(
+		EntityRevision $entityRevision,
+		RedirectRevision $followedRedirect = null,
+		array $incomingRedirects,
+		RdfBuilder $rdfBuilder,
+		$flavor = null
+	) {
+		$rdfBuilder->startDocument();
+		$redir = null;
 
-		if ( $format === 'application/vnd.php.serialized' ) {
-			$format = 'php';
-		} elseif ( $format === 'text/text' || $format === 'text/plain' ) {
-			$format = 'txt';
-		} else {
-			// hack: just trip the major part of the mime type
-			$format = preg_replace( '@^(text|application)?/@', '', $format );
+		if ( $followedRedirect ) {
+			$redir = $followedRedirect->getRedirect();
+			$rdfBuilder->addEntityRedirect( $redir->getEntityId(), $redir->getTargetId() );
+
+			if ( $followedRedirect->getRevisionId() > 0 ) {
+				$rdfBuilder->addEntityRevisionInfo(
+					$redir->getEntityId(),
+					$followedRedirect->getRevisionId(),
+					$followedRedirect->getTimestamp()
+				);
+			}
 		}
 
-		return $format;
+		if ( $followedRedirect && $flavor === 'dump' ) {
+			// For redirects, don't output the target entity data if the "dump" flavor is requested.
+			// @todo: In this case, avoid loading the Entity all together.
+			// However we want to output the revisions for redirects
+		} else {
+			$rdfBuilder->addEntityRevisionInfo(
+				$entityRevision->getEntity()->getId(),
+				$entityRevision->getRevisionId(),
+				$entityRevision->getTimestamp()
+			);
+
+			$rdfBuilder->addEntity( $entityRevision->getEntity() );
+			$rdfBuilder->resolveMentionedEntities( $this->entityLookup );
+		}
+
+		if ( $flavor !== 'dump' ) {
+			// For $flavor === 'dump' we don't need to output incoming redirects.
+
+			$targetId = $entityRevision->getEntity()->getId();
+			$this->addIncomingRedirects( $targetId, $redir, $incomingRedirects, $rdfBuilder );
+		}
+
+		$rdfBuilder->finishDocument();
+
+		return $rdfBuilder->getRDF();
 	}
 
 	/**
-	 * Converts API format names to MIME types.
-	 *
-	 * @param String $format the API format name
-	 *
-	 * @return String|null the MIME type for the given format
+	 * @param EntityId $targetId
+	 * @param EntityRedirect|null $followedRedirect The followed redirect, will be omitted from the
+	 * output.
+	 * @param EntityId[] $incomingRedirects
+	 * @param RdfBuilder $rdfBuilder
 	 */
-	protected static function getApiMimeType( $format ) {
-		$format = trim( strtolower( $format ) );
-		$type = null;
-
-		if ( $format === 'php' ) {
-			$type = 'application/vnd.php.serialized';
-		} else if ( $format === 'txt' ) {
-			$type = "text/text"; // NOTE: not text/plain, to avoid HTML sniffing in IE7
-		} else if ( in_array( $format, array( 'xml', 'javascript', 'text' ) ) ) {
-			$type = "text/$format";
-		} else {
-			// hack: assume application type
-			$type = "application/$format";
+	private function addIncomingRedirects(
+		EntityId $targetId,
+		EntityRedirect $followedRedirect = null,
+		array $incomingRedirects,
+		RdfBuilder $rdfBuilder
+	) {
+		foreach ( $incomingRedirects as $rId ) {
+			// don't add the followed redirect again
+			if ( !$followedRedirect || !$followedRedirect->getEntityId()->equals( $rId ) ) {
+				$rdfBuilder->addEntityRedirect( $rId, $targetId );
+			}
 		}
-
-		return $type;
 	}
 
 	/**
@@ -435,7 +331,7 @@ class EntityDataSerializationService {
 	 *
 	 * @return ApiMain
 	 */
-	protected function newApiMain( $format ) {
+	private function newApiMain( $format ) {
 		// Fake request params to ApiMain, with forced format parameters.
 		// We can override additional parameters here, as needed.
 		$params = array(
@@ -455,16 +351,16 @@ class EntityDataSerializationService {
 	 * Creates an API printer that can generate the given output format.
 	 *
 	 * @param string $formatName The desired serialization format,
-	 *           as a format name understood by ApiBase or EasyRdf_Format
+	 *           as a format name understood by ApiBase or RdfWriterFactory.
 	 *
-	 * @return \ApiFormatBase|null A suitable result printer, or null
+	 * @return ApiFormatBase|null A suitable result printer, or null
 	 *           if the given format is not supported by the API.
 	 */
-	public function createApiSerializer( $formatName ) {
+	private function createApiSerializer( $formatName ) {
 		//MediaWiki formats
 		$api = $this->newApiMain( $formatName );
-		$formats = $api->getFormats();
-		if ( $formatName !== null && array_key_exists( $formatName, $formats ) ) {
+		$formatNames = $api->getModuleManager()->getNames( 'format' );
+		if ( $formatName !== null && in_array( $formatName, $formatNames ) ) {
 			return $api->createPrinterByName( $formatName );
 		}
 
@@ -472,31 +368,69 @@ class EntityDataSerializationService {
 	}
 
 	/**
+	 * Get the producer setting for current data format
+	 *
+	 * @param string|null $flavorName
+	 *
+	 * @return int
+	 * @throws MWException
+	 */
+	private function getFlavor( $flavorName ) {
+		switch ( $flavorName ) {
+			case 'simple':
+				return RdfProducer::PRODUCE_TRUTHY_STATEMENTS
+					| RdfProducer::PRODUCE_SITELINKS
+					| RdfProducer::PRODUCE_VERSION_INFO;
+			case 'full':
+				return RdfProducer::PRODUCE_ALL;
+			case 'dump':
+				return RdfProducer::PRODUCE_ALL_STATEMENTS
+					| RdfProducer::PRODUCE_TRUTHY_STATEMENTS
+					| RdfProducer::PRODUCE_QUALIFIERS
+					| RdfProducer::PRODUCE_REFERENCES
+					| RdfProducer::PRODUCE_SITELINKS
+					| RdfProducer::PRODUCE_FULL_VALUES;
+			case 'long':
+				return RdfProducer::PRODUCE_ALL_STATEMENTS
+					| RdfProducer::PRODUCE_QUALIFIERS
+					| RdfProducer::PRODUCE_REFERENCES
+					| RdfProducer::PRODUCE_SITELINKS
+					| RdfProducer::PRODUCE_VERSION_INFO;
+			case null: // No flavor given
+				return RdfProducer::PRODUCE_SITELINKS;
+		}
+
+		throw new MWException( "Unsupported flavor: $flavorName" );
+	}
+
+	/**
 	 * Creates an Rdf Serializer that can generate the given output format.
 	 *
-	 * @param String $format The desired serialization format,
-	 *   as a format name understood by ApiBase or EasyRdf_Format
+	 * @param string $format The desired serialization format, as a format name understood by ApiBase or RdfWriterFactory
+	 * @param string|null $flavorName Flavor name (used for RDF output)
 	 *
-	 * @return RdfSerializer|null A suitable result printer, or null
+	 * @return RdfBuilder|null A suitable result printer, or null
 	 *   if the given format is not supported.
 	 */
-	public function createRdfSerializer( $format ) {
-		//MediaWiki formats
-		$rdfFormat = RdfSerializer::getFormat( $format );
+	private function createRdfBuilder( $format, $flavorName = null ) {
+		$canonicalFormat = $this->rdfWriterFactory->getFormatName( $format );
 
-		if ( !$rdfFormat ) {
+		if ( !$canonicalFormat ) {
 			return null;
 		}
 
-		$serializer = new RdfSerializer(
-			$rdfFormat,
-			$this->rdfBaseURI,
-			$this->rdfDataURI,
+		$rdfWriter = $this->rdfWriterFactory->getWriter( $format );
+
+		$rdfBuilder = new RdfBuilder(
 			$this->sites,
-			$this->entityLookup
+			new RdfVocabulary( $this->rdfBaseURI, $this->rdfDataURI, $this->canonicalLanguageCodes ),
+			$this->propertyLookup,
+			$this->getFlavor( $flavorName ),
+			$rdfWriter,
+			new HashDedupeBag()
 		);
 
-		return $serializer;
+		return $rdfBuilder;
 	}
 
 	/**
@@ -512,39 +446,23 @@ class EntityDataSerializationService {
 	 *
 	 * @return ApiResult
 	 */
-	protected function generateApiResult( EntityRevision $entityRevision, ApiFormatBase $printer ) {
-		wfProfileIn( __METHOD__ );
-
-		$entityKey = 'entity'; //XXX: perhaps better: $entity->getType();
-
+	private function generateApiResult( EntityRevision $entityRevision, ApiFormatBase $printer ) {
 		$res = $printer->getResult();
 
 		// Make sure result is empty. May still be full if this
 		// function gets called multiple times during testing, etc.
 		$res->reset();
 
-		if ( $printer->getNeedsRawData() ) {
-			// force raw mode, to trigger indexed tag names
-			$res->setRawMode();
-		}
-
-		//TODO: apply language filter/Fallback via options!
-		$options = new SerializationOptions();
-
-		if ( $printer instanceof ApiFormatXml ) {
-			$options->setIndexTags( true );
-			// XXX: hack to force the top level element's name
-			$printer->setRootElement( $entityKey );
-		}
-
 		$resultBuilder = new ResultBuilder(
 			$res,
 			$this->entityTitleLookup,
-			$this->serializerFactory
+			$this->serializerFactory,
+			$this->siteStore,
+			$this->propertyLookup,
+			false // Never add meta data for this service
 		);
-		$resultBuilder->addEntityRevision( $entityRevision, $options );
+		$resultBuilder->addEntityRevision( null, $entityRevision );
 
-		wfProfileOut( __METHOD__ );
 		return $res;
 	}
 
@@ -556,30 +474,37 @@ class EntityDataSerializationService {
 	 * expose internal implementation details.
 	 *
 	 * @param EntityRevision $entityRevision the entity to output.
+	 * @param EntityRedirect|null $followedRedirect a redirect leading to the entity for use in the output
+	 * @param EntityId[] $incomingRedirects Incoming redirects to include in the output
 	 * @param ApiFormatBase $printer the printer to use to generate the output
 	 *
 	 * @return string the serialized data
 	 */
-	public function apiSerialize( EntityRevision $entityRevision, ApiFormatBase $printer ) {
+	private function apiSerialize(
+		EntityRevision $entityRevision,
+		ApiFormatBase $printer
+	) {
 		// NOTE: The way the ApiResult is provided to $printer is somewhat
 		//       counter-intuitive. Basically, the relevant ApiResult object
 		//       is owned by the ApiMain module provided by newApiMain().
 
 		// Pushes $entity into the ApiResult held by the ApiMain module
+		// TODO: where to put the followed redirect?
+		// TODO: where to put the incoming redirects? See T98039
 		$this->generateApiResult( $entityRevision, $printer );
 
 		$printer->profileIn();
-		$printer->initPrinter( false );
-		$printer->setBufferResult( true );
+		$printer->initPrinter();
 
 		// Outputs the ApiResult held by the ApiMain module, which is hopefully the one we added the entity data to.
 		//NOTE: this can and will mess with the HTTP response!
 		$printer->execute();
 		$data = $printer->getBuffer();
 
-		$printer->closePrinter();
+		$printer->disable();
 		$printer->profileOut();
 
 		return $data;
 	}
+
 }

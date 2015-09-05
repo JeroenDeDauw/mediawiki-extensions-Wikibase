@@ -2,9 +2,10 @@
 
 namespace Wikibase\Test;
 
+use Wikibase\DataModel\Entity\EntityRedirect;
+use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\ItemId;
 use Wikibase\EntityRevision;
-use Wikibase\Item;
 
 /**
  * Provider class for EntityData tests.
@@ -16,9 +17,11 @@ use Wikibase\Item;
  */
 class EntityDataTestProvider {
 
+	/**
+	 * @return EntityRevision[]
+	 */
 	public static function getEntityRevisions() {
-		$item = Item::newEmpty();
-		$item->setId( new ItemId( 'Q42' ) );
+		$item = new Item( new ItemId( 'Q42' ) );
 		$item->setLabel( 'en', 'Raarrr!' );
 
 		$itemRev = new EntityRevision( $item, 4242, '20131211100908' );
@@ -26,16 +29,27 @@ class EntityDataTestProvider {
 		return array( $itemRev );
 	}
 
-	public static function getMockRepo() {
-		$repo = new MockRepository();
-		$entityRevs = self::getEntityRevisions();
+	/**
+	 * @return EntityRedirect[]
+	 */
+	public static function getEntityRedirects() {
+		$redirect = new EntityRedirect( new ItemId( 'Q22' ), new Itemid( 'Q42' ) );
 
-		/* @var EntityRevision $entityRev */
-		foreach ( $entityRevs as $entityRev ) {
-			$repo->putEntity( $entityRev->getEntity(), $entityRev->getRevision(), $entityRev->getTimestamp() );
+		return array( $redirect );
+	}
+
+	public static function getMockRepository() {
+		$mockRepository = new MockRepository();
+
+		foreach ( self::getEntityRevisions() as $entityRev ) {
+			$mockRepository->putEntity( $entityRev->getEntity(), $entityRev->getRevisionId(), $entityRev->getTimestamp() );
 		}
 
-		return $repo;
+		foreach ( self::getEntityRedirects() as $entityRedir ) {
+			$mockRepository->putRedirect( $entityRedir );
+		}
+
+		return $mockRepository;
 	}
 
 	public static function provideHandleRequest() {
@@ -53,7 +67,7 @@ class EntityDataTestProvider {
 			'',      // subpage
 			array( 'id' => 'Q42', 'format' => 'json' ), // parameters
 			array(), // headers
-			'!^\{.*Raarrr!', // output regex
+			'!^\{.*Raarrr!s', // output regex
 			200,       // http code
 		);
 
@@ -73,7 +87,7 @@ class EntityDataTestProvider {
 				'format' => 'json',
 			),
 			array(), // headers
-			'!^\{.*Raarr!', // output regex
+			'!^\{.*Raarr!s', // output regex
 			200,       // http code
 		);
 
@@ -86,7 +100,7 @@ class EntityDataTestProvider {
 			),
 			array(), // headers
 			'!!', // output regex
-			404,       // http code
+			500,       // http code
 		);
 
 		$cases[] = array( // #5: no format, cause 303 to default format
@@ -109,7 +123,7 @@ class EntityDataTestProvider {
 				'format' => 'application/json',
 			),
 			array(), // headers
-			'!^\{.*Raarr!', // output regex
+			'!^\{.*Raarr!s', // output regex
 			200,       // http code
 			array( // headers
 				'Content-Type' => '!^application/json(;|$)!'
@@ -127,17 +141,17 @@ class EntityDataTestProvider {
 			415,  // http code
 		);
 
-		$cases[] = array( // #8: xml
+		$cases[] = array( // #8: redirected id
 			'',      // subpage
 			array( // parameters
-				'id' => 'Q42',
-				'format' => 'xml',
+				'id' => 'Q22',
+				'format' => 'application/json',
 			),
 			array(), // headers
-			'!<entity!', // output regex
+			'!^\{.*Raarr!s', // output regex
 			200,       // http code
 			array( // headers
-				'Content-Type' => '!^text/xml(;|$)!'
+				'Content-Type' => '!^application/json(;|$)!'
 			)
 		);
 
@@ -214,7 +228,7 @@ class EntityDataTestProvider {
 			)
 		);
 
-		// #22: format=html&revision=1234 does trigger a 303 to the correct rev
+		// #22: format=html&revision=4242 does trigger a 303 to the correct rev
 		$cases[] = array(
 			'',      // subpage
 			array( // parameters
@@ -230,7 +244,7 @@ class EntityDataTestProvider {
 			)
 		);
 
-		// #23: id=q5&format=json does not trigger a redirect
+		// #23: id=q42&format=json does not trigger a redirect
 		$cases[] = array(
 			'',      // subpage
 			array( // parameters
@@ -383,9 +397,9 @@ class EntityDataTestProvider {
 
 		// If-Modified-Since handling
 
-		// #35: IMS from the deep bast should return a 200 (revision timestamp is 20131211100908)
+		// #35: IMS from the deep past should return a 200 (revision timestamp is 20131211100908)
 		$cases[] = array(
-			'Q42.xml',	  // subpage
+			'Q42.json',	  // subpage
 			array(), // parameters
 			array( // headers
 				'If-Modified-Since' => wfTimestamp( TS_RFC2822, '20000101000000' )
@@ -405,29 +419,36 @@ class EntityDataTestProvider {
 			304,  // http code
 		);
 
+		// #37: invalid, no longer supported XML format
+		$cases[] = array(
+			'Q42.xml',
+			array(),
+			array(),
+			'!!', // output regex
+			415, // http code
+		);
+
+		$cases[] = array( // #38: requesting a redirect includes the followed redirect in the output
+			'',      // subpage
+			array( 'id' => 'Q22', 'format' => 'ntriples' ), // parameters
+			array(), // headers
+			'!^<http://acme\.test/Q22> *<http://www\.w3\.org/2002/07/owl#sameAs> *<http://acme\.test/Q42> *.$!m', // output regex
+			200,       // http code
+		);
+
+		$cases[] = array( // #39: flavors are passed on, incoming redirects are included
+			'',      // subpage
+			array( 'id' => 'Q42', 'format' => 'ntriples', 'flavor' => 'full' ), // parameters
+			array(), // headers
+			'!^<http://data\.acme\.test/Q42> *'
+				. '<http://schema.org/softwareVersion> *"0\.0\.1" *\.$.*^'
+				. '<http://acme\.test/Q22> *'
+				. '<http://www\.w3\.org/2002/07/owl#sameAs> *'
+				. '<http://acme\.test/Q42> *.$!sm',
+			200,       // http code
+		);
+
 		return $cases;
 	}
 
-	public static function provideGetSerializedData() {
-		$cases = array();
-
-		$entityRevisions = self::getEntityRevisions();
-		$entityRev = $entityRevisions[0];
-
-		$cases[] = array( // #0: json
-			'json',      // format
-			$entityRev, // entityRev
-			'!^\{.*Raarrr!', // output regex
-			'application/json',       // expected mime
-		);
-
-		$cases[] = array( // #1: xml
-			'xml',      // format
-			$entityRev, // entityRev
-			'!<entity!', // output regex
-			'text/xml',       // expected mime
-		);
-
-		return $cases;
-	}
 }

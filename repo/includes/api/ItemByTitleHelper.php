@@ -1,13 +1,13 @@
 <?php
 
-namespace Wikibase\Api;
+namespace Wikibase\Repo\Api;
 
 use Profiler;
 use Site;
 use SiteStore;
 use UsageException;
 use Wikibase\DataModel\Entity\ItemId;
-use Wikibase\SiteLinkCache;
+use Wikibase\Lib\Store\SiteLinkLookup;
 use Wikibase\StringNormalizer;
 
 /**
@@ -19,40 +19,41 @@ use Wikibase\StringNormalizer;
  * @author Adam Shorland
  */
 class ItemByTitleHelper {
+
 	/**
 	 * @var ResultBuilder
 	 */
-	protected $resultBuilder;
+	private $resultBuilder;
 
 	/**
-	 * @var SiteLinkCache
+	 * @var SiteLinkLookup
 	 */
-	protected $siteLinkCache;
+	private $siteLinkLookup;
 
 	/**
 	 * @var SiteStore
 	 */
-	protected $siteStore;
+	private $siteStore;
 
 	/**
 	 * @var StringNormalizer
 	 */
-	protected $stringNormalizer;
+	private $stringNormalizer;
 
 	/**
 	 * @param ResultBuilder $resultBuilder
-	 * @param SiteLinkCache $siteLinkCache
+	 * @param SiteLinkLookup $siteLinkLookup
 	 * @param SiteStore $siteStore
 	 * @param StringNormalizer $stringNormalizer
 	 */
 	public function __construct(
 		ResultBuilder $resultBuilder,
-		SiteLinkCache $siteLinkCache,
+		SiteLinkLookup $siteLinkLookup,
 		SiteStore $siteStore,
 		StringNormalizer $stringNormalizer
 	) {
 		$this->resultBuilder = $resultBuilder;
-		$this->siteLinkCache = $siteLinkCache;
+		$this->siteLinkLookup = $siteLinkLookup;
 		$this->siteStore = $siteStore;
 		$this->stringNormalizer = $stringNormalizer;
 	}
@@ -65,7 +66,7 @@ class ItemByTitleHelper {
 	 * @param bool $normalize
 	 *
 	 * @throws UsageException
-	 * @return array( ItemId[], array() )
+	 * @return array( ItemId[], array[] )
 	 *         List containing valid ItemIds and MissingItem site title combinations
 	 */
 	public function getItemIds( array $sites, array $titles, $normalize ) {
@@ -98,10 +99,10 @@ class ItemByTitleHelper {
 		}
 
 		$missingItems = array();
-		foreach( $sites as $siteId ) {
-			foreach( $titles as $title ) {
+		foreach ( $sites as $siteId ) {
+			foreach ( $titles as $title ) {
 				$itemId = $this->getItemId( $siteId, $title, $normalize );
-				if( !is_null( $itemId ) ) {
+				if ( !is_null( $itemId ) ) {
 					$ids[] = $itemId;
 				} else {
 					$missingItems[] = array( 'site' => $siteId, 'title' => $title );
@@ -123,14 +124,14 @@ class ItemByTitleHelper {
 	 */
 	private function getItemId( $siteId, $title, $normalize ) {
 		$title = $this->stringNormalizer->trimToNFC( $title );
-		$id = $this->siteLinkCache->getItemIdForLink( $siteId, $title );
+		$id = $this->siteLinkLookup->getItemIdForLink( $siteId, $title );
 
 		// Try harder by requesting normalization on the external site.
 		if ( $id === null && $normalize === true ) {
 			$siteObj = $this->siteStore->getSite( $siteId );
 			//XXX: this passes the normalized title back into $title by reference...
 			$this->normalizeTitle( $title, $siteObj );
-			$id = $this->siteLinkCache->getItemIdForLink( $siteObj->getGlobalId(), $title );
+			$id = $this->siteLinkLookup->getItemIdForLink( $siteObj->getGlobalId(), $title );
 		}
 
 		return $id;
@@ -154,12 +155,14 @@ class ItemByTitleHelper {
 	}
 
 	/**
-	 * @param $messgae
-	 * @param $code
-	 * @throws UsageException
+	 * @param string $message
+	 * @param string $code
+	 *
+	 * @throws UsageException always
 	 */
-	private function throwUsageException( $messgae, $code ) {
+	private function throwUsageException( $message, $code ) {
 		Profiler::instance()->close();
-		throw new UsageException( $messgae, $code );
+		throw new UsageException( $message, $code );
 	}
+
 }

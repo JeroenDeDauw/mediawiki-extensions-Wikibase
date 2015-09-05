@@ -1,13 +1,14 @@
 <?php
 
-namespace Wikibase\Validators;
+namespace Wikibase\Repo\Validators;
 
 use ValueValidators\Error;
 use ValueValidators\Result;
-use Wikibase\DataModel\Entity\Entity;
+use Wikibase\DataModel\Entity\EntityDocument;
+use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\ItemId;
 use Wikibase\DataModel\SiteLink;
-use Wikibase\SiteLinkLookup;
+use Wikibase\Lib\Store\SiteLinkConflictLookup;
 
 /**
  * Validator for checking that site links are unique across all Items.
@@ -20,54 +21,50 @@ use Wikibase\SiteLinkLookup;
 class SiteLinkUniquenessValidator implements EntityValidator {
 
 	/**
-	 * @var SiteLinkLookup
+	 * @var SiteLinkConflictLookup
 	 */
-	private $siteLinkLookup;
+	private $siteLinkConflictLookup;
 
 	/**
-	 * @param SiteLinkLookup $siteLinkLookup
+	 * @param SiteLinkConflictLookup $siteLinkConflictLookup
 	 */
-	function __construct( SiteLinkLookup $siteLinkLookup ) {
-		$this->siteLinkLookup = $siteLinkLookup;
+	public function __construct( SiteLinkConflictLookup $siteLinkConflictLookup ) {
+		$this->siteLinkConflictLookup = $siteLinkConflictLookup;
 	}
 
 	/**
 	 * @see EntityValidator::validate()
 	 *
-	 * @param Entity $entity
+	 * @param EntityDocument $entity
 	 *
 	 * @return Result
 	 */
-	public function validateEntity( Entity $entity ) {
-		wfProfileIn( __METHOD__ );
-		$dbw = wfGetDB( DB_MASTER );
-
-		$conflicts = $this->siteLinkLookup->getConflictsForItem( $entity, $dbw );
+	public function validateEntity( EntityDocument $entity ) {
 		$errors = array();
 
-		/* @var ItemId $ignoreConflictsWith */
-		foreach ( $conflicts as $conflict ) {
-			$errors[] = $this->getConflictError( $conflict );
+		if ( $entity instanceof Item ) {
+			// TODO: do not use global state
+			$db = wfGetDB( DB_MASTER );
+
+			$conflicts = $this->siteLinkConflictLookup->getConflictsForItem( $entity, $db );
+
+			/* @var ItemId $ignoreConflictsWith */
+			foreach ( $conflicts as $conflict ) {
+				$errors[] = $this->getConflictError( $conflict );
+			}
 		}
 
-		if ( empty( $errors ) ) {
-			$result = Result::newSuccess();
-		} else {
-			$result = Result::newError( $errors );
-		}
-
-		wfProfileOut( __METHOD__ );
-		return $result;
+		return empty( $errors ) ? Result::newSuccess() : Result::newError( $errors );
 	}
 
 	/**
 	 * Get Message for a conflict
 	 *
-	 * @param array $conflict A record as returned by SiteLinkLookup::getConflictsForItem()
+	 * @param array $conflict A record as returned by SiteLinkConflictLookup::getConflictsForItem()
 	 *
 	 * @return Error
 	 */
-	protected function getConflictError( array $conflict ) {
+	private function getConflictError( array $conflict ) {
 		$entityId = ItemId::newFromNumber( $conflict['itemId'] );
 
 		return new UniquenessViolation(

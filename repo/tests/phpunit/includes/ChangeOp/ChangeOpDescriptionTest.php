@@ -43,8 +43,8 @@ class ChangeOpDescriptionTest extends \PHPUnit_Framework_TestCase {
 		$validatorFactory = $this->getTermValidatorFactory();
 
 		$args = array();
-		$args['update'] = array ( new ChangeOpDescription( 'en', 'myNew', $validatorFactory ), 'myNew' );
-		$args['set to null'] = array ( new ChangeOpDescription( 'en', null, $validatorFactory ), '' );
+		$args['update'] = array( new ChangeOpDescription( 'en', 'myNew', $validatorFactory ), 'myNew' );
+		$args['set to null'] = array( new ChangeOpDescription( 'en', null, $validatorFactory ), '' );
 
 		return $args;
 	}
@@ -61,7 +61,11 @@ class ChangeOpDescriptionTest extends \PHPUnit_Framework_TestCase {
 
 		$changeOpDescription->apply( $entity );
 
-		$this->assertEquals( $expectedDescription, $entity->getDescription( 'en' ) );
+		if ( $expectedDescription === '' ) {
+			$this->assertFalse( $entity->getFingerprint()->hasDescription( 'en' ) );
+		} else {
+			$this->assertEquals( $expectedDescription, $entity->getFingerprint()->getDescription( 'en' )->getText() );
+		}
 	}
 
 	public function validateProvider() {
@@ -69,11 +73,11 @@ class ChangeOpDescriptionTest extends \PHPUnit_Framework_TestCase {
 		$validatorFactory = $this->getTermValidatorFactory();
 
 		$args = array();
-		$args['valid description'] = array ( new ChangeOpDescription( 'fr', 'valid', $validatorFactory ), true );
-		$args['invalid description'] = array ( new ChangeOpDescription( 'fr', 'INVALID', $validatorFactory ), false );
-		$args['duplicate description'] = array ( new ChangeOpDescription( 'fr', 'DUPE', $validatorFactory ), false );
-		$args['invalid language'] = array ( new ChangeOpDescription( 'INVALID', 'valid', $validatorFactory ), false );
-		$args['set bad language to null'] = array ( new ChangeOpDescription( 'INVALID', null, $validatorFactory ), false );
+		$args['valid description'] = array( new ChangeOpDescription( 'fr', 'valid', $validatorFactory ), true );
+		$args['invalid description'] = array( new ChangeOpDescription( 'fr', 'INVALID', $validatorFactory ), false );
+		$args['duplicate description'] = array( new ChangeOpDescription( 'fr', 'DUPE', $validatorFactory ), false );
+		$args['invalid language'] = array( new ChangeOpDescription( 'INVALID', 'valid', $validatorFactory ), false );
+		$args['set bad language to null'] = array( new ChangeOpDescription( 'INVALID', null, $validatorFactory ), false );
 
 		return $args;
 	}
@@ -87,21 +91,21 @@ class ChangeOpDescriptionTest extends \PHPUnit_Framework_TestCase {
 	public function testValidate( ChangeOp $changeOp, $valid ) {
 		$entity = $this->provideNewEntity();
 
-		$oldLabels = $entity->getDescriptions();
+		$oldDescriptions = $entity->getFingerprint()->getDescriptions()->toTextArray();
 
 		$result = $changeOp->validate( $entity );
 		$this->assertEquals( $valid, $result->isValid(), 'isValid()' );
 
-		// labels should not have changed during validation
-		$this->assertEquals( $oldLabels, $entity->getDescriptions(), 'Descriptions modified by validation!' );
+		// descriptions should not have changed during validation
+		$newDescriptions = $entity->getFingerprint()->getDescriptions()->toTextArray();
+		$this->assertEquals( $oldDescriptions, $newDescriptions, 'Descriptions modified by validation!' );
 	}
 
 	/**
 	 * @return Entity
 	 */
 	protected function provideNewEntity() {
-		$item = Item::newEmpty();
-		$item->setId( new ItemId( 'Q23' ) );
+		$item = new Item( new ItemId( 'Q23' ) );
 		$item->setLabel( 'en', 'DUPE' );
 		$item->setLabel( 'fr', 'DUPE' );
 
@@ -116,15 +120,14 @@ class ChangeOpDescriptionTest extends \PHPUnit_Framework_TestCase {
 
 		$entity = $this->provideNewEntity();
 		$entity->setDescription( 'de', 'Test' );
-		$args[] = array ( $entity, new ChangeOpDescription( 'de', 'Zusammenfassung', $validatorFactory ), 'set', 'de' );
+		$args[] = array( $entity, new ChangeOpDescription( 'de', 'Zusammenfassung', $validatorFactory ), 'set', 'de' );
 
 		$entity = $this->provideNewEntity();
 		$entity->setDescription( 'de', 'Test' );
-		$args[] = array ( $entity, new ChangeOpDescription( 'de', null, $validatorFactory ), 'remove', 'de' );
+		$args[] = array( $entity, new ChangeOpDescription( 'de', null, $validatorFactory ), 'remove', 'de' );
 
 		$entity = $this->provideNewEntity();
-		$entity->removeDescription( 'de' );
-		$args[] = array ( $entity, new ChangeOpDescription( 'de', 'Zusammenfassung', $validatorFactory ), 'add', 'de' );
+		$args[] = array( $entity, new ChangeOpDescription( 'de', 'Zusammenfassung', $validatorFactory ), 'add', 'de' );
 
 		return $args;
 	}
@@ -140,4 +143,5 @@ class ChangeOpDescriptionTest extends \PHPUnit_Framework_TestCase {
 		$this->assertEquals( $summaryExpectedAction, $summary->getActionName() );
 		$this->assertEquals( $summaryExpectedLanguage, $summary->getLanguageCode() );
 	}
+
 }

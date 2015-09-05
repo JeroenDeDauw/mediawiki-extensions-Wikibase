@@ -1,7 +1,8 @@
 {
 	"@metadata": {
 		"authors": [
-			"ОйЛ"
+			"ОйЛ",
+			"Macofe"
 		]
 	},
 	"wikibase-edit": "исправи",
@@ -12,6 +13,7 @@
 	"wikibase-sitelink-site-edit-placeholder": "мѣсто",
 	"wikibase-sitelink-page-edit-placeholder": "страница",
 	"wikibase-terms": "дроугꙑ ѩꙁꙑкꙑ",
+	"wikibase-sitelinks-special": "инꙑ мєждоусѣтьнꙑ мѣста",
 	"wikibase-remove": "поничьжєниѥ",
 	"wikibase-aliases-label": "вѣдомъ ѥстъ такождє ꙗко :",
 	"wikibase-statementview-referencesheading-pendingcountersubject": "{{PLURAL:$1|кладѧꙃь|кладѧꙃꙗ|кладаꙃь}}",
@@ -19,11 +21,11 @@
 	"wikibase-itembytitle-lookup-site": "мѣсто :",
 	"wikibase-itembytitle-lookup-page": "страница :",
 	"wikibase-itembytitle-submit": "ищи",
-	"wikibase-itemdisambiguation-lookup-language": "ѩꙁꙑкъ :",
+	"wikibase-itemdisambiguation-lookup-language": "ѩꙁꙑчьнъ кодъ :",
 	"wikibase-itemdisambiguation-submit": "ищи",
 	"wikibase-newentity-submit": "сътворѥниѥ",
-	"wikibase-modifyterm-language": "ѩꙁꙑкъ :",
-	"wikibase-entitieswithoutlabel-label-language": "ѩꙁꙑкъ :",
+	"wikibase-modifyterm-language": "ѩꙁꙑчьнъ кодъ :",
+	"wikibase-entitieswithoutlabel-label-language": "ѩꙁꙑчьнъ кодъ :",
 	"wikibase-entitieswithoutlabel-label-type": "тѷпъ :",
 	"wikibase-entitieswithoutlabel-label-alltypes": "вьсꙗ",
 	"wikibase-listdatatypes-time-head": "врѣмѧ"

@@ -2,8 +2,14 @@
 
 namespace Wikibase;
 
-use Wikibase\DataModel\Entity\EntityIdValue;
 use DataValues\DataValue;
+use DataValues\QuantityValue;
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Entity\EntityIdValue;
+use Wikibase\DataModel\Entity\EntityIdParser;
+use Wikibase\DataModel\Entity\EntityIdParsingException;
+use Wikibase\DataModel\Snak\PropertyValueSnak;
+use Wikibase\DataModel\Snak\Snak;
 
 /**
  * Finds linked entities given a list of entities or a list of claims.
@@ -13,64 +19,79 @@ use DataValues\DataValue;
  * @licence GNU GPL v2+
  * @author Jeroen De Dauw < jeroendedauw@gmail.com >
  * @author Daniel Werner < daniel.a.r.werner@gmail.com >
- * @author Katie Filbert
+ * @author Katie Filbert < aude.wiki@gmail.com >
  * @author Daniel Kinzler
+ * @author Bene* < benestar.wikimedia@gmail.com >
  */
 class ReferencedEntitiesFinder {
 
 	/**
-	 * Finds linked entities within a set of snaks.
-	 *
-	 * @param Snak[] $snaks
-	 *
-	 * @return EntityId[]
+	 * @var EntityIdParser
 	 */
-	public function findSnakLinks( array $snaks ) {
-		$foundEntities = array();
+	private $externalEntityIdParser;
 
-		foreach ( $snaks as $snak ) {
-			// all of the Snak's properties are referenced entities, add them:
-			$propertyId = $snak->getPropertyId();
-			$foundEntities[ $propertyId->getSerialization() ] = $propertyId;
-
-			// PropertyValueSnaks might have a value referencing an Entity, find those as well:
-			if( $snak instanceof PropertyValueSnak ) {
-				$snakValue = $snak->getDataValue();
-
-				if( $snakValue === null ) {
-					// shouldn't ever run into this, but make sure!
-					continue;
-				}
-
-				$entitiesInSnakDataValue = $this->findDataValueLinks( $snakValue );
-				$foundEntities = array_merge( $foundEntities, $entitiesInSnakDataValue );
-			}
-		}
-
-		return $foundEntities;
+	/**
+	 * @param EntityIdParser $externalEntityIdParser Parser for external entity IDs (usually URIs)
+	 *        into EntityIds. Such external entity IDs may be used for units in QuantityValues, for
+	 *        calendar models in TimeValue, and for the reference globe in GlobeCoordinateValues.
+	 */
+	public function __construct( EntityIdParser $externalEntityIdParser ) {
+		$this->externalEntityIdParser = $externalEntityIdParser;
 	}
 
 	/**
-	 * Finds linked entities within a given data value.
+	 * Finds linked entities within a set of snaks.
 	 *
-	 * @since 0.5
+	 * @since 0.4
 	 *
-	 * @param DataValue $dataValue
-	 * @return EntityId[]
+	 * @param Snak[] $snaks
+	 *
+	 * @return EntityId[] Entity id strings pointing to EntityId objects.
 	 */
-	public function findDataValueLinks( DataValue $dataValue ) {
-		switch( $dataValue->getType() ) {
-			case 'wikibase-entityid':
-				if( $dataValue instanceof EntityIdValue ) {
-					$entityId = $dataValue->getEntityId();
-					return array(
-						$entityId->getSerialization() => $entityId );
-				}
-				break;
+	public function findSnakLinks( array $snaks ) {
+		$entityIds = array();
 
-			// TODO: we might want to allow extensions to add handling for their custom
-			//  data value types here. Either use a hook or a proper registration for that.
+		foreach ( $snaks as $snak ) {
+			$propertyId = $snak->getPropertyId();
+			$entityIds[$propertyId->getSerialization()] = $propertyId;
+
+			if ( $snak instanceof PropertyValueSnak ) {
+				$dataValue = $snak->getDataValue();
+				$this->addEntityIdsFromValue( $dataValue, $entityIds );
+			}
 		}
-		return array();
+
+		return $entityIds;
 	}
+
+	/**
+	 * @param DataValue $dataValue
+	 * @param EntityId[] $entityIds
+	 */
+	private function addEntityIdsFromValue( DataValue $dataValue, array &$entityIds ) {
+		if ( $dataValue instanceof EntityIdValue ) {
+			$entityId = $dataValue->getEntityId();
+			$entityIds[$entityId->getSerialization()] = $entityId;
+		} elseif ( $dataValue instanceof QuantityValue ) {
+			$unitUri = $dataValue->getUnit();
+			$this->addEntityIdsFromURI( $unitUri, $entityIds );
+		}
+
+		//TODO: EntityIds from GlobeCoordinateValue's globe URI (Wikidata, not local item URI!)
+		//TODO: EntityIds from TimeValue's calendar URI (Wikidata, not local item URI!)
+	}
+
+	/**
+	 * @param string $uri
+	 * @param EntityId[] $entityIds
+	 */
+	private function addEntityIdsFromURI( $uri, array &$entityIds ) {
+		try {
+			$entityId = $this->externalEntityIdParser->parse( $uri );
+			$entityIds[$entityId->getSerialization()] = $entityId;
+		} catch ( EntityIdParsingException $ex ) {
+			// noop
+		}
+	}
+
 }

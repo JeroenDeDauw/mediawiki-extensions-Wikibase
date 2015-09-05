@@ -1,11 +1,11 @@
 <?php
 
-namespace Wikibase\Api;
+namespace Wikibase\Repo\Api;
 
 use ApiMain;
+use Wikibase\ChangeOp\ChangeOpLabel;
 use Wikibase\ChangeOp\FingerprintChangeOpFactory;
 use Wikibase\DataModel\Entity\Entity;
-use Wikibase\ChangeOp\ChangeOpLabel;
 use Wikibase\Repo\WikibaseRepo;
 
 /**
@@ -24,7 +24,7 @@ class SetLabel extends ModifyTerm {
 	/**
 	 * @var FingerprintChangeOpFactory
 	 */
-	protected $termChangeOpFactory;
+	private $termChangeOpFactory;
 
 	/**
 	 * @param ApiMain $mainModule
@@ -39,32 +39,32 @@ class SetLabel extends ModifyTerm {
 	}
 
 	/**
-	 * @see \Wikibase\Api\ModifyEntity::modifyEntity()
+	 * @see ModifyEntity::modifyEntity
 	 */
 	protected function modifyEntity( Entity &$entity, array $params, $baseRevId ) {
-		wfProfileIn( __METHOD__ );
 		$summary = $this->createSummary( $params );
 		$language = $params['language'];
 
 		$changeOp = $this->getChangeOp( $params );
 		$this->applyChangeOp( $changeOp, $entity, $summary );
 
-		$labels = array( $language => ( $entity->getLabel( $language ) !== false ) ? $entity->getLabel( $language ) : "" );
+		$resultBuilder = $this->getResultBuilder();
+		if ( $entity->getFingerprint()->hasLabel( $language ) ) {
+			$termList = $entity->getFingerprint()->getLabels()->getWithLanguages( array( $language ) );
+			$resultBuilder->addLabels( $termList, 'entity' );
+		} else {
+			$resultBuilder->addRemovedLabel( $language, 'entity' );
+		}
 
-		$this->getResultBuilder()->addLabels( $labels, 'entity' );
-
-		wfProfileOut( __METHOD__ );
 		return $summary;
 	}
 
 	/**
-	 * @since 0.4
-	 *
 	 * @param array $params
+	 *
 	 * @return ChangeOpLabel
 	 */
-	protected function getChangeOp( array $params ) {
-		wfProfileIn( __METHOD__ );
+	private function getChangeOp( array $params ) {
 		$label = "";
 		$language = $params['language'];
 
@@ -78,41 +78,36 @@ class SetLabel extends ModifyTerm {
 			$op = $this->termChangeOpFactory->newSetLabelOp( $language, $label );
 		}
 
-		wfProfileOut( __METHOD__ );
 		return $op;
 	}
 
 	/**
-	 * @see \ApiBase::getParamDescription()
+	 * @see ApiBase::needsToken
+	 *
+	 * @return string
 	 */
-	public function getParamDescription() {
-		return array_merge(
-			parent::getParamDescription(),
-			array(
-				'language' => 'Language of the label',
-				'value' => 'The value of the label',
-			)
-		);
+	public function needsToken() {
+		return 'csrf';
 	}
 
 	/**
-	 * @see \ApiBase::getDescription()
+	 * @see ApiBase::isWriteMode()
+	 *
+	 * @return bool Always true.
 	 */
-	public function getDescription() {
-		return array(
-			'API module to set a label for a single Wikibase entity.'
-		);
+	public function isWriteMode() {
+		return true;
 	}
 
 	/**
-	 * @see \ApiBase::getExamples()
+	 * @see ApiBase::getExamplesMessages
 	 */
-	protected function getExamples() {
+	protected function getExamplesMessages() {
 		return array(
-			'api.php?action=wbsetlabel&id=Q42&language=en&value=Wikimedia&format=jsonfm'
-				=> 'Set the string "Wikimedia" for page with id "Q42" as a label in English language and report it as pretty printed json',
-			'api.php?action=wbsetlabel&site=enwiki&title=Earth&language=en&value=Earth'
-				=> 'Set the English language label to "Earth" for the item with site link enwiki => "Earth".',
+			'action=wbsetlabel&id=Q42&language=en&value=Wikimedia&format=jsonfm'
+				=> 'apihelp-wbsetlabel-example-1',
+			'action=wbsetlabel&site=enwiki&title=Earth&language=en&value=Earth'
+				=> 'apihelp-wbsetlabel-example-2',
 		);
 	}
 

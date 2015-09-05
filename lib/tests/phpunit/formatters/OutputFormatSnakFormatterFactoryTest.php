@@ -7,7 +7,7 @@ use ValueFormatters\StringFormatter;
 use Wikibase\Lib\OutputFormatSnakFormatterFactory;
 
 /**
- * @covers OutputFormatSnakFormatterFactory
+ * @covers Wikibase\Lib\OutputFormatSnakFormatterFactory
  *
  * @group ValueFormatters
  * @group DataValueExtensions
@@ -22,13 +22,13 @@ class OutputFormatSnakFormatterFactoryTest extends \PHPUnit_Framework_TestCase {
 	/**
 	 * @dataProvider constructorErrorsProvider
 	 */
-	public function testConstructorErrors( $builder, $error ) {
+	public function testConstructorErrors( array $builders, $error ) {
 		$this->setExpectedException( $error );
 
-		$typeLookup = $this->getMock( 'Wikibase\Lib\PropertyDataTypeLookup' );
+		$typeLookup = $this->getMock( 'Wikibase\DataModel\Services\Lookup\PropertyDataTypeLookup' );
 		$typeLookup->expects( $this->never() )->method( 'getDataTypeIdForProperty' );
 
-		new OutputFormatSnakFormatterFactory( $builder );
+		new OutputFormatSnakFormatterFactory( $builders );
 	}
 
 	public function constructorErrorsProvider() {
@@ -62,9 +62,8 @@ class OutputFormatSnakFormatterFactoryTest extends \PHPUnit_Framework_TestCase {
 
 	/**
 	 * @dataProvider getSnakFormatterProvider
-	 * @covers OutputFormatSnakFormatterFactory::getSnakFormatter
 	 */
-	public function testGetSnakFormatter( $builders, $format ) {
+	public function testGetSnakFormatter( array $builders, $format ) {
 		$factory = new OutputFormatSnakFormatterFactory( $builders );
 		$formatter = $factory->getSnakFormatter( $format, new FormatterOptions() );
 
@@ -73,10 +72,14 @@ class OutputFormatSnakFormatterFactoryTest extends \PHPUnit_Framework_TestCase {
 	}
 
 	public function getSnakFormatterProvider() {
-		$this_ = $this;
+		$self = $this;
 		$builders = array(
-			'foo' => function () use ( $this_ ) { return $this_->makeMockSnakFormatter( 'foo', 'FOO' ); },
-			'bar' => function () use ( $this_ ) { return $this_->makeMockSnakFormatter( 'bar', 'BAR' ); },
+			'foo' => function() use ( $self ) {
+				return $self->makeMockSnakFormatter( 'foo', 'FOO' );
+			},
+			'bar' => function() use ( $self ) {
+				return $self->makeMockSnakFormatter( 'bar', 'BAR' );
+			},
 		);
 
 		return array(

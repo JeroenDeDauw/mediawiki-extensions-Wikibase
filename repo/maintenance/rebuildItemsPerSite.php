@@ -1,9 +1,13 @@
 <?php
 
-namespace Wikibase;
+namespace Wikibase\Repo\Maintenance;
 
-use Wikibase\Repo\WikibaseRepo;
 use Maintenance;
+use Wikibase\Lib\Reporting\ObservableMessageReporter;
+use Wikibase\Lib\Store\SiteLinkTable;
+use Wikibase\Repo\Store\SQL\EntityPerPageIdPager;
+use Wikibase\Repo\Store\SQL\ItemsPerSiteBuilder;
+use Wikibase\Repo\WikibaseRepo;
 
 $basePath = getenv( 'MW_INSTALL_PATH' ) !== false ? getenv( 'MW_INSTALL_PATH' ) : __DIR__ . '/../../../..';
 
@@ -29,8 +33,6 @@ class RebuildItemsPerSite extends Maintenance {
 
 	/**
 	 * @see Maintenance::execute
-	 *
-	 * @return boolean
 	 */
 	public function execute() {
 		if ( !defined( 'WB_VERSION' ) ) {
@@ -38,9 +40,9 @@ class RebuildItemsPerSite extends Maintenance {
 			exit;
 		}
 
-		$batchSize = intval( $this->getOption( 'batch-size', 100 ) );
+		$batchSize = (int)$this->getOption( 'batch-size', 100 );
 
-		$reporter = new \ObservableMessageReporter();
+		$reporter = new ObservableMessageReporter();
 		$reporter->registerReporterCallback(
 			array( $this, 'report' )
 		);
@@ -48,22 +50,21 @@ class RebuildItemsPerSite extends Maintenance {
 		$siteLinkTable = new SiteLinkTable( 'wb_items_per_site', false );
 		// Use an uncached EntityLookup here to avoid memory leaks
 		$entityLookup = WikibaseRepo::getDefaultInstance()->getEntityLookup( 'uncached' );
+		$entityPrefetcher = WikibaseRepo::getDefaultInstance()->getStore()->getEntityPrefetcher();
 		$builder = new ItemsPerSiteBuilder(
 			$siteLinkTable,
-			$entityLookup
+			$entityLookup,
+			$entityPrefetcher
 		);
 
 		$builder->setReporter( $reporter );
-
 		$builder->setBatchSize( $batchSize );
 
-		$entityPerPage = new EntityPerPageTable();
+		$entityPerPage = WikibaseRepo::getDefaultInstance()->getStore()->newEntityPerPage();
 		$stream = new EntityPerPageIdPager( $entityPerPage, 'item' );
 
 		// Now <s>kill</s> fix the table
 		$builder->rebuild( $stream );
-
-		return true;
 	}
 
 	/**
@@ -71,12 +72,13 @@ class RebuildItemsPerSite extends Maintenance {
 	 *
 	 * @since 0.4
 	 *
-	 * @param $msg
+	 * @param string $msg
 	 */
 	public function report( $msg ) {
 		$this->output( "$msg\n" );
 	}
+
 }
 
-$maintClass = 'Wikibase\RebuildItemsPerSite';
-require_once( RUN_MAINTENANCE_IF_MAIN );
+$maintClass = 'Wikibase\Repo\Maintenance\RebuildItemsPerSite';
+require_once RUN_MAINTENANCE_IF_MAIN;

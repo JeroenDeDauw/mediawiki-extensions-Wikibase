@@ -2,49 +2,37 @@
 
 namespace Wikibase;
 
-use MWContentSerializationException;
-use MWException;
+use OutOfBoundsException;
+use RuntimeException;
+use Wikibase\DataModel\Entity\Entity;
 
 /**
  * Factory for Entity objects.
  *
- * @since 0.2
+ * @deprecated
+ * This class makes many assumptions that do not hold, including
+ * - all entities can be constructed empty
+ * - only Items and Properties exist
+ * - all entities can construct themselves from their serialization
+ * Not a single method is non-problematic, so you should not use this class at all.
  *
  * @licence GNU GPL v2+
- * @author Jeroen De Dauw < jeroendedauw@gmail.com >
- * @author John Erling Blad < jeblad@gmail.com >
+ * @author Daniel Kinzler
  */
 class EntityFactory {
 
 	/**
-	 * Maps entity types to objects representing the corresponding entity.
-	 *
-	 * @since 0.2
-	 *
-	 * @var array
+	 * @var array Maps entity types to classes implementing the respective entity.
 	 */
-	protected static $typeMap = array(
-		// @FIXME: Make use of Wikibase.Repo::getContentModelMappings and don't hard code query
-		Item::ENTITY_TYPE => '\Wikibase\Item',
-		Property::ENTITY_TYPE => '\Wikibase\Property',
-
-		// TODO: Query::ENTITY_TYPE
-		'query' => '\Wikibase\Query\QueryEntity'
-	);
+	private $typeMap;
 
 	/**
-	 * @since 0.2
+	 * @since 0.5
 	 *
-	 * @return EntityFactory
+	 * @param array $typeToClass Maps entity types to classes implementing the respective entity.
 	 */
-	public static function singleton() {
-		static $instance = false;
-
-		if ( $instance === false ) {
-			$instance = new static();
-		}
-
-		return $instance;
+	public function __construct( array $typeToClass ) {
+		$this->typeMap = $typeToClass;
 	}
 
 	/**
@@ -55,7 +43,7 @@ class EntityFactory {
 	 * @return array all available type identifiers
 	 */
 	public function getEntityTypes() {
-		return array_keys( self::$typeMap );
+		return array_keys( $this->typeMap );
 	}
 
 	/**
@@ -68,7 +56,23 @@ class EntityFactory {
 	 * @return bool
 	 */
 	public function isEntityType( $type ) {
-		return array_key_exists( $type, self::$typeMap );
+		return array_key_exists( $type, $this->typeMap );
+	}
+
+	/**
+	 * Returns the class implementing the given entity type.
+	 *
+	 * @param string $type
+	 *
+	 * @throws OutOfBoundsException
+	 * @return string Class
+	 */
+	private function getEntityClass( $type ) {
+		if ( !isset( $this->typeMap[$type] ) ) {
+			throw new OutOfBoundsException( 'Unknown entity type ' . $type );
+		}
+
+		return $this->typeMap[$type];
 	}
 
 	/**
@@ -78,112 +82,19 @@ class EntityFactory {
 	 *
 	 * @param String $entityType The type of the desired new entity.
 	 *
-	 * @throws MWException if the given entity type is not known.
+	 * @throws RuntimeException
 	 * @return Entity The new Entity object.
 	 */
 	public function newEmpty( $entityType ) {
-		return $this->newFromArray( $entityType, array() );
-	}
+		$class = $this->getEntityClass( $entityType );
 
-	/**
-	 * Creates a new entity of the desired type, using the given data array
-	 * to initialize the entity.
-	 *
-	 * @param String $entityType The type of the desired new entity.
-	 * @param array $data A structure of nested arrays representing the entity.
-	 *
-	 * @since 0.3
-	 *
-	 * @throws MWException if the given entity type is not known.
-	 * @return Entity The new Entity object.
-	 */
-	public function newFromArray( $entityType, array $data ) {
-		if ( !$this->isEntityType( $entityType ) ) {
-			throw new MWException( "Unknown entity type: $entityType" );
+		if ( method_exists( $class, 'newFromType' ) ) {
+			return $class::newFromType( '' );
+		} elseif ( method_exists( $class, 'newEmpty' ) ) {
+			return $class::newEmpty();
+		} else {
+			throw new RuntimeException( "$class does not support a newEmpty method" );
 		}
-
-		$class = self::$typeMap[ $entityType ];
-		$entity = new $class( $data );
-
-		return $entity;
-	}
-
-	/**
-	 * Creates a new Entity object of the desired type from the given serialized representation.
-	 *
-	 * @param String $entityType The type of the desired new entity.
-	 * @param String $blob The serialized representation of the entity
-	 * @param String|null $format The serialization format
-	 *
-	 * @since 0.3
-	 *
-	 * @throws MWException if the given entity type or serialization format is not known.
-	 * @throws MWContentSerializationException if the given blob was malformed.
-	 *
-	 * @return Entity The new Entity object.
-	 */
-	public function newFromBlob( $entityType, $blob, $format ) {
-		$data = $this->unserializedData( $blob, $format );
-
-		return $this->newFromArray( $entityType, $data );
-	}
-
-	/**
-	 * Decodes the given blob into a structure of nested arrays using the
-	 * given serialization format.
-	 *
-	 * Currently, two formats are supported: CONTENT_FORMAT_SERIALIZED, CONTENT_FORMAT_JSON.
-	 *
-	 * @param String $blob The data to decode
-	 * @param String|null $format The data format (if null, getDefaultFormat()
-	 * is used to determine it).
-	 *
-	 * @return array The deserialized data structure
-	 *
-	 * @throws MWException if an unsupported format is requested
-	 * @throws MWContentSerializationException If serialization fails.
-	 */
-	public function unserializedData( $blob, $format = null ) {
-		if ( is_null( $format ) ) {
-			$format = $this->getDefaultFormat();
-		}
-
-		switch ( $format ) {
-			case CONTENT_FORMAT_SERIALIZED:
-				$data = unserialize( $blob ); //FIXME: suppress notice on failed serialization!
-				break;
-			case CONTENT_FORMAT_JSON:
-				$data = json_decode( $blob, true ); //FIXME: suppress notice on failed serialization!
-				break;
-			default:
-				throw new MWException( "serialization format $format is not supported for '
-					. 'Wikibase content model" );
-		}
-
-		if ( $data === false || $data === null ) {
-			throw new MWContentSerializationException( 'failed to deserialize' );
-		}
-
-		if ( is_object( $data ) ) {
-			// force to array representation (at least on the top level)
-			$data = get_object_vars( $data );
-		}
-
-		if ( !is_array( $data ) ) {
-			throw new MWContentSerializationException( 'failed to deserialize: not an array.' );
-		}
-
-		return $data;
-	}
-
-	/**
-	 * Returns the default serialization format for entities, as defined by the
-	 * 'serializationFormat' setting.
-	 *
-	 * @return string
-	 */
-	public function getDefaultFormat() {
-		return Settings::get( 'serializationFormat' );
 	}
 
 }

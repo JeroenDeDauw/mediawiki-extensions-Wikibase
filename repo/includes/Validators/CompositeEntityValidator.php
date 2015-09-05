@@ -1,9 +1,9 @@
 <?php
 
-namespace Wikibase\Validators;
+namespace Wikibase\Repo\Validators;
 
 use ValueValidators\Result;
-use Wikibase\DataModel\Entity\Entity;
+use Wikibase\DataModel\Entity\EntityDocument;
 
 /**
  * Composite validator for applying multiple validators as one.
@@ -18,7 +18,7 @@ class CompositeEntityValidator implements EntityValidator {
 	/**
 	 * @var EntityValidator[]
 	 */
-	protected $validators;
+	private $validators;
 
 	/**
 	 * @param EntityValidator[] $validators
@@ -34,11 +34,11 @@ class CompositeEntityValidator implements EntityValidator {
 	 *
 	 * @since 0.5
 	 *
-	 * @param Entity $entity
+	 * @param EntityDocument $entity
 	 *
 	 * @return Result
 	 */
-	public function validateEntity( Entity $entity ) {
+	public function validateEntity( EntityDocument $entity ) {
 		foreach ( $this->validators as $validator ) {
 			$result = $validator->validateEntity( $entity );
 

@@ -2,14 +2,14 @@
 
 namespace Wikibase\Test;
 
-use Diff\Diff;
-use Diff\DiffOpChange;
+use Diff\DiffOp\Diff\Diff;
+use Diff\DiffOp\DiffOpChange;
 use Exception;
+use Wikibase\DataModel\Entity\Entity;
+use Wikibase\DataModel\Entity\Item;
+use Wikibase\DataModel\Services\Diff\ItemDiff;
 use Wikibase\EntityChange;
-use Wikibase\Item;
 use Wikibase\ItemChange;
-use Wikibase\Entity;
-use Wikibase\ItemDiff;
 
 /**
  * @covers Wikibase\ItemChange
@@ -86,7 +86,7 @@ class ItemChangeTest extends EntityChangeTest {
 		//NOTE: Disable developer warnings that may get triggered by
 		//      the B/C code path.
 		$wgDevelopmentWarnings = false;
-		wfSuppressWarnings();
+		\MediaWiki\suppressWarnings();
 
 		try {
 			$cases = array();
@@ -101,7 +101,7 @@ class ItemChangeTest extends EntityChangeTest {
 			$cases['plain-diff'] = array( $change );
 
 			// --------
-			// Bug 51363: As of commit ff65735a125e, MapDiffer may generate atomic diffs for
+			// Bug T53363: As of commit ff65735a125e, MapDiffer may generate atomic diffs for
 			// substructures even in recursive mode. Make sure we can handle them
 			// if we happen to load them from the database or such.
 
@@ -121,12 +121,12 @@ class ItemChangeTest extends EntityChangeTest {
 			$cases['atomic-sitelink-diff'] = array( $change );
 
 			$wgDevelopmentWarnings = true;
-			wfRestoreWarnings();
+			\MediaWiki\restoreWarnings();
 
 			return $cases;
 		} catch ( Exception $ex ) {
 			$wgDevelopmentWarnings = true;
-			wfRestoreWarnings();
+			\MediaWiki\restoreWarnings();
 			throw $ex;
 		}
 	}
@@ -143,7 +143,7 @@ class ItemChangeTest extends EntityChangeTest {
 		$this->setMwGlobals( 'wgDevelopmentWarnings', false );
 
 		// Also suppress notices that may be triggered by wfLogWarning
-		wfSuppressWarnings();
+		\MediaWiki\suppressWarnings();
 		$exception = null;
 
 		try {
@@ -156,10 +156,11 @@ class ItemChangeTest extends EntityChangeTest {
 		}
 
 		// this is our make-shift `finally` section.
-		wfRestoreWarnings();
+		\MediaWiki\restoreWarnings();
 
 		if ( $exception ) {
 			throw $exception;
 		}
 	}
+
 }

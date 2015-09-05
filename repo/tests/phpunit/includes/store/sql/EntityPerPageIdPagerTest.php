@@ -2,14 +2,16 @@
 
 namespace Wikibase\Test;
 
+use PHPUnit_Framework_Assert;
+use Wikibase\DataModel\Entity\EntityId;
 use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\ItemId;
-use Wikibase\DataModel\Entity\EntityId;
 use Wikibase\DataModel\Entity\PropertyId;
-use Wikibase\EntityPerPageIdPager;
+use Wikibase\Repo\Store\EntityPerPage;
+use Wikibase\Repo\Store\SQL\EntityPerPageIdPager;
 
 /**
- * @covers Wikibase\EntityPerPageIdPager
+ * @covers Wikibase\Repo\Store\SQL\EntityPerPageIdPager
  *
  * @group Wikibase
  * @group WikibaseRepo
@@ -24,19 +26,27 @@ use Wikibase\EntityPerPageIdPager;
 class EntityPerPageIdPagerTest extends \MediaWikiTestCase {
 
 	/**
-	 * @param EntityId[] $entities
+	 * @param EntityId[] $entityIds
 	 * @param string|null $type
+	 * @param mixed $redirectMode
 	 *
 	 * @return EntityPerPageIdPager
 	 */
-	protected function newPager( array $entities, $type = null ) {
+	protected function newPager( array $entityIds, $type = null, $redirectMode = EntityPerPage::NO_REDIRECTS ) {
 		$keydIds = array();
-		foreach ( $entities as $id ) {
-			$key = $id->getSerialization();
-			$keydIds[$key] = $id;
+		foreach ( $entityIds as $entityId ) {
+			$key = $entityId->getSerialization();
+			$keydIds[$key] = $entityId;
 		}
 
-		$listEntities = function( $entityType, $limit, EntityId $after = null ) use ( $keydIds ) {
+		$listEntities = function(
+			$entityType,
+			$limit,
+			EntityId $after = null,
+			$actualRedirectMode = EntityPerPage::NO_REDIRECTS
+		) use ( $keydIds, $redirectMode ) {
+			PHPUnit_Framework_Assert::assertEquals( $redirectMode, $actualRedirectMode );
+
 			reset( $keydIds );
 			while ( $after && current( $keydIds ) && key( $keydIds ) <= $after->getSerialization() ) {
 				next( $keydIds );
@@ -61,13 +71,13 @@ class EntityPerPageIdPagerTest extends \MediaWikiTestCase {
 			return $result;
 		};
 
-		$epp = $this->getMock( 'Wikibase\EntityPerPage' );
+		$epp = $this->getMock( 'Wikibase\Repo\Store\EntityPerPage' );
 
 		$epp->expects( $this->any() )
 			->method( 'listEntities' )
 			->will( $this->returnCallback( $listEntities ) );
 
-		return new EntityPerPageIdPager( $epp, $type );
+		return new EntityPerPageIdPager( $epp, $type, $redirectMode );
 	}
 
 	protected function getIdStrings( array $entities ) {
@@ -89,7 +99,7 @@ class EntityPerPageIdPagerTest extends \MediaWikiTestCase {
 	 * @dataProvider fetchIdsProvider
 	 */
 	public function testFetchIds( array $entities, $type, $limit, array $expectedChunks ) {
-		$pager = $this->newPager( $entities, $type );
+		$pager = $this->newPager( $entities, $type, EntityPerPage::INCLUDE_REDIRECTS );
 
 		foreach ( $expectedChunks as $expected ) {
 			$actual = $pager->fetchIds( $limit );
@@ -98,7 +108,7 @@ class EntityPerPageIdPagerTest extends \MediaWikiTestCase {
 		}
 	}
 
-	public static function fetchIdsProvider() {
+	public function fetchIdsProvider() {
 		$property = new PropertyId( 'P5' );
 		$item = new ItemId( 'Q1' );
 		$item2 = new ItemId( 'Q2' );
@@ -126,4 +136,5 @@ class EntityPerPageIdPagerTest extends \MediaWikiTestCase {
 			)
 		);
 	}
+
 }

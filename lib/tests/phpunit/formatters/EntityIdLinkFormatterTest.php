@@ -3,80 +3,68 @@
 namespace Wikibase\Test;
 
 use LogicException;
+use PHPUnit_Framework_TestCase;
 use Title;
-use ValueFormatters\FormatterOptions;
 use Wikibase\DataModel\Entity\EntityId;
-use Wikibase\DataModel\Entity\EntityIdValue;
+use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\ItemId;
+use Wikibase\DataModel\Entity\Property;
 use Wikibase\DataModel\Entity\PropertyId;
 use Wikibase\Lib\EntityIdLinkFormatter;
-use Wikibase\Item;
-use Wikibase\Property;
 
 /**
  * @covers Wikibase\Lib\EntityIdLinkFormatter
  *
  * @group Wikibase
- * @group ValueFormatters
- * @group DataValueExtensions
  * @group WikibaseLib
  * @group EntityIdFormatterTest
  *
  * @licence GNU GPL v2+
  * @author Daniel Kinzler
  */
-class EntityIdLinkFormatterTest extends \PHPUnit_Framework_TestCase {
+class EntityIdLinkFormatterTest extends PHPUnit_Framework_TestCase {
 
-	public function provideFormat() {
+	public function formatEntityIdProvider() {
 		return array(
 			'ItemId' => array(
 				new ItemId( 'Q23' ),
-				'[[ITEM-TEST--Q23]]'
+				'[[ITEM-TEST--Q23|Q23]]'
 			),
 			'PropertyId' => array(
 				new PropertyId( 'P23' ),
-				'[[PROPERTY-TEST--P23]]'
-			),
-			'EntityId' => array(
-				new ItemId( 'q23' ),
-				'[[ITEM-TEST--Q23]]'
-			),
-			'EntityIdValue' => array(
-				new EntityIdValue( new ItemId( "Q23" ) ),
-				'[[ITEM-TEST--Q23]]'
+				'[[PROPERTY-TEST--P23|P23]]'
 			),
 		);
 	}
 
 	/**
-	 * @dataProvider provideFormat
+	 * @dataProvider formatEntityIdProvider
 	 */
-	public function testFormat( $id, $expected ) {
+	public function testFormatEntityId( EntityId $id, $expected ) {
 		$formatter = $this->newEntityIdLinkFormatter();
 
-		$actual = $formatter->format( $id );
+		$actual = $formatter->formatEntityId( $id );
 		$this->assertEquals( $expected, $actual );
 	}
 
-	public function getTitleForId( EntityId $id ) {
-		if ( $id->getEntityType() === Item::ENTITY_TYPE ) {
-			$name = 'ITEM-TEST--' . $id->getPrefixedId();
-		} elseif ( $id->getEntityType() === Property::ENTITY_TYPE ) {
-			$name = 'PROPERTY-TEST--' . $id->getPrefixedId();
-		} else {
-			throw new LogicException( "oops!" );
+	public function getTitleForId( EntityId $entityId ) {
+		switch ( $entityId->getEntityType() ) {
+			case Item::ENTITY_TYPE:
+				return Title::makeTitle( NS_MAIN, 'ITEM-TEST--' . $entityId->getSerialization() );
+			case Property::ENTITY_TYPE:
+				return Title::makeTitle( NS_MAIN, 'PROPERTY-TEST--' . $entityId->getSerialization() );
+			default:
+				throw new LogicException( "oops!" );
 		}
-
-		return Title::makeTitle( NS_MAIN, $name );
 	}
 
-	protected function newEntityIdLinkFormatter() {
-		$options = new FormatterOptions();
-		$titleLookup = $this->getMock( 'Wikibase\EntityTitleLookup' );
+	private function newEntityIdLinkFormatter() {
+		$titleLookup = $this->getMock( 'Wikibase\Lib\Store\EntityTitleLookup' );
 		$titleLookup->expects( $this->any() )->method( 'getTitleForId' )
 			->will( $this->returnCallback( array( $this, 'getTitleForId' ) ) );
 
-		$formatter = new EntityIdLinkFormatter( $options, $titleLookup );
+		$formatter = new EntityIdLinkFormatter( $titleLookup );
 		return $formatter;
 	}
+
 }

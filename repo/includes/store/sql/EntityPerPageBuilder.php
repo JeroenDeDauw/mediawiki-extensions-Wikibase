@@ -1,9 +1,14 @@
 <?php
-namespace Wikibase;
 
-use MessageReporter;
+namespace Wikibase\Repo\Store\SQL;
+
+use Wikibase\DataModel\Entity\EntityId;
 use Wikibase\DataModel\Entity\EntityIdParser;
 use Wikibase\DataModel\Entity\EntityIdParsingException;
+use Wikibase\Lib\Reporting\MessageReporter;
+use Wikibase\Repo\Content\EntityContentFactory;
+use Wikibase\Repo\EntityNamespaceLookup;
+use Wikibase\Repo\Store\EntityPerPage;
 
 /**
  * Utility class for rebuilding the wb_entity_per_page table.
@@ -18,28 +23,28 @@ class EntityPerPageBuilder {
 	/**
 	 * @since 0.4
 	 *
-	 * @var EntityPerPage $entityPerPageTable
+	 * @var EntityPerPage
 	 */
 	protected $entityPerPageTable;
 
 	/**
 	 * @since 0.4
 	 *
-	 * @var EntityContentFactory $entityContentFactory
+	 * @var EntityContentFactory
 	 */
 	protected $entityContentFactory;
 
 	/**
 	 * @since 0.4
 	 *
-	 * @var EntityIdParser $entityIdParser
+	 * @var EntityIdParser
 	 */
 	protected $entityIdParser;
 
 	/**
 	 * @since 0.4
 	 *
-	 * @var MessageReporter $reporter
+	 * @var MessageReporter
 	 */
 	protected $reporter;
 
@@ -53,9 +58,14 @@ class EntityPerPageBuilder {
 	/**
 	 * Rebuild the entire table
 	 *
-	 * @var boolean
+	 * @var bool
 	 */
 	protected $rebuildAll = false;
+
+	/**
+	 * @var EntityNamespaceLookup
+	 */
+	private $entityNamespaceLookup;
 
 	/**
 	 * @since 0.5
@@ -67,15 +77,19 @@ class EntityPerPageBuilder {
 	/**
 	 * @param EntityPerPage $entityPerPageTable
 	 * @param EntityIdParser $entityIdParser
+	 * @param EntityNamespaceLookup $entityNamespaceLookup
 	 * @param array $contentModels
 	 */
 	public function __construct(
 		EntityPerPage $entityPerPageTable,
 		EntityIdParser $entityIdParser,
+		EntityNamespaceLookup $entityNamespaceLookup,
 		array $contentModels
 	) {
 		$this->entityPerPageTable = $entityPerPageTable;
 		$this->entityIdParser = $entityIdParser;
+		$this->contentModels = $contentModels;
+		$this->entityNamespaceLookup = $entityNamespaceLookup;
 		$this->contentModels = $contentModels;
 	}
 
@@ -89,7 +103,7 @@ class EntityPerPageBuilder {
 	/**
 	 * @since 0.4
 	 *
-	 * @param boolean $rebuildAll
+	 * @param bool $rebuildAll
 	 */
 	public function setRebuildAll( $rebuildAll ) {
 		$this->rebuildAll = $rebuildAll;
@@ -98,9 +112,9 @@ class EntityPerPageBuilder {
 	/**
 	 * Sets the reporter to use for reporting preogress.
 	 *
-	 * @param \MessageReporter $reporter
+	 * @param MessageReporter $reporter
 	 */
-	public function setReporter( \MessageReporter $reporter ) {
+	public function setReporter( MessageReporter $reporter ) {
 		$this->reporter = $reporter;
 	}
 
@@ -116,15 +130,18 @@ class EntityPerPageBuilder {
 		$this->report( 'Start rebuild...' );
 
 		while ( $numPages > 0 ) {
-			$this->waitForSlaves( $dbw );
+			wfWaitForSlaves();
 
 			$pages = $dbw->select(
-				array( 'page', 'wb_entity_per_page' ),
-				array( 'page_title', 'page_id' ),
+				array( 'page', 'redirect', 'wb_entity_per_page' ),
+				array( 'page_title', 'page_id', 'rd_title' ),
 				$this->getQueryConds( $lastPageSeen ),
 				__METHOD__,
 				array( 'LIMIT' => $this->batchSize, 'ORDER BY' => 'page_id' ),
-				array( 'wb_entity_per_page' => array( 'LEFT JOIN', 'page_id = epp_page_id' ) )
+				array(
+					'redirect' => array( 'LEFT JOIN', 'rd_from = page_id' ),
+					'wb_entity_per_page' => array( 'LEFT JOIN', 'page_id = epp_page_id' )
+				)
 			);
 
 			$numPages = $pages->numRows();
@@ -154,8 +171,8 @@ class EntityPerPageBuilder {
 		global $wgContentHandlerUseDB;
 
 		$conds = array(
-			'page_namespace' => NamespaceUtils::getEntityNamespaces(),
-			'page_id > ' . (int) $lastPageSeen
+			'page_namespace' => $this->entityNamespaceLookup->getEntityNamespaces(),
+			'page_id > ' . (int) $lastPageSeen,
 		);
 
 		if ( $wgContentHandlerUseDB ) {
@@ -167,6 +184,21 @@ class EntityPerPageBuilder {
 		}
 
 		return $conds;
+	}
+
+	/**
+	 * @param string $idString
+	 *
+	 * @return EntityId|null
+	 */
+	private function tryParseId( $idString ) {
+		try {
+			return $this->entityIdParser->parse( $idString );
+		} catch ( EntityIdParsingException $e ) {
+			wfDebugLog( __CLASS__, 'Invalid entity id ' . $idString );
+		}
+
+		return null;
 	}
 
 	/**
@@ -182,18 +214,8 @@ class EntityPerPageBuilder {
 		$lastPageSeen = 0;
 
 		foreach ( $pages as $pageRow ) {
-			try {
-				$entityId = $this->entityIdParser->parse( $pageRow->page_title );
-			} catch ( EntityIdParsingException $e ) {
-				wfDebugLog( __CLASS__, __METHOD__ . ': entity id in page row is invalid.' );
-				continue;
-			}
+			$this->updateEntry( $pageRow );
 
-			if ( $this->rebuildAll === true ) {
-				$this->entityPerPageTable->deleteEntity( $entityId );
-			}
-
-			$this->entityPerPageTable->addEntityPage( $entityId, (int)$pageRow->page_id );
 			$lastPageSeen = $pageRow->page_id;
 		}
 
@@ -201,25 +223,29 @@ class EntityPerPageBuilder {
 	}
 
 	/**
-	 * Wait for slaves (quietly)
-	 *
-	 * @todo: this should be in the Database class.
-	 * @todo: thresholds should be configurable
-	 *
-	 * @author Tim Starling (stolen from recompressTracked.php)
+	 * @param object $pageRow
 	 */
-	protected function waitForSlaves() {
-		$lb = wfGetLB(); //TODO: allow foreign DB, get from $this->table
+	private function updateEntry( $pageRow ) {
+		// Derive the entity id from the page title
+		$entityId = $this->tryParseId( $pageRow->page_title );
 
-		while ( true ) {
-			list( $host, $maxLag ) = $lb->getMaxLag();
-			if ( $maxLag < 2 ) {
-				break;
-			}
+		if ( !$entityId ) {
+			return;
+		}
 
-			$this->report( "Slaves are lagged by $maxLag seconds, sleeping..." );
-			sleep( 5 );
-			$this->report( "Resuming..." );
+		// Derive the target id from the redirect target title
+		$targetId = $pageRow->rd_title === null ? null : $this->tryParseId( $pageRow->rd_title );
+
+		if ( $this->rebuildAll === true ) {
+			$this->entityPerPageTable->deleteEntity( $entityId );
+		}
+
+		$pageId = (int)$pageRow->page_id;
+
+		if ( $targetId ) {
+			$this->entityPerPageTable->addRedirectPage( $entityId, $pageId, $targetId );
+		} else {
+			$this->entityPerPageTable->addEntityPage( $entityId, $pageId );
 		}
 	}
 
@@ -228,7 +254,7 @@ class EntityPerPageBuilder {
 	 *
 	 * @since 0.4
 	 *
-	 * @param $msg
+	 * @param string $msg
 	 */
 	protected function report( $msg ) {
 		if ( $this->reporter ) {

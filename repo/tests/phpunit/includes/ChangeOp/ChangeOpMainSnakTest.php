@@ -8,16 +8,16 @@ use DataValues\StringValue;
 use InvalidArgumentException;
 use Wikibase\ChangeOp\ChangeOp;
 use Wikibase\ChangeOp\ChangeOpMainSnak;
-use Wikibase\DataModel\Claim\Claims;
 use Wikibase\DataModel\Entity\Entity;
 use Wikibase\DataModel\Entity\EntityId;
 use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\ItemId;
 use Wikibase\DataModel\Entity\PropertyId;
+use Wikibase\DataModel\Services\Statement\GuidGenerator;
 use Wikibase\DataModel\Snak\PropertyNoValueSnak;
 use Wikibase\DataModel\Snak\PropertyValueSnak;
 use Wikibase\DataModel\Snak\Snak;
-use Wikibase\Lib\ClaimGuidGenerator;
+use Wikibase\DataModel\Statement\Statement;
 
 /**
  * @covers Wikibase\ChangeOp\ChangeOpMainSnak
@@ -64,9 +64,9 @@ class ChangeOpMainSnakTest extends \PHPUnit_Framework_TestCase {
 	 *
 	 * @expectedException InvalidArgumentException
 	 */
-	public function testInvalidConstruct( $claimGuid, $snak ) {
+	public function testInvalidConstruct( $guid, $snak ) {
 		new ChangeOpMainSnak(
-			$claimGuid,
+			$guid,
 			$snak,
 			$this->mockProvider->getGuidGenerator(),
 			$this->mockProvider->getMockSnakValidator()
@@ -74,14 +74,14 @@ class ChangeOpMainSnakTest extends \PHPUnit_Framework_TestCase {
 	}
 
 	/**
-	 * @param string $claimGuid
+	 * @param string $guid
 	 * @param Snak $snak
 	 *
 	 * @return ChangeOpMainSnak
 	 */
-	protected function newChangeOpMainSnak( $claimGuid, Snak $snak ) {
+	protected function newChangeOpMainSnak( $guid, Snak $snak ) {
 		return new ChangeOpMainSnak(
-			$claimGuid,
+			$guid,
 			$snak,
 			$this->mockProvider->getGuidGenerator(),
 			$this->mockProvider->getMockSnakValidator()
@@ -95,77 +95,73 @@ class ChangeOpMainSnakTest extends \PHPUnit_Framework_TestCase {
 		// add a new claim
 		$item = $this->makeNewItemWithClaim( 'Q123', $snak );
 		$newSnak =  $this->makeSnak( 'P8', 'newSnak' );
-		$claimGuid = '';
-		$changeOp = $this->newChangeOpMainSnak( $claimGuid, $newSnak );
+		$guid = '';
+		$changeOp = $this->newChangeOpMainSnak( $guid, $newSnak );
 		$expected = $newSnak->getDataValue();
-		$args['add new claim'] = array ( $item, $changeOp, $expected );
+		$args['add new claim'] = array( $item, $changeOp, $expected );
 
 		// update an existing claim with a new main snak value
 		$item = $this->makeNewItemWithClaim( 'Q234', $snak );
 		$newSnak =  $this->makeSnak( 'P5', 'changedSnak' );
-		$claims = $item->getClaims();
-		$claim = reset( $claims );
+		$statements = $item->getStatements()->toArray();
 
-		$claimGuid = $claim->getGuid();
-		$changeOp = $this->newChangeOpMainSnak( $claimGuid, $newSnak );
+		$guid = $statements[0]->getGuid();
+		$changeOp = $this->newChangeOpMainSnak( $guid, $newSnak );
 		$expected = $newSnak->getDataValue();
-		$args['update claim by guid'] = array ( $item, $changeOp, $expected );
+		$args['update claim by guid'] = array( $item, $changeOp, $expected );
 
 		return $args;
 	}
 
 	/**
 	 * @dataProvider provideChangeOps
-	 *
-	 * @param Entity $item
-	 * @param ChangeOpMainSnak $changeOp
-	 * @param DataValue|null $expected
 	 */
-	public function testApply( Entity $item, $changeOp, $expected ) {
+	public function testApply( Item $item, ChangeOpMainSnak $changeOp, DataValue $expected = null ) {
 		$this->assertTrue( $changeOp->apply( $item ), "Applying the ChangeOp did not return true" );
-		$this->assertNotEmpty( $changeOp->getClaimGuid() );
-		$claims = new Claims( $item->getClaims() );
+		$this->assertNotEmpty( $changeOp->getStatementGuid() );
+		$statements = $item->getStatements();
 		if ( $expected === null ) {
-			$this->assertEquals( $expected, $claims->getClaimWithGuid( $changeOp->getClaimGuid() ) );
+			$this->assertEquals( $expected, $statements->getFirstStatementWithGuid( $changeOp->getStatementGuid() ) );
 		} else {
-			$this->assertEquals( $expected, $claims->getClaimWithGuid( $changeOp->getClaimGuid() )->getMainSnak()->getDataValue() );
+			$this->assertEquals( $expected, $statements->getFirstStatementWithGuid( $changeOp->getStatementGuid() )->getMainSnak()->getDataValue() );
 		}
 	}
 
 	public function provideInvalidApply() {
 		$snak =  $this->makeSnak( 'P11', 'test' );
 		$item = $this->makeNewItemWithClaim( 'Q777', $snak );
-		$claims = $item->getClaims();
-		$claim = reset( $claims );
-		$claimGuid = $claim->getGuid();
+		$statements = $item->getStatements()->toArray();
+		/** @var Statement $statement */
+		$statement = reset( $statements );
+		$guid = $statement->getGuid();
 
 		// apply change to the wrong item
-		$wrongItem = Item::newEmpty();
-		$wrongItem->setId( new ItemId( "Q888" ) );
+		$wrongItem = new Item( new ItemId( 'Q888' ) );
 		$newSnak =  $this->makeSnak( 'P12', 'newww' );
-		$args['wrong entity'] = array ( $wrongItem, $this->newChangeOpMainSnak( $claimGuid, $newSnak ) );
+		$args['wrong entity'] = array( $wrongItem, $this->newChangeOpMainSnak( $guid, $newSnak ) );
 
 		// apply change to an unknown claim
-		$wrongClaimId = $item->getId()->getPrefixedId() . '$DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF';
-		$args['unknown claim'] = array ( $item, $this->newChangeOpMainSnak( $wrongClaimId, $newSnak ) );
+		$wrongClaimId = $item->getId()->getSerialization() . '$DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF';
+		$args['unknown claim'] = array( $item, $this->newChangeOpMainSnak( $wrongClaimId, $newSnak ) );
 
 		// update an existing claim with wrong main snak property
 		$newSnak =  $this->makeSnak( 'P13', 'changedSnak' );
-		$claims = $item->getClaims();
-		$claim = reset( $claims );
+		$statements = $item->getStatements()->toArray();
+		/** @var Statement $statement */
+		$statement = reset( $statements );
 
-		$claimGuid = $claim->getGuid();
-		$changeOp = $this->newChangeOpMainSnak( $claimGuid, $newSnak );
-		$args['wrong main snak property'] = array ( $item, $changeOp );
+		$guid = $statement->getGuid();
+		$changeOp = $this->newChangeOpMainSnak( $guid, $newSnak );
+		$args['wrong main snak property'] = array( $item, $changeOp );
 
 		// apply invalid main snak
 		$badSnak =  $this->makeSnak( 'P12', new NumberValue( 5 ) );
-		$args['bad value type'] = array ( $wrongItem, $this->newChangeOpMainSnak( $claimGuid, $badSnak ) );
+		$args['bad value type'] = array( $wrongItem, $this->newChangeOpMainSnak( $guid, $badSnak ) );
 
 		// apply invalid main snak
 		// NOTE: the mock validator considers "INVALID" to be invalid.
 		$badSnak = $this->makeSnak( 'P12', 'INVALID' );
-		$args['invalid value'] = array ( $wrongItem, $this->newChangeOpMainSnak( $claimGuid, $badSnak ) );
+		$args['invalid value'] = array( $wrongItem, $this->newChangeOpMainSnak( $guid, $badSnak ) );
 
 		return $args;
 	}
@@ -179,18 +175,20 @@ class ChangeOpMainSnakTest extends \PHPUnit_Framework_TestCase {
 		$changeOp->apply( $item );
 	}
 
-	protected function makeNewItemWithClaim( $itemId, $snak ) {
-		$entity = Item::newFromArray( array( 'entity' => $itemId ) );
-		$claim = $entity->newClaim( $snak );
-		$claim->setGuid( $this->mockProvider->getGuidGenerator()->newGuid( $entity->getId() ) );
-		$claims = new Claims();
-		$claims->addClaim( $claim );
-		$entity->setClaims( $claims );
+	private function makeNewItemWithClaim( $itemIdString, $snak ) {
+		$item = new Item( new ItemId( $itemIdString ) );
 
-		return $entity;
+		$item->getStatements()->addNewStatement(
+			$snak,
+			null,
+			null,
+			$this->mockProvider->getGuidGenerator()->newGuid( $item->getId() )
+		);
+
+		return $item;
 	}
 
-	protected function makeSnak( $propertyId, $value ) {
+	private function makeSnak( $propertyId, $value ) {
 		if ( is_string( $propertyId ) ) {
 			$propertyId = new PropertyId( $propertyId );
 		}
@@ -214,7 +212,7 @@ class ChangeOpMainSnakTest extends \PHPUnit_Framework_TestCase {
 		$badSnak = new PropertyValueSnak( $p11, new StringValue( 'INVALID' ) );
 		$brokenSnak = new PropertyValueSnak( $p11, new NumberValue( 23 ) );
 
-		$guidGenerator = new ClaimGuidGenerator();
+		$guidGenerator = new GuidGenerator();
 
 		$cases = array();
 
@@ -230,16 +228,15 @@ class ChangeOpMainSnakTest extends \PHPUnit_Framework_TestCase {
 	/**
 	 * @dataProvider validateProvider
 	 */
-	public function testValidate( EntityId $entityId, $claimGuid, Snak $snak ) {
+	public function testValidate( EntityId $entityId, $guid, Snak $snak ) {
 		$changeOpMainSnak = new ChangeOpMainSnak(
-			$claimGuid,
+			$guid,
 			$snak,
-			new ClaimGuidGenerator(),
+			new GuidGenerator(),
 			$this->mockProvider->getMockSnakValidator()
 		);
 
-		$entity = Item::newEmpty();
-		$entity->setId( $entityId );
+		$entity = new Item( $entityId );
 
 		$result = $changeOpMainSnak->validate( $entity );
 		$this->assertFalse( $result->isValid(), 'isValid()' );

@@ -1,21 +1,21 @@
 <?php
 
-namespace Wikibase\Test;
+namespace Wikibase\Client\Tests;
 
-use Diff\Diff;
-use Diff\DiffOpChange;
-use Diff\MapDiff;
+use Diff\DiffOp\Diff\Diff;
+use Diff\DiffOp\DiffOpChange;
+use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\ItemId;
-use Wikibase\DataModel\SimpleSiteLink;
-use Wikibase\Item;
 use Wikibase\ItemChange;
 use Wikibase\SiteLinkCommentCreator;
+use Wikibase\Test\TestChanges;
 
 /**
  * @covers Wikibase\SiteLinkCommentCreator
  *
  * @group Wikibase
  * @group WikibaseClient
+ * @group SiteLinkCommentCreatorTest
  *
  * @licence GNU GPL v2+
  * @author Katie Filbert < aude.wiki@gmail.com >
@@ -37,7 +37,7 @@ class SiteLinkCommentCreatorTest extends \PHPUnit_Framework_TestCase {
 
 		$updates = $this->getUpdates();
 
-		foreach( $updates as $update ) {
+		foreach ( $updates as $update ) {
 			$changes[] = array(
 				$update[0],
 				ItemChange::UPDATE,
@@ -64,48 +64,49 @@ class SiteLinkCommentCreatorTest extends \PHPUnit_Framework_TestCase {
 	}
 
 	protected function getNewItem() {
-		$item = Item::newEmpty();
-		$item->setId( new ItemId( 'q1' ) );
-
-		return $item;
+		return new Item( new ItemId( 'Q1' ) );
 	}
 
 	protected function getConnectDiff() {
 		$item = $this->getNewItem();
-		$item2 = $item->copy();
-		$item2->addSiteLink( new SimpleSiteLink( 'enwiki', 'Japan' ) );
 
-		$change = ItemChange::newFromUpdate( ItemChange::UPDATE, $item, $item2 );
+		$item2 = $this->getNewItem();
+		$item2->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Japan' );
+
+		$changeFactory = TestChanges::getEntityChangeFactory();
+		$change = $changeFactory->newFromUpdate( ItemChange::UPDATE, $item, $item2 );
 
 		return $change->getSiteLinkDiff();
 	}
 
 	protected function getUnlinkDiff() {
 		$item = $this->getNewItem();
-		$item->addSiteLink( new SimpleSiteLink( 'enwiki', 'Japan' ) );
+		$item->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Japan' );
 
-		$item2 = $item->copy();
-		$item2->removeSiteLink( 'enwiki', 'Japan' );
+		$item2 = $this->getNewItem();
+		$item2->getSiteLinkList()->removeLinkWithSiteId( 'enwiki' );
 
-		$change = ItemChange::newFromUpdate( ItemChange::UPDATE, $item, $item2 );
+		$changeFactory = TestChanges::getEntityChangeFactory();
+		$change = $changeFactory->newFromUpdate( ItemChange::UPDATE, $item, $item2 );
 
 		return $change->getSiteLinkDiff();
 	}
 
 	protected function getLinkChangeDiff() {
 		$item = $this->getNewItem();
-		$item->addSiteLink( new SimpleSiteLink( 'enwiki', 'Japan' ) );
+		$item->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Japan' );
 
-		$item2 = $item->copy();
-		$item2->addSiteLink( new SimpleSiteLink( 'enwiki', 'Tokyo' ) );
+		$item2 = $this->getNewItem();
+		$item2->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Tokyo' );
 
-		$change = ItemChange::newFromUpdate( ItemChange::UPDATE, $item, $item2 );
+		$changeFactory = TestChanges::getEntityChangeFactory();
+		$change = $changeFactory->newFromUpdate( ItemChange::UPDATE, $item, $item2 );
 
 		return $change->getSiteLinkDiff();
 	}
 
 	protected function getOldLinkChangeDiff() {
-		$diff = new MapDiff( array(
+		$diff = new Diff( array(
 			'enwiki' => new DiffOpChange( 'Japan', 'Tokyo' )
 		) );
 
@@ -114,81 +115,91 @@ class SiteLinkCommentCreatorTest extends \PHPUnit_Framework_TestCase {
 
 	protected function getBadgeChangeDiff() {
 		$item = $this->getNewItem();
-		$item->addSiteLink( new SimpleSiteLink( 'enwiki', 'Japan' ) );
+		$item->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Japan' );
 
-		$item2 = $item->copy();
-		$item2->addSiteLink( new SimpleSiteLink( 'enwiki', 'Japan', array( new ItemId( 'Q17' ) ) ) );
+		$item2 = $this->getNewItem();
+		$item2->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Japan', array( new ItemId( 'Q17' ) ) );
 
-		$change = ItemChange::newFromUpdate( ItemChange::UPDATE, $item, $item2 );
+		$changeFactory = TestChanges::getEntityChangeFactory();
+		$change = $changeFactory->newFromUpdate( ItemChange::UPDATE, $item, $item2 );
 
 		return $change->getSiteLinkDiff();
 	}
 
 	protected function getAddLinkDiff() {
 		$item = $this->getNewItem();
-		$item->addSiteLink( new SimpleSiteLink( 'enwiki', 'Japan' ) );
+		$item->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Japan' );
 
-		$item2 = $item->copy();
-		$item2->addSiteLink( new SimpleSiteLink( 'dewiki', 'Japan' ) );
+		$item2 = $this->getNewItem();
+		$item2->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Japan' );
+		$item2->getSiteLinkList()->addNewSiteLink( 'dewiki', 'Japan' );
 
-		$change = ItemChange::newFromUpdate( ItemChange::UPDATE, $item, $item2 );
+		$changeFactory = TestChanges::getEntityChangeFactory();
+		$change = $changeFactory->newFromUpdate( ItemChange::UPDATE, $item, $item2 );
 
 		return $change->getSiteLinkDiff();
 	}
 
 	protected function getAddMultipleLinksDiff() {
 		$item = $this->getNewItem();
-		$item->addSiteLink( new SimpleSiteLink( 'enwiki', 'Japan' ) );
+		$item->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Japan' );
 
-		$item2 = $item->copy();
-		$item2->addSiteLink( new SimpleSiteLink( 'dewiki', 'Japan' ) );
-		$item2->addSiteLink( new SimpleSiteLink( 'frwiki', 'Japan' ) );
+		$item2 = $this->getNewItem();
+		$item2->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Japan' );
+		$item2->getSiteLinkList()->addNewSiteLink( 'dewiki', 'Japan' );
+		$item2->getSiteLinkList()->addNewSiteLink( 'frwiki', 'Japan' );
 
-		$change = ItemChange::newFromUpdate( ItemChange::UPDATE, $item, $item2 );
+		$changeFactory = TestChanges::getEntityChangeFactory();
+		$change = $changeFactory->newFromUpdate( ItemChange::UPDATE, $item, $item2 );
 
 		return $change->getSiteLinkDiff();
 	}
 
 	protected function getRemoveLinkDiff() {
 		$item = $this->getNewItem();
-		$item->addSiteLink( new SimpleSiteLink( 'enwiki', 'Japan' ) );
-		$item->addSiteLink( new SimpleSiteLink( 'dewiki', 'Japan' ) );
+		$item->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Japan' );
+		$item->getSiteLinkList()->addNewSiteLink( 'dewiki', 'Japan' );
 
-		$item2 = $item->copy();
-		$item2->removeSiteLink( 'dewiki', 'Japan' );
+		$item2 = $this->getNewItem();
+		$item2->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Japan' );
 
-		$change = ItemChange::newFromUpdate( ItemChange::UPDATE, $item, $item2 );
+		$changeFactory = TestChanges::getEntityChangeFactory();
+		$change = $changeFactory->newFromUpdate( ItemChange::UPDATE, $item, $item2 );
 
 		return $change->getSiteLinkDiff();
 	}
 
 	protected function getChangeLinkDiff() {
 		$item = $this->getNewItem();
-		$item->addSiteLink( new SimpleSiteLink( 'enwiki', 'Japan' ) );
-		$item->addSiteLink( new SimpleSiteLink( 'dewiki', 'Japan' ) );
+		$item->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Japan' );
+		$item->getSiteLinkList()->addNewSiteLink( 'dewiki', 'Japan' );
 
-		$item2 = $item->copy();
-		$item2->addSiteLink( new SimpleSiteLink( 'dewiki', 'Tokyo' ) );
+		$item2 = $this->getNewItem();
+		$item2->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Japan' );
+		$item2->getSiteLinkList()->addNewSiteLink( 'dewiki', 'Tokyo' );
 
-		$change = ItemChange::newFromUpdate( ItemChange::UPDATE, $item, $item2 );
+		$changeFactory = TestChanges::getEntityChangeFactory();
+		$change = $changeFactory->newFromUpdate( ItemChange::UPDATE, $item, $item2 );
 
 		return $change->getSiteLinkDiff();
 	}
 
 	protected function getDeleteDiff() {
 		$item = $this->getNewItem();
-		$item->addSiteLink( new SimpleSiteLink( 'enwiki', 'Japan' ) );
+		$item->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Japan' );
 
-		$change = ItemChange::newFromUpdate( ItemChange::REMOVE, $item, null );
+		$changeFactory = TestChanges::getEntityChangeFactory();
+		$change = $changeFactory->newFromUpdate( ItemChange::REMOVE, $item, null );
 
 		return $change->getSiteLinkDiff();
 	}
 
 	protected function getRestoreDiff() {
 		$item = $this->getNewItem();
-		$item->addSiteLink( new SimpleSiteLink( 'enwiki', 'Japan' ) );
+		$item->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Japan' );
 
-		$change = ItemChange::newFromUpdate( ItemChange::RESTORE, null, $item );
+		$changeFactory = TestChanges::getEntityChangeFactory();
+		$change = $changeFactory->newFromUpdate( ItemChange::RESTORE, null, $item );
 
 		return $change->getSiteLinkDiff();
 	}

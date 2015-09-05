@@ -8,9 +8,9 @@ use SiteStore;
 use Title;
 use Wikibase\DataModel\Entity\EntityId;
 use Wikibase\DataModel\Entity\ItemId;
-use Wikibase\EntityTitleLookup;
+use Wikibase\Lib\Store\EntityTitleLookup;
+use Wikibase\Lib\Store\SiteLinkLookup;
 use Wikibase\Repo\Specials\SpecialItemByTitle;
-use Wikibase\SiteLinkLookup;
 
 /**
  * @covers Wikibase\Repo\Specials\SpecialItemByTitle
@@ -32,14 +32,12 @@ class SpecialItemByTitleTest extends SpecialPageTestBase {
 	 * @return EntityTitleLookup
 	 */
 	private function getMockTitleLookup() {
-		$mock = $this->getMock( 'Wikibase\EntityTitleLookup' );
+		$mock = $this->getMock( 'Wikibase\Lib\Store\EntityTitleLookup' );
 		$mock->expects( $this->any() )
 			->method( 'getTitleForId' )
-			->will( $this->returnCallback(
-				function ( EntityId $id ) {
-					return Title::makeTitle( NS_MAIN, $id->getSerialization() );
-				}
-			) );
+			->will( $this->returnCallback( function( EntityId $id ) {
+				return Title::makeTitle( NS_MAIN, $id->getSerialization() );
+			} ) );
 
 		return $mock;
 	}
@@ -48,17 +46,15 @@ class SpecialItemByTitleTest extends SpecialPageTestBase {
 	 * @return SiteLinkLookup
 	 */
 	private function getMockSiteLinkLookup() {
-		$entityId = new ItemId( 'Q123' );
+		$itemId = new ItemId( 'Q123' );
 
-		$mock = $this->getMock( '\Wikibase\SiteLinkLookup' );
+		$mock = $this->getMock( 'Wikibase\Lib\Store\SiteLinkLookup' );
 
 		$mock->expects( $this->any() )
 			->method( 'getItemIdForLink' )
-			->will( $this->returnCallback(
-				function ( $siteId, $pageName ) use ( $entityId ) {
-					return ( $siteId === 'dewiki' ) ? $entityId : null;
-				}
-			) );
+			->will( $this->returnCallback( function( $siteId, $pageName ) use ( $itemId ) {
+				return $siteId === 'dewiki' ? $itemId : null;
+			} ) );
 
 		return $mock;
 	}
@@ -67,10 +63,11 @@ class SpecialItemByTitleTest extends SpecialPageTestBase {
 	 * @return SiteStore
 	 */
 	private function getMockSiteStore() {
-		$getSite = function ( $siteId ) {
+		$getSite = function( $siteId ) {
 			$site = new Site();
 			$site->setGlobalId( $siteId );
 			$site->setLinkPath( "http://$siteId.com/$1" );
+
 			return $site;
 		};
 
@@ -98,7 +95,6 @@ class SpecialItemByTitleTest extends SpecialPageTestBase {
 		$page = new SpecialItemByTitle();
 
 		$page->initSettings(
-			true,
 			array( 'wikipedia' )
 		);
 
@@ -125,16 +121,16 @@ class SpecialItemByTitleTest extends SpecialPageTestBase {
 			'tag' => 'input',
 			'attributes' => array(
 				'id' => 'pagename',
-				'class' => 'wb-input-text',
+				'class' => 'wb-input',
 				'name' => 'page',
 			) );
 		$matchers['submit'] = array(
 			'tag' => 'input',
 			'attributes' => array(
 				'id' => 'wb-itembytitle-submit',
-				'class' => 'wb-input-button',
+				'class' => 'wb-button',
 				'type' => 'submit',
-				'name' => 'submit',
+				'name' => '',
 			) );
 
 		$cases['empty'] = array( '', null, $matchers );
@@ -155,21 +151,18 @@ class SpecialItemByTitleTest extends SpecialPageTestBase {
 
 	/**
 	 * @dataProvider requestProvider
-	 *
-	 * @param $sub
-	 * @param $target
-	 * @param $matchers
 	 */
-	public function testExecute( $sub, $target, $matchers ) {
+	public function testExecute( $sub, $target, array $matchers ) {
 		/* @var FauxResponse $response */
 		list( $output, $response ) = $this->executeSpecialPage( $sub );
 
 		if ( $target !== null ) {
-			$target = Title::newFromText( $target );
-			$this->assertEquals( $target->getFullURL(), $response->getheader( 'Location' ), 'Redirect' );
+			$target = Title::newFromText( $target )->getFullURL();
+			$expected = wfExpandUrl( $target, PROTO_CURRENT );
+			$this->assertEquals( $expected, $response->getheader( 'Location' ), 'Redirect' );
 		}
 
-		foreach( $matchers as $key => $matcher ) {
+		foreach ( $matchers as $key => $matcher ) {
 			$this->assertTag( $matcher, $output, "Failed to match html output with tag '{$key}''" );
 		}
 	}

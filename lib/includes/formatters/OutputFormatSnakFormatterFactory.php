@@ -1,5 +1,7 @@
 <?php
+
 namespace Wikibase\Lib;
+
 use InvalidArgumentException;
 use RuntimeException;
 use ValueFormatters\FormatterOptions;
@@ -59,7 +61,7 @@ class OutputFormatSnakFormatterFactory {
 		$builder = $this->builders[$format];
 		$instance = call_user_func( $builder, $this, $format, $options );
 
-		if( !( $instance instanceof SnakFormatter ) ) {
+		if ( !( $instance instanceof SnakFormatter ) ) {
 			throw new RuntimeException( get_class( $instance ) . ' does not implement SnakFormatter' );
 		}
 

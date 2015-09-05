@@ -1,12 +1,31 @@
 <?php
 
-namespace Wikibase\Test\Api;
+namespace Wikibase\Test\Repo\Api;
+
+use ApiMain;
+use FauxRequest;
+use PHPUnit_Framework_TestCase;
+use RequestContext;
+use Title;
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Entity\ItemId;
+use Wikibase\DataModel\Entity\BasicEntityIdParser;
+use Wikibase\DataModel\Services\Lookup\LanguageLabelDescriptionLookup;
+use Wikibase\DataModel\Term\Term;
+use Wikibase\Lib\ContentLanguages;
+use Wikibase\Lib\Store\EntityTitleLookup;
+use Wikibase\Repo\Api\EntitySearchHelper;
+use Wikibase\Repo\Api\SearchEntities;
+use Wikibase\Repo\Interactors\TermIndexSearchInteractor;
+use Wikibase\Repo\Interactors\TermSearchInteractor;
+use Wikibase\Repo\Interactors\TermSearchResult;
+use Wikibase\TermIndexEntry;
+use Wikibase\Test\MockTermIndex;
 
 /**
- * @covers Wikibase\Api\SearchEntities
+ * @covers Wikibase\Repo\Api\SearchEntities
  *
  * @group API
- * @group Database
  * @group Wikibase
  * @group WikibaseAPI
  * @group WikibaseRepo
@@ -15,106 +34,282 @@ namespace Wikibase\Test\Api;
  *
  * @licence GNU GPL v2+
  * @author Adam Shorland
+ * @author Daniel Kinzler
  */
-class SearchEntitiesTest extends WikibaseApiTestCase {
+class SearchEntitiesTest extends PHPUnit_Framework_TestCase {
 
-	private static $hasSetup;
-
-	public function setUp() {
-		parent::setUp();
-
-		if( !isset( self::$hasSetup ) ) {
-			$this->initTestEntities( array( 'StringProp', 'Berlin', 'London', 'Oslo', 'Episkopi', 'Leipzig', 'Guangzhou' ) );
-		}
-		self::$hasSetup = true;
-	}
-
-	public function provideData() {
-		$testCases = array();
-
-		//Search via full Labels
-		$testCases[] = array( array( 'search' => 'berlin', 'language' => 'en' ), array( 'handle' => 'Berlin' ) );
-		$testCases[] = array( array( 'search' => 'LoNdOn', 'language' => 'en' ), array( 'handle' => 'London' ) );
-		$testCases[] = array( array( 'search' => 'OSLO', 'language' => 'en' ), array( 'handle' => 'Oslo' ) );
-		$testCases[] = array( array( 'search' => '广州市', 'language' => 'zh-cn' ), array( 'handle' => 'Guangzhou' ) );
-
-		//Search via partial Labels
-		$testCases[] = array( array( 'search' => 'BER', 'language' => 'nn' ), array( 'handle' => 'Berlin' ) );
-		$testCases[] = array( array( 'search' => 'Episkop', 'language' => 'de' ), array( 'handle' => 'Episkopi' ) );
-		$testCases[] = array( array( 'search' => 'L', 'language' => 'de' ), array( 'handle' => 'Leipzig' ) );
-
-		return $testCases;
+	/**
+	 * @param array $params
+	 *
+	 * @return ApiMain
+	 */
+	private function getApiMain( array $params ) {
+		$context = new RequestContext();
+		$context->setLanguage( 'en-ca' );
+		$context->setRequest( new FauxRequest( $params, true ) );
+		$main = new ApiMain( $context );
+		return $main;
 	}
 
 	/**
-	 * @dataProvider provideData
+	 * @return EntityTitleLookup|\PHPUnit_Framework_MockObject_MockObject
 	 */
-	public function testSearchEntities( $params, $expected ) {
-		$params['action'] = 'wbsearchentities';
+	private function getMockTitleLookup() {
+		$titleLookup = $this->getMock( 'Wikibase\Lib\Store\EntityTitleLookup' );
+		$testCase = $this;
+		$titleLookup->expects( $this->any() )->method( 'getTitleForId' )
+			->will( $this->returnCallback( function( EntityId $id ) use ( $testCase ) {
+				if ( $id->getSerialization() === 'Q111' ) {
+					return $testCase->getMockTitle( true );
+				} else {
+					return $testCase->getMockTitle( false );
+				}
+			} ) );
+		return $titleLookup;
+	}
 
-		list( $result,, ) = $this->doApiRequest( $params );
+	/**
+	 * @param bool $exists
+	 *
+	 * @return Title|\PHPUnit_Framework_MockObject_MockObject
+	 */
+	public function getMockTitle( $exists ) {
+		$mock = $this->getMockBuilder( '\Title' )
+			->disableOriginalConstructor()
+			->getMock();
+		$mock->expects( $this->any() )
+			->method( 'exists' )
+			->will( $this->returnValue( $exists ) );
+		$mock->expects( $this->any() )
+			->method( 'getFullUrl' )
+			->will( $this->returnValue( 'http://fullTitleUrl' ) );
+		$mock->expects( $this->any() )
+			->method( 'getPrefixedText' )
+			->will( $this->returnValue( 'Prefixed:Title' ) );
+		$mock->expects( $this->any() )
+			->method( 'getArticleID' )
+			->will( $this->returnValue( 42 ) );
+		return $mock;
+	}
+
+	/**
+	 * @return ContentLanguages|\PHPUnit_Framework_MockObject_MockObject
+	 */
+	private function getMockContentLanguages() {
+		$contentLanguages = $this->getMock( 'Wikibase\Lib\ContentLanguages' );
+		$contentLanguages->expects( $this->any() )->method( 'getLanguages' )
+			->will( $this->returnValue( array( 'de', 'de-ch', 'en', 'ii', 'nn', 'ru', 'zh-cn' ) ) );
+		return $contentLanguages;
+	}
+
+	/**
+	 * @param array $params
+	 * @param TermSearchResult[] $returnResults
+	 *
+	 * @return EntitySearchHelper|\PHPUnit_Framework_MockObject_MockObject
+	 */
+	private function getMockEntitySearchHelper( array $params, array $returnResults = array() ) {
+		// defaults from SearchEntities
+		$params = array_merge( array(
+			'strictlanguage' => false,
+			'type' => 'item',
+			'limit' => 7,
+			'continue' => 0
+		), $params );
+
+		$mock = $this->getMockBuilder( 'Wikibase\Repo\Api\EntitySearchHelper' )
+			->disableOriginalConstructor()
+			->getMock();
+		$mock->expects( $this->atLeastOnce() )
+			->method( 'getRankedSearchResults' )
+			->with(
+				$this->equalTo( $params['search'] ),
+				$this->equalTo( $params['language'] ),
+				$this->equalTo( $params['type'] ),
+				$this->equalTo( $params['continue'] + $params['limit'] + 1 ),
+				$this->equalTo( $params['strictlanguage'] )
+			)
+			->will( $this->returnValue( $returnResults ) );
+		return $mock;
+	}
+
+	/**
+	 * @param array $params
+	 * @param EntitySearchHelper|null $entitySearchHelper
+	 *
+	 * @return array[]
+	 */
+	private function callApiModule( array $params, EntitySearchHelper $entitySearchHelper = null ) {
+		$module = new SearchEntities(
+			$this->getApiMain( $params ),
+			'wbsearchentities'
+		);
+
+		if ( $entitySearchHelper == null ) {
+			$entitySearchHelper = $this->getMockEntitySearchHelper( $params );
+		}
+
+		$module->setServices(
+			$entitySearchHelper,
+			$this->getMockTitleLookup(),
+			$this->getMockContentLanguages(),
+			array( 'item', 'property' ),
+			'concept:'
+		);
+
+		$module->execute();
+
+		$result = $module->getResult();
+		return $result->getResultData( null, array(
+			'BC' => array(),
+			'Types' => array(),
+			'Strip' => 'all',
+		) );
+	}
+
+	public function testSearchStrictLanguage_passedToSearchInteractor() {
+		$params = array(
+			'action' => 'wbsearchentities',
+			'search' => 'Foo',
+			'type' => 'item',
+			'language' => 'de-ch',
+			'strictlanguage' => true
+		);
+
+		$this->callApiModule( $params );
+	}
+
+	public function provideTestSearchEntities() {
+		$q111Match = new TermSearchResult(
+			new Term( 'qid', 'Q111' ),
+			'entityId',
+			new ItemId( 'Q111' ),
+			new Term( 'pt', 'ptLabel' ),
+			new Term( 'pt', 'ptDescription' )
+		);
+
+		$q222Match = new TermSearchResult(
+			new Term( 'en-gb', 'Fooooo' ),
+			'label',
+			new ItemId( 'Q222' ),
+			new Term( 'en-gb', 'FooHeHe' ),
+			new Term( 'en', 'FooHeHe en description' )
+		);
+
+		$q333Match = new TermSearchResult(
+			new Term( 'de', 'AMatchedTerm' ),
+			'alias',
+			new ItemId( 'Q333' ),
+			new Term( 'fr', 'ADisplayLabel' )
+		);
+
+		$q111Result = array(
+			'id' => 'Q111',
+			'concepturi' => 'concept:Q111',
+			'url' => 'http://fullTitleUrl',
+			'title' => 'Prefixed:Title',
+			'pageid' => 42,
+			'label' => 'ptLabel',
+			'description' => 'ptDescription',
+			'aliases' => array( 'Q111' ),
+			'match' => array(
+				'type' => 'entityId',
+				'text' => 'Q111',
+			),
+		);
+
+		$q222Result = array(
+			'id' => 'Q222',
+			'concepturi' => 'concept:Q222',
+			'url' => 'http://fullTitleUrl',
+			'title' => 'Prefixed:Title',
+			'pageid' => 42,
+			'label' => 'FooHeHe',
+			'description' => 'FooHeHe en description',
+			'aliases' => array( 'Fooooo' ),
+			'match' => array(
+				'type' => 'label',
+				'language' => 'en-gb',
+				'text' => 'Fooooo',
+			),
+		);
+
+		$q333Result = array(
+			'id' => 'Q333',
+			'concepturi' => 'concept:Q333',
+			'url' => 'http://fullTitleUrl',
+			'title' => 'Prefixed:Title',
+			'pageid' => 42,
+			'label' => 'ADisplayLabel',
+			'aliases' => array( 'AMatchedTerm' ),
+			'match' => array(
+				'type' => 'alias',
+				'language' => 'de',
+				'text' => 'AMatchedTerm',
+			),
+		);
+
+		return array(
+			'No exact match' => array(
+				array( 'search' => 'Q999' ),
+				array(),
+				array(),
+			),
+			'Exact EntityId match' => array(
+				array( 'search' => 'Q111' ),
+				array( $q111Match ),
+				array( $q111Result ),
+			),
+			'Multiple Results' => array(
+				array(),
+				array( $q222Match, $q333Match ),
+				array( $q222Result, $q333Result ),
+			),
+			'Multiple Results (limited)' => array(
+				array( 'limit' => 1 ),
+				array( $q222Match, $q333Match ),
+				array( $q222Result ),
+			),
+			'Multiple Results (limited-continue)' => array(
+				array( 'limit' => 1, 'continue' => 1 ),
+				array( $q222Match, $q333Match ),
+				array( $q333Result ),
+			),
+		);
+	}
+
+	/**
+	 * @dataProvider provideTestSearchEntities
+	 */
+	public function testSearchEntities( array $overrideParams, array $interactorReturn, array $expected ) {
+		$params = array_merge( array(
+			'action' => 'wbsearchentities',
+			'search' => 'Foo',
+			'type' => 'item',
+			'language' => 'en'
+		), $overrideParams );
+
+		$searchInteractor = $this->getMockEntitySearchHelper( $params, $interactorReturn );
+
+		$result = $this->callApiModule( $params, $searchInteractor );
 
 		$this->assertResultLooksGood( $result );
-		$this->assertApiResultHasExpected( $result['search'], $params, $expected );
+		$this->assertEquals( $expected, $result['search'] );
 	}
 
 	private function assertResultLooksGood( $result ) {
-		$this->assertResultSuccess( $result );
 		$this->assertArrayHasKey( 'searchinfo', $result );
 		$this->assertArrayHasKey( 'search', $result['searchinfo'] );
 		$this->assertArrayHasKey( 'search', $result );
 
-		foreach( $result['search'] as $key => $searchresult ) {
+		foreach ( $result['search'] as $key => $searchresult ) {
 			$this->assertInternalType( 'integer', $key );
 			$this->assertArrayHasKey( 'id', $searchresult );
+			$this->assertArrayHasKey( 'concepturi', $searchresult );
 			$this->assertArrayHasKey( 'url', $searchresult );
-		}
-
-	}
-
-	private function assertApiResultHasExpected( $searchResults, $params, $expected ) {
-		$foundResult = 0;
-
-		$expectedId = EntityTestHelper::getId( $expected['handle'] );
-		$expectedData = EntityTestHelper::getEntityData( $expected['handle'] );
-
-		foreach( $searchResults as $searchResult ) {
-			$assertFound = $this->assertSearchResultHasExpected( $searchResult, $params, $expectedId, $expectedData );
-			$foundResult = $foundResult + $assertFound;
-		}
-		$this->assertEquals( 1, $foundResult, 'Could not find expected search result in array of results' );
-	}
-
-	private function assertSearchResultHasExpected( $searchResult, $params, $expectedId, $expectedData  ){
-		if( $expectedId === $searchResult['id'] ) {
-			$this->assertEquals( $expectedId, $searchResult['id'] );
-			$this->assertStringEndsWith( $expectedId, $searchResult['url'] );
-			if( array_key_exists( 'descriptions', $expectedData ) ) {
-				$this->assertSearchResultHasExpectedDescription( $searchResult, $params, $expectedData );
-			}
-			if( array_key_exists( 'labels', $expectedData ) ) {
-				$this->assertSearchResultHasExpectedLabel( $searchResult, $params, $expectedData );
-			}
-			return 1;
-		}
-		return 0;
-	}
-
-	private function assertSearchResultHasExpectedDescription( $searchResult, $params, $expectedData ) {
-		foreach( $expectedData['descriptions'] as $description ) {
-			if( $description['language'] == $params['language'] ) {
-				$this->assertArrayHasKey( 'description', $searchResult );
-				$this->assertEquals( $description['value'], $searchResult['description'] );
-			}
+			$this->assertArrayHasKey( 'title', $searchresult );
+			$this->assertArrayHasKey( 'pageid', $searchresult );
 		}
 	}
 
-	private function assertSearchResultHasExpectedLabel( $searchResult, $params, $expectedData ) {
-		foreach( $expectedData['labels'] as $description ) {
-			if( $description['language'] == $params['language'] ) {
-				$this->assertArrayHasKey( 'label', $searchResult );
-				$this->assertEquals( $description['value'], $searchResult['label'] );
-			}
-		}
-	}
 }

@@ -2,14 +2,14 @@
 
 namespace Wikibase\Test;
 
-use Diff\Diff;
-use Diff\DiffOpAdd;
-use Diff\DiffOpChange;
+use Diff\DiffOp\Diff\Diff;
+use Diff\DiffOp\DiffOpAdd;
+use Diff\DiffOp\DiffOpChange;
 use Wikibase\ChangesTable;
-use Wikibase\Claim;
 use Wikibase\DataModel\Entity\ItemId;
-use Wikibase\ItemDiff;
-use Wikibase\PropertyNoValueSnak;
+use Wikibase\DataModel\Services\Diff\ItemDiff;
+use Wikibase\DataModel\Snak\PropertyNoValueSnak;
+use Wikibase\DataModel\Statement\Statement;
 
 /**
  * @covers Wikibase\ChangesTable
@@ -67,7 +67,7 @@ class ChangesTableTest extends \MediaWikiTestCase {
 			array(
 				'claim' => new Diff(
 					array(
-						new DiffOpAdd( new Claim( new PropertyNoValueSnak( 77 ) ) ),
+						new DiffOpAdd( new Statement( new PropertyNoValueSnak( 77 ) ) ),
 					)
 				)
 			)
@@ -80,7 +80,7 @@ class ChangesTableTest extends \MediaWikiTestCase {
 					'time' => '20120101000000',
 					'user_id' => $wgUser->getId(),
 					'revision_id' => 9001,
-					'object_id' => $id->getPrefixedId(),
+					'object_id' => $id->getSerialization(),
 					'info' => array(
 						'diff' => $diff1,
 					)
@@ -93,7 +93,7 @@ class ChangesTableTest extends \MediaWikiTestCase {
 					'time' => '20120101000005',
 					'user_id' => $wgUser->getId(),
 					'revision_id' => 9002,
-					'object_id' => $id->getPrefixedId(),
+					'object_id' => $id->getSerialization(),
 					'info' => array(
 						'diff' => $diff2,
 					)
@@ -164,4 +164,3 @@ class ChangesTableTest extends \MediaWikiTestCase {
 	}
 
 }
-

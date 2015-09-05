@@ -1,15 +1,11 @@
 <?php
 
-namespace Wikibase\Test\Api;
+namespace Wikibase\Test\Repo\Api;
 
 use ApiBase;
 use ApiMain;
-use ApiTestCase;
 use FauxRequest;
-use MediaWikiTestCase;
 use RequestContext;
-use TestSites;
-use TestUser;
 use UsageException;
 use Wikibase\Repo\WikibaseRepo;
 
@@ -22,27 +18,27 @@ use Wikibase\Repo\WikibaseRepo;
  *
  * @author Adam Shorland
  */
-abstract class IndependentWikibaseApiTestCase extends MediaWikiTestCase {
+abstract class IndependentWikibaseApiTestCase extends \MediaWikiTestCase {
 
 	protected function setUp() {
 		parent::setUp();
 
 		static $isSetup = false;
 
-		ApiTestCase::$users['wbeditor'] = new TestUser(
+		\ApiTestCase::$users['wbeditor'] = new \TestUser(
 			'Apitesteditor',
 			'Api Test Editor',
 			'api_test_editor@example.com',
 			array( 'wbeditor' )
 		);
 
-		$this->setMwGlobals( 'wgUser', self::$users['wbeditor']->user );
+		$this->setMwGlobals( 'wgUser', self::$users['wbeditor']->getUser() );
 
 		if ( !$isSetup ) {
-			//TODO remove me once everything that needs this is overridden
+			// TODO: Remove me once everything that needs this is overridden.
 			$sitesTable = WikibaseRepo::getDefaultInstance()->getSiteStore();
 			$sitesTable->clear();
-			$sitesTable->saveSites( TestSites::getSites() );
+			$sitesTable->saveSites( \TestSites::getSites() );
 			$isSetup = true;
 		}
 	}
@@ -54,10 +50,16 @@ abstract class IndependentWikibaseApiTestCase extends MediaWikiTestCase {
 	 *
 	 * @return array api request result
 	 */
-	public function doApiRequest( $params ) {
+	public function doApiRequest( array $params ) {
 		$module = $this->getModule( $params );
 		$module->execute();
-		return $module->getResultData();
+
+		$data = $module->getResult()->getResultData( null, array(
+			'BC' => array(),
+			'Types' => array(),
+			'Strip' => 'all',
+		) );
+		return $data;
 	}
 
 	/**
@@ -72,7 +74,7 @@ abstract class IndependentWikibaseApiTestCase extends MediaWikiTestCase {
 			$this->doApiRequest( $params );
 			$this->fail( "Failed to throw UsageException" );
 
-		} catch( UsageException $e ) {
+		} catch ( UsageException $e ) {
 			if ( array_key_exists( 'type', $exception ) ) {
 				$this->assertInstanceOf( $exception['type'], $e );
 			}
@@ -92,7 +94,7 @@ abstract class IndependentWikibaseApiTestCase extends MediaWikiTestCase {
 	 *
 	 * @return ApiBase
 	 */
-	protected function getModule( $params ) {
+	protected function getModule( array $params ) {
 		global $wgRequest;
 
 		$requestContext = new RequestContext();

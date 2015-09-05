@@ -1,13 +1,14 @@
 <?php
 
 namespace Wikibase\Repo\Specials;
+
 use Html;
 use Site;
 use SiteStore;
-use Wikibase\EntityTitleLookup;
-use Wikibase\ItemHandler;
+use Wikibase\Lib\Store\EntityTitleLookup;
+use Wikibase\Lib\Store\SiteLinkLookup;
+use Wikibase\Repo\Content\ItemHandler;
 use Wikibase\Repo\WikibaseRepo;
-use Wikibase\SiteLinkLookup;
 
 /**
  * Enables accessing items by providing the identifier of a site and the title
@@ -18,7 +19,7 @@ use Wikibase\SiteLinkLookup;
  * @author Jeroen De Dauw < jeroendedauw@gmail.com >
  * @author Daniel Kinzler
  */
-class SpecialItemByTitle extends SpecialItemResolver {
+class SpecialItemByTitle extends SpecialWikibasePage {
 
 	/**
 	 * @var EntityTitleLookup
@@ -36,11 +37,6 @@ class SpecialItemByTitle extends SpecialItemResolver {
 	private $siteLinkLookup;
 
 	/**
-	 * @var bool
-	 */
-	private $normalizeItemByTitlePageNames;
-
-	/**
 	 * site link groups
 	 *
 	 * @var string[]
@@ -48,9 +44,7 @@ class SpecialItemByTitle extends SpecialItemResolver {
 	private $groups;
 
 	/**
-	 * Constructor.
-	 *
-	 * @ see SpecialItemResolver::__construct
+	 * @see SpecialWikibasePage::__construct
 	 *
 	 * @since 0.1
 	 */
@@ -61,14 +55,13 @@ class SpecialItemByTitle extends SpecialItemResolver {
 		$settings = WikibaseRepo::getDefaultInstance()->getSettings();
 
 		$this->initSettings(
-			$settings->getSetting( 'normalizeItemByTitlePageNames' ),
 			$settings->getSetting( 'siteLinkGroups' )
 		);
 
 		$this->initServices(
 			WikibaseRepo::getDefaultInstance()->getEntityTitleLookup(),
 			WikibaseRepo::getDefaultInstance()->getSiteStore(),
-			WikibaseRepo::getDefaultInstance()->getStore()->newSiteLinkCache()
+			WikibaseRepo::getDefaultInstance()->getStore()->newSiteLinkStore()
 		);
 	}
 
@@ -76,14 +69,11 @@ class SpecialItemByTitle extends SpecialItemResolver {
 	 * Initialize essential settings for this special page.
 	 * may be used by unit tests to override global settings.
 	 *
-	 * @param $normalizeItemByTitlePageNames
-	 * @param $siteLinkGroups
+	 * @param string[] $siteLinkGroups
 	 */
 	public function initSettings(
-		$normalizeItemByTitlePageNames,
-		$siteLinkGroups
+		array $siteLinkGroups
 	) {
-		$this->normalizeItemByTitlePageNames = $normalizeItemByTitlePageNames;
 		$this->groups = $siteLinkGroups;
 	}
 
@@ -106,9 +96,11 @@ class SpecialItemByTitle extends SpecialItemResolver {
 	}
 
 	/**
-	 * @see SpecialItemResolver::execute
+	 * @see SpecialWikibasePage::execute
 	 *
 	 * @since 0.1
+	 *
+	 * @param string|null $subPage
 	 */
 	public function execute( $subPage ) {
 		parent::execute( $subPage );
@@ -122,7 +114,7 @@ class SpecialItemByTitle extends SpecialItemResolver {
 		$itemContent = null;
 
 		// If there are enough data, then try to lookup the item content
-		if ( isset( $site ) && isset( $page ) ) {
+		if ( $site !== '' && $page !== '' ) {
 			// Try to get a item content
 			$siteId = $this->stringNormalizer->trimToNFC( $site ); // no stripping of underscores here!
 			$pageName = $this->stringNormalizer->trimToNFC( $page );
@@ -133,7 +125,7 @@ class SpecialItemByTitle extends SpecialItemResolver {
 				// full global id to be used.
 				// @todo: Ideally, if the site can't be looked up by global ID, we
 				// should try to look it up by local navigation ID.
-				// Support for this depends on bug 48934.
+				// Support for this depends on bug T50934.
 				$siteId .= 'wiki';
 			}
 
@@ -141,7 +133,7 @@ class SpecialItemByTitle extends SpecialItemResolver {
 			$itemId = $this->siteLinkLookup->getItemIdForLink( $siteId, $pageName );
 
 			// Do we have an item content, and if not can we try harder?
-			if ( $itemId === null && $this->normalizeItemByTitlePageNames === true ) {
+			if ( $itemId === null ) {
 				// Try harder by requesting normalization on the external site
 				$siteObj = $this->sites->getSite( $siteId );
 				if ( $siteObj instanceof Site ) {
@@ -153,7 +145,9 @@ class SpecialItemByTitle extends SpecialItemResolver {
 			// Redirect to the item page if we found its content
 			if ( $itemId !== null ) {
 				$title = $this->titleLookup->getTitleForId( $itemId );
-				$itemUrl = $title->getFullUrl();
+				$query = $request->getValues();
+				unset( $query['title'] );
+				$itemUrl = $title->getFullUrl( $query );
 				$this->getOutput()->redirect( $itemUrl );
 				return;
 			}
@@ -166,13 +160,10 @@ class SpecialItemByTitle extends SpecialItemResolver {
 	/**
 	 * Output a form to allow searching for a page
 	 *
-	 * @since 0.1
-	 *
 	 * @param string $siteId
 	 * @param string $page
 	 */
-	protected function switchForm( $siteId, $page ) {
-
+	private function switchForm( $siteId, $page ) {
 		if ( $this->sites->getSites()->hasSite( $siteId ) ) {
 			$site = $this->sites->getSite( $siteId );
 			$siteExists = in_array( $site->getGroup(), $this->groups );
@@ -200,61 +191,70 @@ class SpecialItemByTitle extends SpecialItemResolver {
 				array(),
 				$this->msg( 'wikibase-itembytitle-lookup-fieldset' )->text()
 			)
-			. Html::element(
-				'label',
-				array( 'for' => 'wb-itembytitle-sitename' ),
-				$this->msg( 'wikibase-itembytitle-lookup-site' )->text()
+			. Html::label(
+				$this->msg( 'wikibase-itembytitle-lookup-site' )->text(),
+				'wb-itembytitle-sitename',
+				array(
+					'class' => 'wb-label'
+				)
 			)
 			. Html::input(
 				'site',
-				$siteId ? htmlspecialchars( $siteId ) : '',
+				htmlspecialchars( $siteId ),
 				'text',
 				array(
+					'class' => 'wb-input',
 					'id' => 'wb-itembytitle-sitename',
 					'size' => 12
 				)
 			)
 			. ' '
-			. Html::element(
-				'label',
-				array( 'for' => 'pagename' ),
-				$this->msg( 'wikibase-itembytitle-lookup-page' )->text()
+			. Html::label(
+				$this->msg( 'wikibase-itembytitle-lookup-page' )->text(),
+				'pagename',
+				array(
+					'class' => 'wb-label'
+				)
 			)
 			. Html::input(
 				'page',
 				$page ? htmlspecialchars( $page ) : '',
 				'text',
 				array(
+					'class' => 'wb-input',
 					'id' => 'pagename',
-					'size' => 36,
-					'class' => 'wb-input-text'
+					'size' => 36
 				)
 			)
 			. Html::input(
-				'submit',
+				'',
 				$this->msg( 'wikibase-itembytitle-submit' )->text(),
 				'submit',
 				array(
 					'id' => 'wb-itembytitle-submit',
-					'class' => 'wb-input-button'
+					'class' => 'wb-button'
 				)
 			)
 			. Html::closeElement( 'fieldset' )
 			. Html::closeElement( 'form' )
 		);
 
-		if ( $siteExists && isset( $page ) ) {
+		if ( $siteId && !$siteExists ) {
+			$this->showErrorHTML( $this->msg( 'wikibase-itembytitle-error-site' ) );
+		} elseif ( $siteExists && $page ) {
+			$this->showErrorHTML( $this->msg( 'wikibase-itembytitle-error-item' ) );
+
+			$createLink = $this->getTitleFor( 'NewItem' );
 			$this->getOutput()->addHTML(
 				Html::openElement( 'div' )
 				. $this->msg( 'wikibase-itembytitle-create' )
 					->params(
-						wfUrlencode( $siteId ? $siteId : '' ),
-						wfUrlencode( $page ? $page : '' )
+						$createLink->getFullURL( array( 'site' => $siteId, 'page' => $page ) )
 					)
 					->parse()
 				. Html::closeElement( 'div' )
 			);
 		}
-
 	}
+
 }

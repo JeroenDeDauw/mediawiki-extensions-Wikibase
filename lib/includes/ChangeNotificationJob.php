@@ -2,6 +2,9 @@
 
 namespace Wikibase;
 
+use Job;
+use Title;
+use Wikibase\Client\Changes\ChangeHandler;
 use Wikibase\Client\WikibaseClient;
 
 /**
@@ -12,30 +15,34 @@ use Wikibase\Client\WikibaseClient;
  * @licence GNU GPL v2+
  * @author Daniel Kinzler
  */
-class ChangeNotificationJob extends \Job {
+class ChangeNotificationJob extends Job {
 
 	/**
-	 * @var Change[] $changes: initialized lazily by getChanges().
+	 * @var Change[]|null Initialized lazily by getChanges.
 	 */
-	protected $changes = null;
+	private $changes = null;
+
+	/**
+	 * @var ChangeHandler|null
+	 */
+	private $changeHandler = null;
 
 	/**
 	 * Creates a ChangeNotificationJob representing the given changes.
 	 *
-	 * @param array       $changes The list of changes to be processed
+	 * @param Change[] $changes The list of changes to be processed
 	 * @param string      $repo The name of the repository the changes come from (default: "").
 	 * @param array|bool  $params extra job parameters, see Job::__construct (default: false).
 	 *
-	 * @return \Wikibase\ChangeNotificationJob: the job
+	 * @return ChangeNotificationJob
 	 */
 	public static function newFromChanges( array $changes, $repo = '', $params = false ) {
 		static $dummyTitle = null;
-		wfProfileIn( __METHOD__ );
 
 		// Note: we don't really care about the title and will use a dummy
 		if ( $dummyTitle === null ) {
 			// The Job class wants a Title object for some reason. Supply a dummy.
-			$dummyTitle = \Title::newFromText( "ChangeNotificationJob", NS_SPECIAL );
+			$dummyTitle = Title::newFromText( "ChangeNotificationJob", NS_SPECIAL );
 		}
 
 		// get the list of change IDs
@@ -53,10 +60,7 @@ class ChangeNotificationJob extends \Job {
 		$params['repo'] = $repo;
 		$params['changeIds'] = $changeIds;
 
-		$job = new ChangeNotificationJob( $dummyTitle, $params );
-
-		wfProfileOut( __METHOD__ );
-		return $job;
+		return new ChangeNotificationJob( $dummyTitle, $params );
 	}
 
 	/**
@@ -70,12 +74,11 @@ class ChangeNotificationJob extends \Job {
 	 *
 	 * @see      Job::factory.
 	 *
-	 * @param \Title $title ignored
-	 * @param  $params array|bool
-	 * @param  $id     int
+	 * @param Title $title
+	 * @param array|bool $params
 	 */
-	public function __construct( \Title $title, $params = false, $id = 0 ) {
-		parent::__construct( 'ChangeNotification', $title, $params, $id );
+	public function __construct( Title $title, $params = false ) {
+		parent::__construct( 'ChangeNotification', $title, $params );
 	}
 
 	/**
@@ -87,8 +90,6 @@ class ChangeNotificationJob extends \Job {
 	 */
 	public function getChanges() {
 		if ( $this->changes === null ) {
-			wfProfileIn( __METHOD__ . '#load' );
-
 			$params = $this->getParams();
 			$ids = $params['changeIds'];
 
@@ -109,23 +110,19 @@ class ChangeNotificationJob extends \Job {
 					. " Some changes were lost, possibly due to premature pruning.",
 					E_USER_WARNING );
 			}
-
-			wfProfileOut( __METHOD__ . '#load' );
 		}
 
 		return $this->changes;
 	}
 
 	/**
-	 * Run the job
-	 *
-	 * @return boolean success
+	 * @return bool success
 	 */
 	public function run() {
 		$changes = $this->getChanges();
 
-		//TODO: allow mock handler for testing?
-		ChangeHandler::singleton()->handleChanges( $changes );
+		$changeHandler = $this->getChangeHandler();
+		$changeHandler->handleChanges( $changes );
 
 		if ( $changes ) {
 			/* @var Change $last */
@@ -140,6 +137,17 @@ class ChangeNotificationJob extends \Job {
 		}
 
 		return true;
+	}
+
+	/**
+	 * @return ChangeHandler
+	 */
+	private function getChangeHandler() {
+		if ( !$this->changeHandler ) {
+			$this->changeHandler = WikibaseClient::getDefaultInstance()->getChangeHandler();
+		}
+
+		return $this->changeHandler;
 	}
 
 }

@@ -2,6 +2,17 @@
 
 namespace Wikibase;
 
+use MWException;
+use Wikibase\Client\Store\UsageUpdater;
+use Wikibase\Client\Usage\SubscriptionManager;
+use Wikibase\Client\Usage\UsageLookup;
+use Wikibase\Client\Usage\UsageTracker;
+use Wikibase\DataModel\Services\Entity\EntityPrefetcher;
+use Wikibase\DataModel\Services\Lookup\EntityLookup;
+use Wikibase\Lib\Store\EntityRevisionLookup;
+use Wikibase\Lib\Store\SiteLinkLookup;
+use Wikibase\Store\EntityIdLookup;
+
 /**
  * Client store interface.
  *
@@ -18,21 +29,42 @@ interface ClientStore {
 	 *
 	 * @return SiteLinkLookup
 	 */
-	public function getSiteLinkTable();
+	public function getSiteLinkLookup();
+
+	/**
+	 * @since 0.5
+	 *
+	 * @return UsageLookup
+	 */
+	public function getUsageLookup();
+
+	/**
+	 * @since 0.5
+	 *
+	 * @return UsageTracker
+	 */
+	public function getUsageTracker();
+
+	/**
+	 * @since 0.5
+	 *
+	 * @return SubscriptionManager
+	 */
+	public function getSubscriptionManager();
 
 	/**
 	 * @since 0.4
 	 *
-	 * @return ItemUsageIndex
-	 */
-	public function getItemUsageIndex();
-
-	/**
-	 * @since 0.1
-	 *
 	 * @return EntityLookup
 	 */
 	public function getEntityLookup();
+
+	/**
+	 * @since 0.5
+	 *
+	 * @return EntityRevisionLookup
+	 */
+	public function getEntityRevisionLookup();
 
 	/**
 	 * @since 0.4
@@ -49,11 +81,17 @@ interface ClientStore {
 	public function getTermIndex();
 
 	/**
+	 * @since 0.5
+	 *
+	 * @return EntityIdLookup
+	 */
+	public function getEntityIdLookup();
+
+	/**
 	 * @since 0.4
 	 *
+	 * @throws MWException if no changes table can be supplied.
 	 * @return ChangesTable
-	 *
-	 * @throws \MWException if no changes table can be supplied.
 	 */
 	public function newChangesTable();
 
@@ -77,4 +115,22 @@ interface ClientStore {
 	 * @since 0.2
 	 */
 	public function rebuild();
+
+	/**
+	 * Returns an EntityPrefetcher which can be used to prefetch a list of entity
+	 * ids in case we need to for example load a batch of entity ids.
+	 *
+	 * @since 0.5
+	 *
+	 * @return EntityPrefetcher
+	 */
+	public function getEntityPrefetcher();
+
+	/**
+	 * @since 0.5
+	 *
+	 * @return UsageUpdater
+	 */
+	public function getUsageUpdater();
+
 }

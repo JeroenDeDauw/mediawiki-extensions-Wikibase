@@ -1,4 +1,9 @@
 <?php
+
+namespace Wikibase;
+
+use MWException;
+
 /**
  * Interface for DAO objects providing chunked access.
  *
@@ -7,18 +12,12 @@
  * @licence GNU GPL v2+
  * @author Daniel Kinzler
  */
-
-namespace Wikibase;
-
-
-use MWException;
-
 class ChunkCache implements ChunkAccess {
 
 	/**
 	 * @var ChunkAccess
 	 */
-	protected $source;
+	private $source;
 
 	/**
 	 * Array containing cache entries; each entry is an associative array with the
@@ -32,39 +31,39 @@ class ChunkCache implements ChunkAccess {
 	 *
 	 * @var array
 	 */
-	protected $entries = array();
+	private $entries = array();
 
 	/**
 	 * @var int
 	 */
-	protected $size = 0;
+	private $size = 0;
 
 	/**
 	 * @var int
 	 */
-	protected $maxSize;
+	private $maxSize;
 
 	/**
 	 * @var int
 	 */
-	protected $chunkSize;
+	private $chunkSize;
 
 	/**
 	 * @var int
 	 */
-	protected $hitCount = 0;
+	private $hitCount = 0;
 
 	/**
 	 * @var int
 	 */
-	protected $missCount = 0;
+	private $missCount = 0;
 
 	/**
 	 * modification counter (logical clock)
 	 *
 	 * @var int
 	 */
-	protected $modCount = 0;
+	private $modCount = 0;
 
 	/**
 	 * @param ChunkAccess $source    The source to load from
@@ -94,8 +93,6 @@ class ChunkCache implements ChunkAccess {
 	 * @return int the position if found, or the negative insert position minus one, if not.
 	 */
 	public function findEntryPosition( $key ) {
-		assert( '$key >= 0' );
-
 		if ( empty( $this->entries ) ) {
 			return -1;
 		}
@@ -118,13 +115,13 @@ class ChunkCache implements ChunkAccess {
 			assert( '$high >= 0' );
 			assert( '$low >= 0' );
 
-			$mid = intval( floor( ( $low + $high ) / 2 ) );
+			$mid = (int)( ( $low + $high ) / 2 );
 
 			$entry = $this->entries[$mid];
 
 			if ( $key < $entry['start'] ) {
 				$high = $mid -1;
-			} else if ( $key >= $entry['next'] ) {
+			} elseif ( $key >= $entry['next'] ) {
 				$low = $mid +1;
 			} else {
 				return $mid;
@@ -213,6 +210,7 @@ class ChunkCache implements ChunkAccess {
 	 * @param int $size the maximum size of the chunk to load
 	 * @param int $before insert into the internal entry list before this position.
 	 *
+	 * @throws MWException
 	 * @return array|bool the cache entry created by inserting the new chunk, or false if
 	 *         there is no more data to load from the source at the given position.
 	 *         The cache entry is an associative array containing the following keys:
@@ -221,10 +219,12 @@ class ChunkCache implements ChunkAccess {
 	 *         - next:  the id the following chunk starts at (or after)
 	 *         - touched: (logical) timestamp of the entry's creation (taken from $this->modCount)
 	 */
-	protected function insertChunk( $start, $size, $before ) {
-		assert( '$start >= 0' );
-		assert( '$size >= 0' );
-		assert( '$before >= 0' );
+	private function insertChunk( $start, $size, $before ) {
+		if ( !is_int( $start ) || !is_int( $size ) || !is_int( $before )
+			|| $start < 0 || $size < 0 || $before < 0
+		) {
+			throw new MWException( '$start, $size and $before must be non-negative integers.' );
+		}
 
 		$data = $this->source->loadChunk( $start, $size );
 
@@ -264,7 +264,7 @@ class ChunkCache implements ChunkAccess {
 	 *
 	 * Note that this implementation is rather inefficient for large number of chunks.
 	 */
-	protected function prune() {
+	private function prune() {
 		if ( $this->size <= $this->maxSize ) {
 			return;
 		}
@@ -287,11 +287,11 @@ class ChunkCache implements ChunkAccess {
 	 * Remove the chunk with the given start key from the cache.
 	 * Used during pruning.
 	 *
-	 * @param $startKey
+	 * @param int $startKey
 	 *
 	 * @return bool
 	 */
-	protected function dropChunk( $startKey ) {
+	private function dropChunk( $startKey ) {
 		foreach ( $this->entries as $pos => $entry ) {
 			if ( $entry['start'] === $startKey ) {
 				unset( $this->entries[$pos] );
@@ -324,7 +324,7 @@ class ChunkCache implements ChunkAccess {
 	 * @return int
 	 */
 	public function getSize() {
-		return $this->size();
+		return $this->size;
 	}
 
 	/**
@@ -347,4 +347,5 @@ class ChunkCache implements ChunkAccess {
 
 		return $this->hitCount / $total;
 	}
+
 }

@@ -6,10 +6,14 @@ use DataValues\DataValue;
 use Exception;
 use InvalidArgumentException;
 use Language;
+use MWException;
 use ValueFormatters\ValueFormatter;
-use Wikibase\Lib\EntityIdFormatter;
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Services\EntityId\EntityIdFormatter;
+use Wikibase\DataModel\Entity\EntityIdParser;
+use Wikibase\DataModel\Entity\EntityIdParsingException;
+use Wikibase\DataModel\Snak\Snak;
 use Wikibase\Lib\SnakFormatter;
-use Wikibase\Repo\WikibaseRepo;
 
 /**
  * Formatter for Summary objects
@@ -21,39 +25,51 @@ use Wikibase\Repo\WikibaseRepo;
  * @author John Erling Blad
  * @author Daniel Kinzler
  * @author Tobias Gritschacher < tobias.gritschacher@wikimedia.de >
+ * @author Adam Shorland
  */
 class SummaryFormatter {
 
 	/**
 	 * @var Language
 	 */
-	protected $language;
+	private $language;
 
 	/**
 	 * @var EntityIdFormatter
 	 */
-	protected $idFormatter;
+	private $idFormatter;
 
 	/**
 	 * @var ValueFormatter
 	 */
-	protected $valueFormatter;
+	private $valueFormatter;
 
 	/**
 	 * @var SnakFormatter
 	 */
-	protected $snakFormatter;
+	private $snakFormatter;
 
 	/**
-	 * @param EntityIdFormatter $idFormatter
+	 * @var EntityIdParser
+	 */
+	private $idParser;
+
+	/**
+	 * @param EntityIdFormatter $idFormatter Please note that the magic label substitution we apply
+	 *     on top of this only works in case this returns links without display text.
 	 * @param ValueFormatter $valueFormatter
 	 * @param SnakFormatter $snakFormatter
 	 * @param Language $language
+	 * @param EntityIdParser $idParser
 	 *
 	 * @throws InvalidArgumentException
 	 */
-	public function __construct( EntityIdFormatter $idFormatter, ValueFormatter $valueFormatter,
-		SnakFormatter $snakFormatter, Language $language
+	public function __construct(
+		EntityIdFormatter $idFormatter,
+		ValueFormatter $valueFormatter,
+		SnakFormatter $snakFormatter,
+		Language $language,
+		EntityIdParser $idParser
 	) {
 		if ( $snakFormatter->getFormat() !== SnakFormatter::FORMAT_PLAIN ) {
 			throw new InvalidArgumentException(
@@ -65,6 +81,7 @@ class SummaryFormatter {
 		$this->valueFormatter = $valueFormatter;
 		$this->snakFormatter = $snakFormatter;
 		$this->language = $language;
+		$this->idParser = $idParser;
 
 		$this->stringNormalizer = new StringNormalizer();
 	}
@@ -82,7 +99,7 @@ class SummaryFormatter {
 	 * @return string with a formatted comment, or possibly an empty string
 	 */
 	public function formatAutoComment( Summary $summary ) {
-		$messageKey = $summary->getMessageKey();
+		$composite = $summary->getMessageKey();
 		$summaryArgCount = count( $summary->getAutoSummaryArgs() );
 
 		$commentArgs = array_merge(
@@ -94,9 +111,9 @@ class SummaryFormatter {
 		$parts = $this->formatArgList( $commentArgs );
 		$joinedParts = implode( '|', $parts );
 
-		$composite = ( 0 < strlen($joinedParts) )
-			? implode( ':', array( $messageKey, $joinedParts ) )
-			: $messageKey;
+		if ( $joinedParts !== '' ) {
+			$composite .= ':' . $joinedParts;
+		}
 
 		return $composite;
 	}
@@ -108,7 +125,7 @@ class SummaryFormatter {
 	 *
 	 * @param Summary $summary
 	 *
-	 * @throws \MWException
+	 * @throws MWException
 	 *
 	 * @return string The auto summary arguments comma-separated
 	 */
@@ -166,7 +183,7 @@ class SummaryFormatter {
 			if ( $arg instanceof Snak ) {
 				return $this->snakFormatter->formatSnak( $arg );
 			} elseif ( $arg instanceof EntityId ) {
-				return $this->idFormatter->format( $arg );
+				return $this->idFormatter->formatEntityId( $arg );
 			} elseif ( $arg instanceof DataValue ) {
 				return $this->valueFormatter->format( $arg );
 			} elseif ( method_exists( $arg, '__toString' ) ) {
@@ -205,11 +222,7 @@ class SummaryFormatter {
 			if ( is_string( $key ) ) {
 				//HACK: if the key *looks* like an entity id,
 				//      apply entity id formatting.
-				$entityId = EntityId::newFromPrefixedId( $key );
-
-				if ( $entityId !== null ) {
-					$key = $this->idFormatter->format( $entityId );
-				}
+				$key = $this->formatIfEntityId( $key );
 			}
 
 			$value = $this->formatArg( $value );
@@ -219,36 +232,43 @@ class SummaryFormatter {
 		return $list;
 	}
 
+	private function formatIfEntityId( $value ) {
+		try {
+			return $this->idFormatter->formatEntityId( $this->idParser->parse( $value ) );
+		} catch ( EntityIdParsingException $ex ) {
+			return $value;
+		}
+	}
+
 	/**
 	 * Merge the total summary
 	 *
-	 * @since 0.5
-	 *
-	 * @param string $comment autocomment part, will be placed in a block comment
-	 * @param string $summary human readable string to be appended after the autocomment part
-	 * @param int $length max length of the string
+	 * @param string $autoComment autocomment part, will be placed in a block comment
+	 * @param string $autoSummary human readable string to be appended after the autocomment part
+	 * @param string $userSummary user provided summary to be appended after the autoSummary
 	 *
 	 * @return string to be used for the summary
 	 */
-	private function assembleSummaryString( $comment, $summary, $length = SUMMARY_MAX_LENGTH ) {
-		$normalizer = WikibaseRepo::getDefaultInstance()->getStringNormalizer();
-
-		$comment = $normalizer->trimToNFC( $comment );
-		$summary = $normalizer->trimToNFC( $summary );
+	private function assembleSummaryString( $autoComment, $autoSummary, $userSummary ) {
 		$mergedString = '';
-		if ( $comment !== '' ) {
-			$mergedString .=  '/* ' . $comment . ' */';
+		$autoComment = $this->stringNormalizer->trimToNFC( $autoComment );
+		$autoSummary = $this->stringNormalizer->trimToNFC( $autoSummary );
+		$userSummary = $this->stringNormalizer->trimToNFC( $userSummary );
+
+		if ( $autoComment !== '' ) {
+			$mergedString .=  '/* ' . $autoComment . ' */ ';
 		}
-		if ( $summary !== '' ) {
-			if ( $mergedString !== '' ) {
-				// Having a space after the comment is commonly known from section edits
-				$mergedString .= ' ';
-			}
-			$mergedString .= $this->language->truncate( $summary, $length - strlen( $mergedString ) );
+
+		if ( $autoSummary !== '' && $userSummary !== '' ) {
+			$mergedString .= $this->language->commaList( array( $autoSummary, $userSummary ) );
+		} elseif ( $autoSummary !== '' ) {
+			$mergedString .= $autoSummary;
+		} elseif ( $userSummary !== '' ) {
+			$mergedString .= $userSummary;
 		}
 
 		// leftover entities should be removed, but its not clear how this shall be done
-		return $mergedString;
+		return $this->language->truncate( rtrim( $mergedString ), SUMMARY_MAX_LENGTH );
 	}
 
 	/**
@@ -257,33 +277,17 @@ class SummaryFormatter {
 	 * @since 0.5
 	 *
 	 * @param Summary $summary
-	 * @param int $length Max length of the summary
-	 * @param int $format Bit field indicating what to include, see the Summary::USE_XXX constants.
 	 *
 	 * @return string to be used for the summary
-	 *
-	 * @see Summary::USE_ALL
 	 */
-	public function formatSummary( Summary $summary, $length = SUMMARY_MAX_LENGTH,
-		$format = Summary::USE_ALL
-	) {
+	public function formatSummary( Summary $summary ) {
 		$userSummary = $summary->getUserSummary();
 
-		if ( !is_null( $userSummary ) ) {
-			$autoSummary = $userSummary;
-		} else {
-			$autoSummary = self::formatAutoSummary( $summary );
-		}
-
-		$autoComment = $this->formatAutoComment( $summary );
-
-		$autoComment = ( $format & Summary::USE_COMMENT )
-			? $this->stringNormalizer->trimToNFC( $autoComment ) : '';
-		$autoSummary = ( $format & Summary::USE_SUMMARY )
-			? $this->stringNormalizer->trimToNFC( $autoSummary ) : '';
-
-		$totalSummary = self::assembleSummaryString( $autoComment, $autoSummary, $length );
-		return $totalSummary;
+		return $this->assembleSummaryString(
+			$this->formatAutoComment( $summary ),
+			$this->formatAutoSummary( $summary ),
+			$userSummary === null ? '' : $userSummary
+		);
 	}
 
 }

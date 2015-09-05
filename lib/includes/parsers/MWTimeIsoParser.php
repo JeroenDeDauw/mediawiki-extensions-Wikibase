@@ -7,6 +7,7 @@ use Language;
 use Message;
 use RuntimeException;
 use ValueParsers\CalendarModelParser;
+use ValueParsers\IsoTimestampParser;
 use ValueParsers\ParseException;
 use ValueParsers\ParserOptions;
 use ValueParsers\StringValueParser;
@@ -32,23 +33,23 @@ class MWTimeIsoParser extends StringValueParser {
 	 *      parsed with the given message keys
 	 */
 	private static $precisionMsgKeys = array(
-		TimeValue::PRECISION_Ga => array(
+		TimeValue::PRECISION_YEAR1G => array(
 			'wikibase-time-precision-Gannum',
 			'wikibase-time-precision-BCE-Gannum',
 		),
-		TimeValue::PRECISION_Ma => array(
+		TimeValue::PRECISION_YEAR1M => array(
 			'wikibase-time-precision-Mannum',
 			'wikibase-time-precision-BCE-Mannum',
 		),
-		TimeValue::PRECISION_ka => array(
+		TimeValue::PRECISION_YEAR1K => array(
 			'wikibase-time-precision-millennium',
 			'wikibase-time-precision-BCE-millennium',
 		),
-		TimeValue::PRECISION_100a => array(
+		TimeValue::PRECISION_YEAR100 => array(
 			'wikibase-time-precision-century',
 			'wikibase-time-precision-BCE-century',
 		),
-		TimeValue::PRECISION_10a => array(
+		TimeValue::PRECISION_YEAR10 => array(
 			'wikibase-time-precision-annum',
 			'wikibase-time-precision-BCE-annum',
 			'wikibase-time-precision-10annum',
@@ -57,37 +58,33 @@ class MWTimeIsoParser extends StringValueParser {
 	);
 
 	private static $paddedZeros = array(
-		TimeValue::PRECISION_Ga => 9,
-		TimeValue::PRECISION_Ma => 6,
-		TimeValue::PRECISION_ka => 3,
-		TimeValue::PRECISION_100a => 2,
-		TimeValue::PRECISION_10a => 0
+		TimeValue::PRECISION_YEAR1G => 9,
+		TimeValue::PRECISION_YEAR1M => 6,
+		TimeValue::PRECISION_YEAR1K => 3,
+		TimeValue::PRECISION_YEAR100 => 2,
+		TimeValue::PRECISION_YEAR10 => 0
 	);
 
 	/**
 	 * @var Language
 	 */
-	protected $lang;
+	private $lang;
 
 	/**
-	 * @var \ValueParsers\TimeParser
+	 * @var ValueParser
 	 */
-	protected $timeValueTimeParser;
+	private $isoTimestampParser;
 
 	/**
 	 * @see StringValueParser::__construct
 	 */
 	public function __construct( ParserOptions $options = null ) {
-		if( is_null( $options ) ) {
-			$options = new ParserOptions();
-		}
-
 		parent::__construct( $options );
-		$this->lang = Language::factory( $this->getOptions()->getOption( ValueParser::OPT_LANG ) );
 
-		$this->timeValueTimeParser = new \ValueParsers\TimeParser(
-			new CalendarModelParser(),
-			$this->getOptions()
+		$this->lang = Language::factory( $this->getOption( ValueParser::OPT_LANG ) );
+		$this->isoTimestampParser = new IsoTimestampParser(
+			new CalendarModelParser( $this->options ),
+			$this->options
 		);
 	}
 
@@ -101,7 +98,7 @@ class MWTimeIsoParser extends StringValueParser {
 	 */
 	protected function stringParse( $value ) {
 		$reconverted = $this->reconvertOutputString( $value );
-		if( $reconverted !== false ) {
+		if ( $reconverted !== false ) {
 			return $reconverted;
 		}
 
@@ -119,26 +116,27 @@ class MWTimeIsoParser extends StringValueParser {
 	 * @return TimeValue|bool
 	 */
 	private function reconvertOutputString( $value ) {
-		foreach( self::$precisionMsgKeys as $precision => $msgKeysGroup ) {
-			foreach( $msgKeysGroup as $msgKey ) {
+		foreach ( self::$precisionMsgKeys as $precision => $msgKeysGroup ) {
+			foreach ( $msgKeysGroup as $msgKey ) {
 				$msg = new Message( $msgKey );
 				//FIXME: Use the language passed in options!
 				//The only reason we are not currently doing this is due to the formatting not currently Localizing
 				//See the fix me in: MwTimeIsoFormatter::getMessage
-				//$msg->inLanguage( $this->lang ); // todo check other translations?
+				// TODO: Check other translations?
+				//$msg->inLanguage( $this->lang );
 				$msg->inLanguage( 'en' );
 				$msgText = $msg->text();
 				$isBceMsg = $this->isBceMsg( $msgKey );
 
-				list( $start, $end ) = explode( '$1' , $msgText , 2 );
-				if( preg_match( '/^\s*' . preg_quote( $start ) . '(.+?)' . preg_quote( $end ) . '\s*$/i', $value, $matches ) ) {
+				list( $start, $end ) = explode( '$1', $msgText, 2 );
+				if ( preg_match( '/^\s*' . preg_quote( $start ) . '(.+?)' . preg_quote( $end ) . '\s*$/i', $value, $matches ) ) {
 					list( , $number ) = $matches;
 					return $this->parseNumber( $number, $precision, $isBceMsg );
 				}
 
 				// If the msg string ends with BCE also check for BC
-				if( substr_compare( $end, 'BCE', - 3, 3 ) === 0 ) {
-					if( preg_match( '/^\s*' . preg_quote( $start ) . '(.+?)' . preg_quote( substr( $end, 0, -1 ) ) . '\s*$/i', $value, $matches ) ) {
+				if ( substr_compare( $end, 'BCE', - 3, 3 ) === 0 ) {
+					if ( preg_match( '/^\s*' . preg_quote( $start ) . '(.+?)' . preg_quote( substr( $end, 0, -1 ) ) . '\s*$/i', $value, $matches ) ) {
 						list( , $number ) = $matches;
 						return $this->parseNumber( $number, $precision, $isBceMsg );
 					}
@@ -182,23 +180,17 @@ class MWTimeIsoParser extends StringValueParser {
 	 * @return TimeValue
 	 */
 	private function getTimeFromYear( $year, $isBce ) {
-		if( $isBce ) {
-			$sign = EraParser::BEFORE_CURRENT_ERA;
-		} else {
-			$sign = EraParser::CURRENT_ERA;
-		}
-
+		$sign = $isBce ? '-' : '+';
 		$timeString = $sign . $year . '-00-00T00:00:00Z';
-
-		return $this->timeValueTimeParser->parse( $timeString );
+		return $this->isoTimestampParser->parse( $timeString );
 	}
 
 	/**
 	 * @param int $precision
 	 */
 	private function setPrecision( $precision ) {
-		$this->timeValueTimeParser->getOptions()->setOption(
-			\ValueParsers\TimeParser::OPT_PRECISION,
+		$this->isoTimestampParser->getOptions()->setOption(
+			IsoTimestampParser::OPT_PRECISION,
 			$precision
 		);
 	}

@@ -2,15 +2,13 @@
 
 namespace Wikibase\Repo\Specials;
 
+use DataValues\Serializers\DataValueSerializer;
 use HttpError;
-use SiteSQLStore;
-use Wikibase\EntityFactory;
-use Wikibase\Lib\Serializers\SerializationOptions;
-use Wikibase\Lib\Serializers\SerializerFactory;
-use Wikibase\Lib\Specials\SpecialWikibasePage;
-use Wikibase\LinkedData\EntityDataRequestHandler;
-use Wikibase\LinkedData\EntityDataSerializationService;
-use Wikibase\LinkedData\EntityDataUriManager;
+use Wikibase\DataModel\SerializerFactory;
+use Wikibase\Repo\LinkedData\EntityDataFormatProvider;
+use Wikibase\Repo\LinkedData\EntityDataRequestHandler;
+use Wikibase\Repo\LinkedData\EntityDataSerializationService;
+use Wikibase\Repo\LinkedData\EntityDataUriManager;
 use Wikibase\Repo\WikibaseRepo;
 
 /**
@@ -30,13 +28,11 @@ use Wikibase\Repo\WikibaseRepo;
 class SpecialEntityData extends SpecialWikibasePage {
 
 	/**
-	 * @var EntityDataRequestHandler
+	 * @var EntityDataRequestHandler|null
 	 */
 	protected $requestHandler = null;
 
 	/**
-	 * Constructor.
-	 *
 	 * @since 0.4
 	 */
 	public function __construct() {
@@ -77,39 +73,49 @@ class SpecialEntityData extends SpecialWikibasePage {
 	private function newDefaultRequestHandler() {
 		global $wgUseSquid, $wgApiFrameOptions;
 
-		$repo = WikibaseRepo::getDefaultInstance();
+		$wikibaseRepo = WikibaseRepo::getDefaultInstance();
 
-		$entityRevisionLookup = $repo->getEntityRevisionLookup();
-		$titleLookup = $repo->getEntityTitleLookup();
-		$entityIdParser = $repo->getEntityIdParser();
+		$entityRevisionLookup = $wikibaseRepo->getEntityRevisionLookup();
+		$entityRedirectLookup = $wikibaseRepo->getStore()->getEntityRedirectLookup();
+		$titleLookup = $wikibaseRepo->getEntityTitleLookup();
+		$entityIdParser = $wikibaseRepo->getEntityIdParser();
 
-		$serializationOptions = new SerializationOptions();
+		$entityDataFormatProvider = new EntityDataFormatProvider();
 		$serializerFactory = new SerializerFactory(
-			$serializationOptions,
-			$repo->getPropertyDataTypeLookup(),
-			EntityFactory::singleton()
+			new DataValueSerializer(),
+			SerializerFactory::OPTION_SERIALIZE_MAIN_SNAKS_WITHOUT_HASH +
+			SerializerFactory::OPTION_SERIALIZE_REFERENCE_SNAKS_WITHOUT_HASH
+		);
+
+		$languageCodes = array_merge(
+				$GLOBALS['wgDummyLanguageCodes'],
+				$wikibaseRepo->getSettings()->getSetting( 'canonicalLanguageCodes' )
 		);
 
 		$serializationService = new EntityDataSerializationService(
-			$repo->getRdfBaseURI(),
+			$wikibaseRepo->getSettings()->getSetting( 'conceptBaseUri' ),
 			$this->getPageTitle()->getCanonicalURL() . '/',
-			$repo->getStore()->getEntityLookup(),
+			$wikibaseRepo->getStore()->getEntityLookup(),
 			$titleLookup,
+			$wikibaseRepo->getPropertyDataTypeLookup(),
+			$wikibaseRepo->getSiteStore()->getSites(),
+			$entityDataFormatProvider,
 			$serializerFactory,
-			$repo->getSiteStore()->getSites()
+			$wikibaseRepo->getSiteStore(),
+			$languageCodes
 		);
 
-		$maxAge = $repo->getSettings()->getSetting( 'dataSquidMaxage' );
-		$formats = $repo->getSettings()->getSetting( 'entityDataFormats' );
-		$serializationService->setFormatWhiteList( $formats );
+		$maxAge = $wikibaseRepo->getSettings()->getSetting( 'dataSquidMaxage' );
+		$formats = $wikibaseRepo->getSettings()->getSetting( 'entityDataFormats' );
+		$entityDataFormatProvider->setFormatWhiteList( $formats );
 
 		$defaultFormat = empty( $formats ) ? 'html' : $formats[0];
 
 		// build a mapping of formats to file extensions and include HTML
 		$supportedExtensions = array();
 		$supportedExtensions['html'] = 'html';
-		foreach ( $serializationService->getSupportedFormats() as $format ) {
-			$ext = $serializationService->getExtension( $format );
+		foreach ( $entityDataFormatProvider->getSupportedFormats() as $format ) {
+			$ext = $entityDataFormatProvider->getExtension( $format );
 
 			if ( $ext !== null ) {
 				$supportedExtensions[$format] = $ext;
@@ -127,7 +133,9 @@ class SpecialEntityData extends SpecialWikibasePage {
 			$titleLookup,
 			$entityIdParser,
 			$entityRevisionLookup,
+			$entityRedirectLookup,
 			$serializationService,
+			$entityDataFormatProvider,
 			$defaultFormat,
 			$maxAge,
 			$wgUseSquid,
@@ -136,14 +144,13 @@ class SpecialEntityData extends SpecialWikibasePage {
 	}
 
 	/**
-	 * Main method.
+	 * @see SpecialWikibasePage::execute
 	 *
 	 * @since 0.4
 	 *
 	 * @param string|null $subPage
 	 *
 	 * @throws HttpError
-	 * @return bool
 	 */
 	public function execute( $subPage ) {
 		$this->initDependencies();
@@ -152,12 +159,10 @@ class SpecialEntityData extends SpecialWikibasePage {
 		// TODO: Don't do this if HTML is not acceptable according to HTTP headers.
 		if ( !$this->requestHandler->canHandleRequest( $subPage, $this->getRequest() ) ) {
 			$this->showForm();
-			return true;
+			return;
 		}
 
 		$this->requestHandler->handleRequest( $subPage, $this->getRequest(), $this->getOutput() );
-
-		return true;
 	}
 
 	/**
@@ -168,4 +173,5 @@ class SpecialEntityData extends SpecialWikibasePage {
 		//      point to meta-info like schema and license, and generally be a helpful data endpoint.
 		$this->getOutput()->showErrorPage( 'wikibase-entitydata-title', 'wikibase-entitydata-text' );
 	}
+
 }

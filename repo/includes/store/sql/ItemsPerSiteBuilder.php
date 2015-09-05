@@ -1,10 +1,13 @@
 <?php
-namespace Wikibase;
 
-use MessageReporter;
-use Wikibase\SiteLinkTable;
-use Wikibase\EntityIdPager;
-use Wikibase\EntityLookup;
+namespace Wikibase\Repo\Store\SQL;
+
+use Wikibase\DataModel\Entity\ItemId;
+use Wikibase\DataModel\Services\Entity\EntityPrefetcher;
+use Wikibase\DataModel\Services\Lookup\EntityLookup;
+use Wikibase\Lib\Reporting\MessageReporter;
+use Wikibase\Lib\Store\SiteLinkTable;
+use Wikibase\Repo\Store\EntityIdPager;
 
 /**
  * Utility class for rebuilding the wb_items_per_site table.
@@ -17,42 +20,40 @@ use Wikibase\EntityLookup;
 class ItemsPerSiteBuilder {
 
 	/**
-	 * @since 0.5
-	 *
-	 * @var SiteLinkTable $siteLinkTable
+	 * @var SiteLinkTable
 	 */
-	protected $siteLinkTable;
+	private $siteLinkTable;
 
 	/**
-	 * @since 0.5
-	 *
-	 * @var EntityLookup $entityLookup
+	 * @var EntityLookup
 	 */
-	protected $entityLookup;
+	private $entityLookup;
 
 	/**
-	 * @since 0.5
-	 *
-	 * @var MessageReporter $reporter
+	 * @var EntityPrefetcher
 	 */
-	protected $reporter;
+	private $entityPrefetcher;
+
+	/**
+	 * @var MessageReporter|null
+	 */
+	private $reporter = null;
 
 	/**
 	 * The batch size, giving the number of rows to be updated in each database transaction.
-	 *
-	 * @since 0.5
-	 *
 	 * @var int
 	 */
-	protected $batchSize = 100;
+	private $batchSize = 100;
 
 	/**
 	 * @param SiteLinkTable $siteLinkTable
 	 * @param EntityLookup $entityLookup
+	 * @param EntityPrefetcher $entityPrefetcher
 	 */
-	public function __construct( SiteLinkTable $siteLinkTable, EntityLookup $entityLookup ) {
+	public function __construct( SiteLinkTable $siteLinkTable, EntityLookup $entityLookup, EntityPrefetcher $entityPrefetcher ) {
 		$this->siteLinkTable = $siteLinkTable;
 		$this->entityLookup = $entityLookup;
+		$this->entityPrefetcher = $entityPrefetcher;
 	}
 
 	/**
@@ -67,9 +68,9 @@ class ItemsPerSiteBuilder {
 	/**
 	 * Sets the reporter to use for reporting preogress.
 	 *
-	 * @param \MessageReporter $reporter
+	 * @param MessageReporter $reporter
 	 */
-	public function setReporter( \MessageReporter $reporter ) {
+	public function setReporter( MessageReporter $reporter ) {
 		$this->reporter = $reporter;
 	}
 
@@ -86,31 +87,28 @@ class ItemsPerSiteBuilder {
 			$i = $i + $this->rebuildSiteLinks( $ids );
 
 			$this->report( 'Processed ' . $i . ' entities.' );
-		};
+		}
 
 		$this->report( 'Rebuild done.' );
-
-		return true;
 	}
 
 	/**
 	 * Rebuilds EntityPerPageTable for specified pages
 	 *
-	 * @since 0.5
-	 *
-	 * @param EntityId[] $items
+	 * @param ItemId[] $itemIds
 	 *
 	 * @return int
 	 */
-	private function rebuildSiteLinks( array $entityIds ) {
+	private function rebuildSiteLinks( array $itemIds ) {
+		$this->entityPrefetcher->prefetch( $itemIds );
+
 		$c = 0;
-		foreach ( $entityIds as $entityId ) {
-			/* @var $entityId EntityId */
-			if ( !$entityId->getEntityType() === Item::ENTITY_TYPE ) {
+		foreach ( $itemIds as $itemId ) {
+			if ( !( $itemId instanceof ItemId ) ) {
 				// Just in case someone is using a EntityIdPager which doesn't filter non-Items
 				continue;
 			}
-			$item = $this->entityLookup->getEntity( $entityId );
+			$item = $this->entityLookup->getEntity( $itemId );
 
 			if ( !$item ) {
 				continue;
@@ -123,33 +121,10 @@ class ItemsPerSiteBuilder {
 
 			$c++;
 		}
-		// Wait for the slaves (just in case we eg. hit a range of ids which need a lot of writes)
-		$this->waitForSlaves();
+		// Wait for the slaves, just in case we e.g. hit a range of ids which need a lot of writes.
+		wfWaitForSlaves();
 
 		return $c;
-	}
-
-	/**
-	 * Wait for slaves (quietly)
-	 *
-	 * @todo: this should be in the Database class.
-	 * @todo: thresholds should be configurable
-	 *
-	 * @author Tim Starling (stolen from recompressTracked.php)
-	 */
-	protected function waitForSlaves() {
-		$lb = wfGetLB(); //TODO: allow foreign DB, get from $this->table
-
-		while ( true ) {
-			list( $host, $maxLag ) = $lb->getMaxLag();
-			if ( $maxLag < 2 ) {
-				break;
-			}
-
-			$this->report( "Slaves are lagged by $maxLag seconds, sleeping..." );
-			sleep( 5 );
-			$this->report( "Resuming..." );
-		}
 	}
 
 	/**
@@ -157,7 +132,7 @@ class ItemsPerSiteBuilder {
 	 *
 	 * @since 0.5
 	 *
-	 * @param $msg
+	 * @param string $msg
 	 */
 	protected function report( $msg ) {
 		if ( $this->reporter ) {

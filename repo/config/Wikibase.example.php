@@ -18,7 +18,7 @@ if ( !defined( 'WB_REPO_EXAMPLE_ENTRY' ) ) {
 
 call_user_func( function() {
 	global $wgContentHandlerUseDB, $wgExtraNamespaces, $wgWBRepoSettings;
-	global $wgDBname, $wgNamespacesToBeSearchedDefault, $wgGroupPermissions;
+	global $wgDBname, $wgNamespacesToBeSearchedDefault;
 
 	$wgContentHandlerUseDB = true;
 
@@ -48,11 +48,25 @@ call_user_func( function() {
 	// Tell MediaWIki to search the item namespace
 	$wgNamespacesToBeSearchedDefault[WB_NS_ITEM] = true;
 
-	$wgGroupPermissions['wbeditor']['item-set'] = true;
+	// the special group includes all the sites in the specialSiteLinkGroups,
+	// grouped together in a 'Pages linked to other sites' section.
+	$wgWBRepoSettings['siteLinkGroups'] = array(
+		'wikipedia',
+		'wikinews',
+		'wikiquote',
+		'wikisource',
+		'wikivoyage',
+		'special'
+	);
 
-	$wgWBRepoSettings['normalizeItemByTitlePageNames'] = true;
+	// these are the site_group codes as listed in the sites table
+	$wgWBRepoSettings['specialSiteLinkGroups'] = array( 'commons', 'wikidata' );
 } );
 
+/*
+// Include Wikibase.searchindex.php to include string and text values in the full text index:
+require_once __DIR__ . '/Wikibase.searchindex.php';
+*/
 
 /*
 // Alternative settings, using the main namespace for items.
@@ -87,14 +101,14 @@ $wgWBRepoSettings['entityNamespaces'][CONTENT_MODEL_WIKIBASE_QUERY] = WB_NS_QUER
 // user can edit everything. An other interesting alternative is to let the anonymous user
 // do everything except creating items and properties and setting rank.
 // First block sets all rights for anonymous to false, that is they have no rights.
-$wgGroupPermissions['*']['item-term']			= false;
-$wgGroupPermissions['*']['item-merge']			= false;
-$wgGroupPermissions['*']['property-term']		= false;
-$wgGroupPermissions['*']['property-create']		= false;
+$wgGroupPermissions['*']['item-term'] = false;
+$wgGroupPermissions['*']['item-merge'] = false;
+$wgGroupPermissions['*']['property-term'] = false;
+$wgGroupPermissions['*']['property-create'] = false;
 // Second block sets all rights for anonymous to true, that is they hold the rights.
-$wgGroupPermissions['user']['item-term']			= true;
-$wgGroupPermissions['user']['item-merge']			= true;
-$wgGroupPermissions['user']['property-term']		= true;
-$wgGroupPermissions['user']['property-create']		= true;
+$wgGroupPermissions['user']['item-term'] = true;
+$wgGroupPermissions['user']['item-merge'] = true;
+$wgGroupPermissions['user']['property-term'] = true;
+$wgGroupPermissions['user']['property-create'] = true;
 
 */

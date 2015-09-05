@@ -1,9 +1,19 @@
 {
 	"@metadata": {
 		"authors": [
-			"Iltever"
+			"Iltever",
+			"Macofe"
 		]
 	},
-	"wikibase-itemdisambiguation-lookup-language": "Тил:",
-	"wikibase-modifyterm-language": "Тил:"
+	"wikibase-edit": "тюрлендир",
+	"wikibase-add": "къош",
+	"wikibase-label-empty": "Эн (ат) джокъду",
+	"wikibase-description-empty": "Ачыкълау толтурулмагъанды",
+	"wikibase-statements": "Бегитиуле",
+	"wikibase-sitelinks-special": "Башха сайтла",
+	"wikibase-aliases-empty": "Альтернатив атла (синонимле) табылмалла",
+	"wikibase-statementview-rank-normal": "Нормалы ранг",
+	"wikibase-statementview-referencesheading-pendingcountersubject": "{{PLURAL:$1|къайнакъ}}",
+	"wikibase-itemdisambiguation-lookup-language": "Тил код:",
+	"wikibase-modifyterm-language": "Тил код:"
 }

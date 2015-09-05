@@ -2,7 +2,8 @@
 
 namespace Wikibase;
 
-use Wikibase\DataModel\SimpleSiteLink;
+use Wikibase\DataModel\Entity\Item;
+use Wikibase\DataModel\Entity\ItemId;
 use Wikibase\Repo\WikibaseRepo;
 
 $basePath = getenv( 'MW_INSTALL_PATH' ) !== false ? getenv( 'MW_INSTALL_PATH' ) : __DIR__ . '/../../../..';
@@ -17,7 +18,7 @@ require_once $basePath . '/maintenance/Maintenance.php';
  * @licence GNU GPL v2+
  * @author Jeroen De Dauw < jeroendedauw@gmail.com >
  */
-class CreatedBlacklistedItems extends \Maintenance {
+class CreateBlacklistedItems extends \Maintenance {
 
 	public function __construct() {
 		$this->mDescription = 'Created blacklisted items';
@@ -41,25 +42,25 @@ class CreatedBlacklistedItems extends \Maintenance {
 		};
 
 		$items = array(
-			//0 => 'Off-by-one error',
-			1 => 'Universe',
-			2 => 'Earth',
-			3 => 'Life',
-			4 => 'Death',
-			5 => 'Human',
-			8 => 'Happiness',
-			13 => 'Triskaidekaphobia',
-			23 => 'George Washington',
-			24 => 'Jack Bauer',
-			42 => 'Douglas Adams',
-			80 => 'Tim Berners-Lee',
-			666 => 'Number of the Beast',
-			1337 => 'Leet',
-			1868 => 'Paul Otlet',
-			1971 => 'Imagine (song)',
-			2001 => 'Stanley Kubrick',
-			2012 => 'Maya calendar',
-			2013 => 'Wikidata',
+			//'Q0' => 'Off-by-one error',
+			'Q1' => 'Universe',
+			'Q2' => 'Earth',
+			'Q3' => 'Life',
+			'Q4' => 'Death',
+			'Q5' => 'Human',
+			'Q8' => 'Happiness',
+			'Q13' => 'Triskaidekaphobia',
+			'Q23' => 'George Washington',
+			'Q24' => 'Jack Bauer',
+			'Q42' => 'Douglas Adams',
+			'Q80' => 'Tim Berners-Lee',
+			'Q666' => 'Number of the Beast',
+			'Q1337' => 'Leet',
+			'Q1868' => 'Paul Otlet',
+			'Q1971' => 'Imagine (song)',
+			'Q2001' => 'Stanley Kubrick',
+			'Q2012' => 'Maya calendar',
+			'Q2013' => 'Wikidata',
 		);
 
 		$report( 'Starting import...' );
@@ -67,11 +68,9 @@ class CreatedBlacklistedItems extends \Maintenance {
 		foreach ( $items as $id => $name ) {
 			$report( "   Importing $name as item $id..." );
 
-			$item = Item::newEmpty();
-
-			$item->setId( $id );
-			$item->setLabel( 'en', $name );
-			$item->addSiteLink( new SimpleSiteLink( 'enwiki', $name ) );
+			$item = new Item( new ItemId( $id ) );
+			$item->getFingerprint()->setLabel( 'en', $name );
+			$item->getSiteLinkList()->addNewSiteLink( 'enwiki', $name );
 
 			$store->saveEntity( $item, 'Import', $user, EDIT_NEW );
 		}
@@ -81,5 +80,5 @@ class CreatedBlacklistedItems extends \Maintenance {
 
 }
 
-$maintClass = 'Wikibase\CreatedBlacklistedItems';
-require_once( RUN_MAINTENANCE_IF_MAIN );
+$maintClass = 'Wikibase\CreateBlacklistedItems';
+require_once RUN_MAINTENANCE_IF_MAIN;

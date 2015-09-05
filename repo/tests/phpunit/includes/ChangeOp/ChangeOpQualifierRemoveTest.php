@@ -5,11 +5,10 @@ namespace Wikibase\Test;
 use DataValues\StringValue;
 use InvalidArgumentException;
 use Wikibase\ChangeOp\ChangeOpQualifierRemove;
-use Wikibase\DataModel\Claim\Claim;
-use Wikibase\DataModel\Claim\Claims;
-use Wikibase\DataModel\Entity\Entity;
+use Wikibase\DataModel\Entity\Item;
+use Wikibase\DataModel\Entity\ItemId;
 use Wikibase\DataModel\Snak\PropertyValueSnak;
-use Wikibase\ItemContent;
+use Wikibase\DataModel\Statement\Statement;
 
 /**
  * @covers Wikibase\ChangeOp\ChangeOpQualifierRemove
@@ -35,55 +34,51 @@ class ChangeOpQualifierRemoveTest extends \PHPUnit_Framework_TestCase {
 	 * @dataProvider invalidConstructorProvider
 	 * @expectedException InvalidArgumentException
 	 */
-	public function testInvalidConstruct( $claimGuid, $snakHash ) {
-		new ChangeOpQualifierRemove( $claimGuid, $snakHash );
+	public function testInvalidConstruct( $guid, $snakHash ) {
+		new ChangeOpQualifierRemove( $guid, $snakHash );
 	}
 
 	public function changeOpRemoveProvider() {
 		$snak = new PropertyValueSnak( 2754236, new StringValue( 'test' ) );
 		$args = array();
 
-		$item = $this->provideNewItemWithClaim( 'q345', $snak );
-		$claims = $item->getClaims();
-		/** @var Claim $claim */
-		$claim = reset( $claims );
-		$claimGuid = $claim->getGuid();
+		$item = $this->newItemWithClaim( 'q345', $snak );
+		$statements = $item->getStatements()->toArray();
+		/** @var Statement $statement */
+		$statement = reset( $statements );
+		$guid = $statement->getGuid();
 		$newQualifier = new PropertyValueSnak( 78462378, new StringValue( 'newQualifier' ) );
-		$qualifiers = $claim->getQualifiers();
-		$qualifiers->addSnak( $newQualifier );
-		$claim->setQualifiers( $qualifiers );
-		$item->setClaims( new Claims( $claims ) );
+		$statement->getQualifiers()->addSnak( $newQualifier );
 		$snakHash = $newQualifier->getHash();
-		$changeOp = new ChangeOpQualifierRemove( $claimGuid, $snakHash );
-		$args[] = array ( $item, $changeOp, $snakHash );
+		$changeOp = new ChangeOpQualifierRemove( $guid, $snakHash );
+		$args[] = array( $item, $changeOp, $snakHash );
 
 		return $args;
 	}
 
 	/**
 	 * @dataProvider changeOpRemoveProvider
-	 *
-	 * @param Entity $item
-	 * @param ChangeOpQualifierRemove $changeOp
-	 * @param string $snakHash
 	 */
-	public function testApplyRemoveQualifier( $item, $changeOp, $snakHash ) {
+	public function testApplyRemoveQualifier( Item $item, ChangeOpQualifierRemove $changeOp, $snakHash ) {
 		$this->assertTrue( $changeOp->apply( $item ), "Applying the ChangeOp did not return true" );
-		$claims = new Claims( $item->getClaims() );
-		/** @var Claim $claim */
-		$claim = reset( $claims );
-		$qualifiers = $claim->getQualifiers();
+		$statements = $item->getStatements()->toArray();
+		/** @var Statement $statement */
+		$statement = reset( $statements );
+		$qualifiers = $statement->getQualifiers();
 		$this->assertFalse( $qualifiers->hasSnakHash( $snakHash ), "Qualifier still exists" );
 	}
 
-	protected function provideNewItemWithClaim( $itemId, $snak ) {
-		$entity = ItemContent::newFromArray( array( 'entity' => $itemId ) )->getEntity();
-		$claim = $entity->newClaim( $snak );
-		$claim->setGuid( $entity->getId()->getPrefixedId() . '$D8404CDA-25E4-4334-AG03-A3290BCD9CQP' );
-		$claims = new Claims();
-		$claims->addClaim( $claim );
-		$entity->setClaims( $claims );
-		return $entity;
+	private function newItemWithClaim( $itemIdString, $snak ) {
+		$item = new Item( new ItemId( $itemIdString ) );
+
+		$item->getStatements()->addNewStatement(
+			$snak,
+			null,
+			null,
+			$itemIdString . '$D8404CDA-25E4-4334-AG03-A3290BCD9CQP'
+		);
+
+		return $item;
 	}
 
-} 
+}

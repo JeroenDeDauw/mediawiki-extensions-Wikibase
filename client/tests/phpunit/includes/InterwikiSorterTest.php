@@ -1,6 +1,6 @@
 <?php
 
-namespace Wikibase\Test;
+namespace Wikibase\Client\Tests;
 
 use Wikibase\InterwikiSorter;
 
@@ -72,6 +72,41 @@ class InterwikiSorterTest extends \PHPUnit_Framework_TestCase {
 			array(
 				array( 'ja', 'de', 'pt', 'en', 'hu' ), 'mycustomorder', $sortOrders, array(),
 				$sortOrders['mycustomorder']
+			),
+			array(
+				array( 'x2', 'x1', 'x3' ),
+				'alphabetic',
+				array( 'alphabetic' => array() ),
+				array(),
+				array( 'x1', 'x2', 'x3' )
+			),
+			array(
+				array( 'x2', 'x1', 'en', 'de', 'a2', 'a1' ),
+				'alphabetic',
+				$sortOrders,
+				array(),
+				array( 'de', 'en', 'a1', 'a2', 'x1', 'x2' )
+			),
+			array(
+				array( 'f', 'd', 'b', 'a', 'c', 'e' ),
+				'alphabetic',
+				array( 'alphabetic' => array( 'c', 'a' ) ),
+				array( 'e' ),
+				array( 'e', 'c', 'a', 'b', 'd', 'f' )
+			),
+			'Strict code order' => array(
+				array( 'f', 'd', 'b', 'a', 'c', 'e' ),
+				'code',
+				array( 'alphabetic' => array( 'c', 'a' ) ), // this should be ignored
+				array( 'e' ), // prepend
+				array( 'e', 'a', 'b', 'c', 'd', 'f' )
+			),
+			array(
+				array( 'a', 'b', 'k', 'x' ),
+				'alphabetic',
+				array( 'alphabetic' => array( 'x', 'k', 'a' ) ),
+				array(),
+				array( 'x', 'k', 'a', 'b' )
 			),
 		);
 	}

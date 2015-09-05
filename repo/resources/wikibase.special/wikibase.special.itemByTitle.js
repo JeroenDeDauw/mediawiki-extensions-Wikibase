@@ -15,23 +15,25 @@
 		}
 
 		// this will build a drop-down for the language selection:
-		var siteList = [];
-		for ( var siteId in wb.getSites() ) {
-			var site = wb.getSite( siteId );
-			siteList.push( {
-				'label': site.getName() + ' (' + site.getId() + ')',
-				'value': site.getName() + ' (' + site.getId() + ')'
-			} );
+		var sites = wb.sites.getSites(),
+			siteList = [];
+		for( var siteId in sites ) {
+			if( sites.hasOwnProperty( siteId ) ) {
+				siteList.push( sites[ siteId ].getName() + ' (' + siteId + ')' );
+			}
 		}
-		$( '#wb-itembytitle-sitename' ).suggester( { 'source': siteList } );
+		$( '#wb-itembytitle-sitename' )
+		.attr( 'autocomplete', 'off' )
+		.suggester( { source: siteList } );
 		// Hackety hack hack...
 		// On submit, replace human readable value like "English (en)" with actual sitename ("enwiki")
 		$( '#wb-itembytitle-form1' ).submit( function() {
-			var langID = String( $( '#wb-itembytitle-sitename' ).val().replace(/.*\(|\).*/gi,'') );
-			if ( wb._siteList[langID].getId() !== undefined ) {
-				$( '#wb-itembytitle-sitename' ).val( wb._siteList[langID].getId() );
+			var $input = $( '#wb-itembytitle-sitename' );
+			var langID = String( $input.val().replace( /.*\(|\).*/gi, '' ) );
+			if ( wb.sites.getSite( langID ).getId() !== undefined ) {
+				$input.val( wb.sites.getSite( langID ).getId() );
 			}
-		});
+		} );
 	} );
 
 } )( jQuery, mediaWiki, wikibase );

@@ -2,11 +2,14 @@
 
 namespace Wikibase\Test;
 
-use Wikibase\DataModel\SimpleSiteLink;
-use Wikibase\Item;
-use Wikibase\Repo\WikibaseRepo;
+use Wikibase\DataModel\Entity\EntityDocument;
+use Wikibase\DataModel\Entity\Item;
+use Wikibase\DataModel\Entity\ItemId;
+use Wikibase\DataModel\Term\AliasGroupList;
+use Wikibase\DataModel\Term\Fingerprint;
+use Wikibase\DataModel\Term\TermList;
 use Wikibase\StringNormalizer;
-use Wikibase\Term;
+use Wikibase\TermIndexEntry;
 use Wikibase\TermSqlIndex;
 
 /**
@@ -24,7 +27,7 @@ use Wikibase\TermSqlIndex;
  */
 class TermSqlIndexTest extends TermIndexTest {
 
-	public function setUp() {
+	protected function setUp() {
 		parent::setUp();
 
 		$this->tablesUsed[] = 'wb_terms';
@@ -52,31 +55,17 @@ class TermSqlIndexTest extends TermIndexTest {
 
 	/**
 	 * @dataProvider termProvider
-	 * @param $languageCode
-	 * @param $termText
-	 * @param $searchText
-	 * @param boolean $matches
 	 */
 	public function testGetMatchingTerms2( $languageCode, $termText, $searchText, $matches ) {
-		$withoutTermSearchKey = WikibaseRepo::getDefaultInstance()->
-			getSettings()->getSetting( 'withoutTermSearchKey' );
-
-		if ( $withoutTermSearchKey ) {
-			$this->markTestSkipped( "can't test search key if withoutTermSearchKey option is set." );
-		}
-
 		$termIndex = $this->getTermIndex();
-
 		$termIndex->clear();
 
-		$item = Item::newEmpty();
-		$item->setId( 42 );
-
+		$item = new Item( new ItemId( 'Q42' ) );
 		$item->setLabel( $languageCode, $termText );
 
 		$termIndex->saveTermsOfEntity( $item );
 
-		$term = new Term();
+		$term = new TermIndexEntry();
 		$term->setLanguage( $languageCode );
 		$term->setText( $searchText );
 
@@ -84,7 +73,8 @@ class TermSqlIndexTest extends TermIndexTest {
 			'caseSensitive' => false,
 		);
 
-		$obtainedTerms = $termIndex->getMatchingTerms( array( $term ), Term::TYPE_LABEL, Item::ENTITY_TYPE, $options );
+		//FIXME: test with arrays for term types and entity types!
+		$obtainedTerms = $termIndex->getMatchingTerms( array( $term ), TermIndexEntry::TYPE_LABEL, Item::ENTITY_TYPE, $options );
 
 		$this->assertEquals( $matches ? 1 : 0, count( $obtainedTerms ) );
 
@@ -96,168 +86,127 @@ class TermSqlIndexTest extends TermIndexTest {
 	}
 
 	/**
-	 * @dataProvider termProvider
-	 * @param $languageCode
-	 * @param $termText
-	 * @param $searchText
-	 * @param boolean $matches
+	 * @dataProvider labelWithDescriptionConflictProvider
 	 */
-	public function testGetMatchingTermsWeights( $languageCode, $termText, $searchText, $matches ) {
-		$termIndex = $this->getTermIndex();
+	public function testGetLabelWithDescriptionConflicts(
+		array $entities,
+		$entityType,
+		array $labels,
+		array $descriptions,
+		array $expected
+	) {
+		$this->markTestSkippedOnMySql();
 
-		if ( !$termIndex->supportsWeight() ) {
-			$this->markTestSkipped( "can't test search weight if withoutTermWeight option is set." );
-		}
+		parent::testGetLabelWithDescriptionConflicts( $entities, $entityType, $labels, $descriptions, $expected );
+	}
 
-		$termIndex->clear();
-
-		$item1 = Item::newEmpty();
-		$item1->setId( 42 );
-
-		$item1->setLabel( $languageCode, $termText );
-		$item1->addSiteLink( new SimpleSiteLink( 'enwiki', 'A' ) );
-
-		$termIndex->saveTermsOfEntity( $item1 );
-
-		$item2 = Item::newEmpty();
-		$item2->setId( 23 );
-
-		$item2->setLabel( $languageCode, $termText );
-		$item2->addSiteLink( new SimpleSiteLink( 'enwiki', 'B' ) );
-		$item2->addSiteLink( new SimpleSiteLink( 'dewiki', 'B' ) );
-		$item2->addSiteLink( new SimpleSiteLink( 'hrwiki', 'B' ) );
-		$item2->addSiteLink( new SimpleSiteLink( 'uzwiki', 'B' ) );
-
-		$termIndex->saveTermsOfEntity( $item2 );
-
-		$item3 = Item::newEmpty();
-		$item3->setId( 108 );
-
-		$item3->setLabel( $languageCode, $termText );
-		$item3->addSiteLink( new SimpleSiteLink( 'hrwiki', 'C' ) );
-		$item3->addSiteLink( new SimpleSiteLink( 'uzwiki', 'C' ) );
-
-		$termIndex->saveTermsOfEntity( $item3 );
-
-		$term = new Term();
-		$term->setLanguage( $languageCode );
-		$term->setText( $searchText );
-
-		$options = array(
-			'caseSensitive' => false,
+	public function getMatchingTermsOptionsProvider() {
+		$labels = array(
+			'en' => new \Wikibase\DataModel\Term\Term( 'en', 'Foo' ),
+			'de' => new \Wikibase\DataModel\Term\Term( 'de', 'Fuh' ),
 		);
 
-		$obtainedIDs = $termIndex->getMatchingIDs( array( $term ), Item::ENTITY_TYPE, $options );
+		$descriptions = array(
+			'en' => new \Wikibase\DataModel\Term\Term( 'en', 'Bar' ),
+			'de' => new \Wikibase\DataModel\Term\Term( 'de', 'Bär' ),
+		);
 
-		$this->assertEquals( $matches ? 3 : 0, count( $obtainedIDs ) );
+		$fingerprint = new Fingerprint(
+			new TermList( $labels ),
+			new TermList( $descriptions ),
+			new AliasGroupList()
+		);
 
-		if ( $matches ) {
-			$expectedResult = array( $item2->getId(), $item3->getId(), $item1->getId() );
-			$this->assertArrayEquals( $expectedResult, $obtainedIDs, true );
-		}
+		$labelFooEn = new TermIndexEntry( array(
+			'termType' => TermIndexEntry::TYPE_LABEL,
+			'termLanguage' => 'en',
+			'termText' => 'Foo',
+		) );
+		$descriptionBarEn = new TermIndexEntry( array(
+			'termType' => TermIndexEntry::TYPE_DESCRIPTION,
+			'termLanguage' => 'en',
+			'termText' => 'Bar',
+		) );
+
+		return array(
+			'no options' => array(
+				$fingerprint,
+				array( $labelFooEn ),
+				array(),
+				array( $labelFooEn ),
+			),
+			'LIMIT options' => array(
+				$fingerprint,
+				array( $labelFooEn, $descriptionBarEn ),
+				array( 'LIMIT' => 1 ),
+				// This is not really well defined. Could be either of the two.
+				// So use null to show we want something but don't know what it is
+				array( null ),
+			)
+		);
 	}
 
 	/**
-	 * @dataProvider termProvider
-	 * @param $languageCode
-	 * @param $termText
-	 * @param $searchText
-	 * @param boolean $matches
+	 * @dataProvider getMatchingTermsOptionsProvider
+	 *
+	 * @param Fingerprint $fingerprint
+	 * @param TermIndexEntry[] $queryTerms
+	 * @param array $options
+	 * @param TermIndexEntry[] $expected
 	 */
-	public function testPrefixSearch( $languageCode, $termText, $searchText, $matches ) {
+	public function testGetMatchingTerms_options( Fingerprint $fingerprint, array $queryTerms, array $options, array $expected ) {
 		$termIndex = $this->getTermIndex();
-
 		$termIndex->clear();
 
-		$item1 = Item::newEmpty();
-		$item1->setId( 42 );
+		$item = new Item( new ItemId( 'Q42' ) );
+		$item->setFingerprint( $fingerprint );
 
-		$item1->setLabel( $languageCode, $termText );
+		$termIndex->saveTermsOfEntity( $item );
 
-		$termIndex->saveTermsOfEntity( $item1 );
+		$actual = $termIndex->getMatchingTerms( $queryTerms, null, null, $options );
 
-		$term = new Term();
-		$term->setLanguage( $languageCode );
-		$term->setText( substr( $termText, 0, -1 ) ); //last character stripped
+		$this->assertSameSize( $expected, $actual );
 
-		$options = array(
-			'caseSensitive' => false,
-			'prefixSearch' => true,
-		);
-
-		$obtainedIDs = $termIndex->getMatchingIDs( array( $term ), Item::ENTITY_TYPE, $options );
-
-		$this->assertNotEmpty( $obtainedIDs );
+		foreach ( $expected as $key => $expectedTerm ) {
+			$this->assertArrayHasKey( $key, $actual );
+			if ( $expectedTerm instanceof TermIndexEntry ) {
+				$actualTerm = $actual[$key];
+				$this->assertEquals( $expectedTerm->getType(), $actualTerm->getType(), 'termType' );
+				$this->assertEquals( $expectedTerm->getLanguage(), $actualTerm->getLanguage(), 'termLanguage' );
+				$this->assertEquals( $expectedTerm->getText(), $actualTerm->getText(), 'termText' );
+			}
+		}
 	}
 
-	/**
-	 * @dataProvider termProvider
-	 * @param $languageCode
-	 * @param $termText
-	 * @param $searchText
-	 * @param boolean $matches
-	 */
-	public function testPrefixSearchQuoting( $languageCode, $termText, $searchText, $matches ) {
-		$termIndex = $this->getTermIndex();
-
-		$termIndex->clear();
-
-		$item1 = Item::newEmpty();
-		$item1->setId( 42 );
-
-		$item1->setLabel( $languageCode, $termText );
-
-		$termIndex->saveTermsOfEntity( $item1 );
-
-		$term = new Term();
-		$term->setLanguage( $languageCode );
-		$term->setText( '%' . $termText ); //must be used as a character and no LIKE placeholder
-
-		$options = array(
-			'caseSensitive' => false,
-			'prefixSearch' => true,
-		);
-
-		$obtainedIDs = $termIndex->getMatchingIDs( array( $term ), Item::ENTITY_TYPE, $options );
-
-		$this->assertEmpty( $obtainedIDs );
-	}
-
-	public static function provideGetSearchKey() {
+	public function provideGetSearchKey() {
 		return array(
 			array( // #0
 				'foo', // raw
-				'en',  // lang
 				'foo', // normalized
 			),
 
 			array( // #1
 				'  foo  ', // raw
-				'en',  // lang
 				'foo', // normalized
 			),
 
 			array( // #2: lower case of non-ascii character
 				'ÄpFEl', // raw
-				'de',    // lang
 				'äpfel', // normalized
 			),
 
 			array( // #3: lower case of decomposed character
 				"A\xCC\x88pfel", // raw
-				'de',    // lang
 				'äpfel', // normalized
 			),
 
 			array( // #4: lower case of cyrillic character
 				'Берлин', // raw
-				'ru',     // lang
 				'берлин', // normalized
 			),
 
 			array( // #5: lower case of greek character
 				'Τάχιστη', // raw
-				'he',      // lang
 				'τάχιστη', // normalized
 			),
 
@@ -266,7 +215,6 @@ class TermSqlIndexTest extends TermIndexTest {
 				// RTLM: U+200F \xE2\x80\x8F
 				// PSEP: U+2029 \xE2\x80\xA9
 				"\xE2\x80\x8F\xE2\x80\x8Cfoo\xE2\x80\x8Cbar\xE2\x80\xA9", // raw
-				'en',      // lang
 				"foo bar", // normalized
 			),
 		);
@@ -275,11 +223,71 @@ class TermSqlIndexTest extends TermIndexTest {
 	/**
 	 * @dataProvider provideGetSearchKey
 	 */
-	public function testGetSearchKey( $raw, $lang, $normalized ) {
+	public function testGetSearchKey( $raw, $normalized ) {
 		$index = $this->getTermIndex();
 
-		$key = $index->getSearchKey( $raw, $lang );
+		$key = $index->getSearchKey( $raw );
 		$this->assertEquals( $normalized, $key );
+	}
+
+	/**
+	 * @dataProvider getEntityTermsProvider
+	 */
+	public function testGetEntityTerms( $expectedTerms, EntityDocument $entity ) {
+		$termIndex = $this->getTermIndex();
+		$wikibaseTerms = $termIndex->getEntityTerms( $entity );
+
+		$this->assertEquals( $expectedTerms, $wikibaseTerms );
+	}
+
+	public function getEntityTermsProvider() {
+		$fingerprint = new Fingerprint();
+		$fingerprint->setLabel( 'en', 'kittens!!!:)' );
+		$fingerprint->setDescription( 'es', 'es un gato!' );
+		$fingerprint->setAliasGroup( 'en', array( 'kitten-alias' ) );
+
+		$item = new Item( new ItemId( 'Q999' ) );
+		$item->setFingerprint( $fingerprint );
+
+		$expectedTerms = array(
+			new TermIndexEntry( array(
+				'entityId' => 999,
+				'entityType' => 'item',
+				'termText' => 'es un gato!',
+				'termLanguage' => 'es',
+				'termType' => 'description'
+			) ),
+			new TermIndexEntry( array(
+				'entityId' => 999,
+				'entityType' => 'item',
+				'termText' => 'kittens!!!:)',
+				'termLanguage' => 'en',
+				'termType' => 'label'
+			) ),
+			new TermIndexEntry( array(
+				'entityId' => 999,
+				'entityType' => 'item',
+				'termText' => 'kitten-alias',
+				'termLanguage' => 'en',
+				'termType' => 'alias'
+			) )
+		);
+
+		return array(
+			array( $expectedTerms, $item ),
+			array( array(), new Item() ),
+			array( array(), $this->getMock( 'Wikibase\DataModel\Entity\EntityDocument' ) )
+		);
+	}
+
+	/**
+	 * @see http://bugs.mysql.com/bug.php?id=10327
+	 * @see EditEntityTest::markTestSkippedOnMySql
+	 */
+	private function markTestSkippedOnMySql() {
+		if ( $this->db->getType() === 'mysql' ) {
+			$this->markTestSkipped( 'MySQL doesn\'t support self-joins on temporary tables' );
+		}
 	}
 
 }

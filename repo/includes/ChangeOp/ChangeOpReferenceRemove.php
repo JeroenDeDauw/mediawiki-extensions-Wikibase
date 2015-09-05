@@ -4,11 +4,10 @@ namespace Wikibase\ChangeOp;
 
 use InvalidArgumentException;
 use ValueValidators\Result;
-use Wikibase\DataModel\Claim\Claims;
-use Wikibase\DataModel\Claim\Statement;
 use Wikibase\DataModel\Entity\Entity;
-use Wikibase\DataModel\References;
+use Wikibase\DataModel\ReferenceList;
 use Wikibase\DataModel\Snak\Snak;
+use Wikibase\DataModel\Statement\StatementListHolder;
 use Wikibase\Summary;
 
 /**
@@ -25,7 +24,7 @@ class ChangeOpReferenceRemove extends ChangeOpBase {
 	 *
 	 * @var string
 	 */
-	protected $claimGuid;
+	protected $statementGuid;
 
 	/**
 	 * @since 0.5
@@ -39,21 +38,21 @@ class ChangeOpReferenceRemove extends ChangeOpBase {
 	 *
 	 * @since 0.5
 	 *
-	 * @param string $claimGuid
+	 * @param string $statementGuid
 	 * @param string $referenceHash
 	 *
 	 * @throws InvalidArgumentException
 	 */
-	public function __construct( $claimGuid, $referenceHash ) {
-		if ( !is_string( $claimGuid ) || $claimGuid === '' ) {
-			throw new InvalidArgumentException( '$claimGuid needs to be a string and must not be empty' );
+	public function __construct( $statementGuid, $referenceHash ) {
+		if ( !is_string( $statementGuid ) || $statementGuid === '' ) {
+			throw new InvalidArgumentException( '$statementGuid needs to be a string and must not be empty' );
 		}
 
 		if ( !is_string( $referenceHash ) || $referenceHash === '' ) {
 			throw new InvalidArgumentException( '$referenceHash needs to be a string and must not be empty' );
 		}
 
-		$this->claimGuid = $claimGuid;
+		$this->statementGuid = $statementGuid;
 		$this->referenceHash = $referenceHash;
 	}
 
@@ -61,37 +60,39 @@ class ChangeOpReferenceRemove extends ChangeOpBase {
 	 * @see ChangeOp::apply()
 	 */
 	public function apply( Entity $entity, Summary $summary = null ) {
-		$claims = new Claims( $entity->getClaims() );
-		if( !$claims->hasClaimWithGuid( $this->claimGuid ) ) {
-			throw new ChangeOpException( "Entity does not have claim with GUID $this->claimGuid" );
+		if ( !( $entity instanceof StatementListHolder ) ) {
+			throw new InvalidArgumentException( '$entity must be a StatementListHolder' );
 		}
 
-		$claim = $claims->getClaimWithGuid( $this->claimGuid );
-		if ( ! ( $claim instanceof Statement ) ) {
-			throw new ChangeOpException( 'The referenced claim is not a statement and thus cannot have references' );
+		$statements = $entity->getStatements();
+		$statement = $statements->getFirstStatementWithGuid( $this->statementGuid );
+
+		if ( $statement === null ) {
+			throw new ChangeOpException( "Entity does not have claim with GUID $this->statementGuid" );
 		}
 
-		$references = $claim->getReferences();
+		$references = $statement->getReferences();
 		$this->removeReference( $references, $summary );
 
 		if ( $summary !== null ) {
-			$summary->addAutoSummaryArgs( $this->getSnakSummaryArgs( $claim->getMainSnak() ) );
+			$summary->addAutoSummaryArgs( $this->getSnakSummaryArgs( $statement->getMainSnak() ) );
 		}
 
-		$claim->setReferences( $references );
-		$entity->setClaims( $claims );
+		$statement->setReferences( $references );
+		$entity->setStatements( $statements );
+
 		return true;
 	}
 
 	/**
 	 * @since 0.4
 	 *
-	 * @param References $references
+	 * @param ReferenceList $references
 	 * @param Summary $summary
 	 *
 	 * @throws ChangeOpException
 	 */
-	protected function removeReference( References $references, Summary $summary = null ) {
+	protected function removeReference( ReferenceList $references, Summary $summary = null ) {
 		if ( !$references->hasReferenceHash( $this->referenceHash ) ) {
 			throw new ChangeOpException( "Reference with hash $this->referenceHash does not exist" );
 		}
@@ -111,7 +112,7 @@ class ChangeOpReferenceRemove extends ChangeOpBase {
 	protected function getSnakSummaryArgs( Snak $snak ) {
 		$propertyId = $snak->getPropertyId();
 
-		return array( array( $propertyId->getPrefixedId() => $snak ) );
+		return array( array( $propertyId->getSerialization() => $snak ) );
 	}
 
 	/**

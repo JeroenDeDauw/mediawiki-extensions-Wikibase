@@ -17,25 +17,42 @@
 		.hide()
 		.after( $spinner );
 
-		mw.loader.using(
-			'jquery.wikibase.linkitem',
+		mw.loader.using( [
+				'jquery.wikibase.linkitem',
+				'mediawiki.Title',
+				'mw.config.values.wbRepo',
+				'wikibase.client.getMwApiForRepo'
+			],
 			function() {
 				$spinner.remove();
 
+				var repoConfig = mw.config.get( 'wbRepo' );
+
 				$linkItemLink
 				.show()
-				.linkitem();
+				.linkitem( {
+					mwApiForRepo: wikibase.client.getMwApiForRepo(),
+					pageTitle: ( new mw.Title(
+						mw.config.get( 'wgPageName' )
+					) ).getPrefixedText(),
+					globalSiteId: mw.config.get( 'wbCurrentSite' ).globalSiteId,
+					namespaceNumber: mw.config.get( 'wgNamespaceNumber' ),
+					repoArticlePath: repoConfig.url + repoConfig.articlePath,
+					langLinkSiteGroup: mw.config.get( 'wbCurrentSite' ).langLinkSiteGroup
+				} );
 
 				var widgetName = $linkItemLink.data( 'linkitem' ).widgetName;
 
 				$linkItemLink
 				.on( 'linkitemdialogclose.' + widgetName, function( event ) {
-					$linkItemLink.data( 'linkitem' ).destroy();
+					$linkItemLink
+					.off( '.' + widgetName )
+					.data( 'linkitem' ).destroy();
 				} )
 				.on( 'linkitemsuccess.' + widgetName, function( event ) {
 					// Don't reshow the "Add links" link but reload the page on dialog close:
 					$linkItemLink
-					.off( 'linkitemdialogclose' )
+					.off( '.' + widgetName )
 					.on( 'linkitemdialogclose.' + widgetName, function() {
 						window.location.reload( true );
 					} );
@@ -56,23 +73,14 @@
 	$( document ).ready( function() {
 		if ( !$.support.cors ) {
 			// This will fail horribly w/o CORS support on WMF-like setups (different domains for repo and client)
+			// Just leave the no-JS edit link in place.
 			return;
 		}
 
-		$( '.wb-langlinks-edit, .wb-langlinks-add' ).eq( 0 )
-		.empty()
-		.append(
-			$( '<a>' )
-			.attr( {
-				href: '#',
-				id: 'wbc-linkToItem-link'
-			} )
-			.text( mw.msg( 'wikibase-linkitem-addlinks' ) )
-			.click( function( event ) {
-				event.preventDefault();
-				initLinkItem( this );
-			} )
-		);
-		$( '#p-lang' ).show();
+		$( '.wb-langlinks-link > a' ).eq( 0 )
+		.click( function( event ) {
+			event.preventDefault();
+			initLinkItem( this );
+		} );
 	} );
 } )( mediaWiki, jQuery );

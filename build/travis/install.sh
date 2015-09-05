@@ -2,29 +2,48 @@
 
 set -x
 
+PHPVERSION=`phpenv version-name`
+
+if [ "${PHPVERSION}" = 'hhvm' ]
+then
+	PHPINI=/etc/hhvm/php.ini
+	echo "hhvm.enable_zend_compat = true" >> $PHPINI
+fi
+
 originalDirectory=$(pwd)
 
 cd ..
 
-wget https://github.com/wikimedia/mediawiki-core/archive/$MW.tar.gz
+wget https://github.com/wikimedia/mediawiki/archive/$MW.tar.gz
 tar -zxf $MW.tar.gz
-mv mediawiki-core-$MW phase3
+mv mediawiki-$MW phase3
 
 cd phase3
+composer self-update
+composer install
 
-git checkout $MW
+# Try composer install again... this tends to fail from time to time
+if [ $? -gt 0 ]; then
+	composer install
+fi
 
 mysql -e 'create database its_a_mw;'
 php maintenance/install.php --dbtype $DBTYPE --dbuser root --dbname its_a_mw --dbpath $(pwd) --pass nyan TravisWiki admin
 
 cd extensions
 
-git clone https://gerrit.wikimedia.org/r/p/mediawiki/extensions/Scribunto.git --depth 1
+if [ "$WB" != "repo" ]; then
+	git clone https://gerrit.wikimedia.org/r/p/mediawiki/extensions/Scribunto.git --depth 1
+fi
+git clone https://gerrit.wikimedia.org/r/mediawiki/extensions/cldr --depth 1
 
 cp -r $originalDirectory Wikibase
 
 cd Wikibase
 
-composer self-update
-composer require 'phpunit/phpunit=3.7.*' --prefer-source
 composer install --prefer-source
+
+# Try composer install again... this tends to fail from time to time
+if [ $? -gt 0 ]; then
+	composer install --prefer-source
+fi

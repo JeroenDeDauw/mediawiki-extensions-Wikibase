@@ -1,9 +1,9 @@
 <?php
 
-namespace Wikibase\Test\Api;
+namespace Wikibase\Test\Repo\Api;
 
 /**
- * @covers Wikibase\Api\SetDescription
+ * @covers Wikibase\Repo\Api\SetDescription
  *
  * @group Database
  * @group medium
@@ -23,12 +23,12 @@ class SetDescriptionTest extends ModifyTermTestCase {
 
 	private static $hasSetup;
 
-	public function setUp() {
+	protected function setUp() {
 		parent::setUp();
 
 		self::$testAction = 'wbsetdescription';
 
-		if( !isset( self::$hasSetup ) ){
+		if ( !isset( self::$hasSetup ) ) {
 			$this->initTestEntities( array( 'Empty' ) );
 		}
 		self::$hasSetup = true;
@@ -37,14 +37,15 @@ class SetDescriptionTest extends ModifyTermTestCase {
 	/**
 	 * @dataProvider provideData
 	 */
-	public function testSetDescription( $params, $expected ){
-		self::doTestSetTerm( 'descriptions' ,$params, $expected );
+	public function testSetDescription( $params, $expected ) {
+		self::doTestSetTerm( 'descriptions', $params, $expected );
 	}
 
 	/**
 	 * @dataProvider provideExceptionData
 	 */
-	public function testSetDescriptionExceptions( $params, $expected ){
+	public function testSetDescriptionExceptions( $params, $expected ) {
 		self::doTestSetTermExceptions( $params, $expected );
 	}
+
 }

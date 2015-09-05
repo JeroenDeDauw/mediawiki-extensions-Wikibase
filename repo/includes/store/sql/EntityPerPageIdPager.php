@@ -1,6 +1,10 @@
 <?php
 
-namespace Wikibase;
+namespace Wikibase\Repo\Store\SQL;
+
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\Repo\Store\EntityIdPager;
+use Wikibase\Repo\Store\EntityPerPage;
 
 /**
  * EntityPerPageIdPager is a cursor for iterating over batches of EntityIds from an
@@ -27,12 +31,19 @@ class EntityPerPageIdPager implements EntityIdPager {
 	protected $position = null;
 
 	/**
+	 * @var mixed
+	 */
+	private $redirectMode;
+
+	/**
 	 * @param EntityPerPage $entityPerPage
 	 * @param null|string $entityType The desired entity type, or null for any type.
+	 * @param mixed $redirectMode A EntityPerPage::XXX_REDIRECTS constant (default is NO_REDIRECTS).
 	 */
-	public function __construct( EntityPerPage $entityPerPage, $entityType = null ) {
+	public function __construct( EntityPerPage $entityPerPage, $entityType = null, $redirectMode = EntityPerPage::NO_REDIRECTS ) {
 		$this->entityPerPage = $entityPerPage;
 		$this->entityType = $entityType;
+		$this->redirectMode = $redirectMode;
 	}
 
 	/**
@@ -51,7 +62,7 @@ class EntityPerPageIdPager implements EntityIdPager {
 	 * be empty if there are no more entities to list from the given offset.
 	 */
 	public function fetchIds( $limit ) {
-		$ids = $this->entityPerPage->listEntities( $this->entityType, $limit, $this->position );
+		$ids = $this->entityPerPage->listEntities( $this->entityType, $limit, $this->position, $this->redirectMode );
 
 		if ( !empty( $ids ) ) {
 			$this->position = end( $ids );
@@ -60,4 +71,5 @@ class EntityPerPageIdPager implements EntityIdPager {
 
 		return $ids;
 	}
+
 }

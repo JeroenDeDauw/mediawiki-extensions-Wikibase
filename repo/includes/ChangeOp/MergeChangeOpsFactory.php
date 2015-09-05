@@ -3,8 +3,9 @@
 namespace Wikibase\ChangeOp;
 
 use InvalidArgumentException;
+use SiteLookup;
 use Wikibase\DataModel\Entity\Item;
-use Wikibase\Validators\EntityConstraintProvider;
+use Wikibase\Repo\Validators\EntityConstraintProvider;
 
 /**
  * Factory for ChangeOps that merge Items.
@@ -20,21 +21,34 @@ class MergeChangeOpsFactory {
 	private $constraintProvider;
 
 	/**
+	 * @var ChangeOpFactoryProvider
+	 */
+	private $factoryProvider;
+
+	/**
+	 * @var SiteLookup
+	 */
+	private $siteLookup;
+
+	/**
 	 * @param EntityConstraintProvider $constraintProvider
 	 * @param ChangeOpFactoryProvider $factoryProvider
+	 * @param SiteLookup $siteLookup
 	 */
 	public function __construct(
 		EntityConstraintProvider $constraintProvider,
-		ChangeOpFactoryProvider $factoryProvider
+		ChangeOpFactoryProvider $factoryProvider,
+		SiteLookup $siteLookup
 	) {
 		$this->constraintProvider = $constraintProvider;
 		$this->factoryProvider = $factoryProvider;
+		$this->siteLookup = $siteLookup;
 	}
 
 	/**
 	 * @param Item $fromItem
 	 * @param Item $toItem
-	 * @param array $ignoreConflicts list of elements to ignore conflicts for
+	 * @param string[] $ignoreConflicts list of elements to ignore conflicts for
 	 *   can only contain 'label' and or 'description' and or 'sitelink'
 	 *
 	 * @throws InvalidArgumentException
@@ -53,7 +67,9 @@ class MergeChangeOpsFactory {
 			$toItem,
 			$ignoreConflicts,
 			$this->constraintProvider,
-			$this->factoryProvider
+			$this->factoryProvider,
+			$this->siteLookup
 		);
 	}
+
 }

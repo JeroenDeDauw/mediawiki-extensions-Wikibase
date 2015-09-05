@@ -15,111 +15,74 @@
  * @licence GNU GPL v2+
  */
 
-return call_user_func( function() {
+$wgWBLibDefaultSettings = array(
 
-	$defaults = array(
+	// whether changes get recorded to wb_changes
+	'useChangesTable' => true,
 
-		// alternative: application/vnd.php.serialized
-		'serializationFormat' => CONTENT_FORMAT_JSON,
+	'entityPrefixes' => array(
+		'q' => 'item',
+		'p' => 'property',
+	),
 
-		// whether changes get recorded to wb_changes
-		'useChangesTable' => true,
+	'siteLinkGroups' => array(
+		'wikipedia',
+	),
 
-		// whether property meta data is available in wb_property_info
-		'usePropertyInfoTable' => true,
+	'specialSiteLinkGroups' => array(),
 
-		'entityPrefixes' => array(
-			'q' => 'item',
-			'p' => 'property',
-		),
+	// local by default. Set to something LBFactory understands.
+	'changesDatabase' => false,
 
-		'siteLinkGroups' => array(
-			'wikipedia',
-		),
+	// list of logical database names of local client wikis.
+	// may contain mappings from site-id to db-name.
+	'localClientDatabases' => array(),
 
-		'specialSiteLinkGroups' => array(),
+	'changeHandlers' => array(
+		'wikibase-item~add' => 'Wikibase\ItemChange',
+		'wikibase-property~add' => 'Wikibase\EntityChange',
+		'wikibase-query~add' => 'Wikibase\EntityChange',
 
-		// local by default. Set to something LBFactory understands.
-		'changesDatabase' => false,
+		'wikibase-item~update' => 'Wikibase\ItemChange',
+		'wikibase-property~update' => 'Wikibase\EntityChange',
+		'wikibase-query~update' => 'Wikibase\EntityChange',
 
-		// JSON is more robust against version differences between repo and client,
-		// but only once the client can cope with the JSON form of the change.
-		'changesAsJson' => true,
+		'wikibase-item~remove' => 'Wikibase\ItemChange',
+		'wikibase-property~remove' => 'Wikibase\EntityChange',
+		'wikibase-query~remove' => 'Wikibase\EntityChange',
 
-		// list of logical database names of local client wikis.
-		// may contain mappings from site-id to db-name.
-		'localClientDatabases' => array(),
+		'wikibase-item~refresh' => 'Wikibase\ItemChange',
+		'wikibase-property~refresh' => 'Wikibase\EntityChange',
+		'wikibase-query~refresh' => 'Wikibase\EntityChange',
 
-		// Prefix to use for cache keys that should be shared among
-		// a wikibase repo and all its clients.
-		// The default includes WBL_VERSION and $wgDBname;
-		// In order to share caches between clients (and the repo),
-		// set a prefix based on the repo's name and WBL_VERSION
-		// or a similar version ID.
-		// NOTE: WikibaseClient.default.php overrides this to depend
-		// on repoDatabase dynamically.
-		'sharedCacheKeyPrefix' => $GLOBALS['wgDBname'] . ':WBL/' . WBL_VERSION,
+		'wikibase-item~restore' => 'Wikibase\ItemChange',
+		'wikibase-property~restore' => 'Wikibase\EntityChange',
+		'wikibase-query~restore' => 'Wikibase\EntityChange',
+	),
 
-		// The duration of the object cache, in seconds.
-		'sharedCacheDuration' => 60 * 60,
+	'dataTypes' => array(
+		'commonsMedia',
+		'globe-coordinate',
+		'quantity',
+		'monolingualtext',
+		'string',
+		'time',
+		'url',
+		'wikibase-item',
+		'wikibase-property',
+	),
 
-		// The type of object cache to use. Use CACHE_XXX constants.
-		'sharedCacheType' => $GLOBALS['wgMainCacheType'],
+	// URL schemes allowed for URL values. See UrlSchemeValidators for a full list.
+	'urlSchemes' => array( 'ftp', 'http', 'https', 'irc', 'mailto' )
+);
 
-		'dispatchBatchChunkFactor' => 3,
-		'dispatchBatchCacheFactor' => 3,
-
-		// Allow the TermIndex table to work without weights,
-		// for sites that can not easily roll out schema changes on large tables.
-		// This means that all searches will return an undefined order
-		// (depending on the database's inner working).
-		'withoutTermWeight' => false,
-
-		'changeHandlers' => array(
-			'wikibase-item~add' => 'Wikibase\ItemChange',
-			'wikibase-property~add' => 'Wikibase\EntityChange',
-			'wikibase-query~add' => 'Wikibase\EntityChange',
-
-			'wikibase-item~update' => 'Wikibase\ItemChange',
-			'wikibase-property~update' => 'Wikibase\EntityChange',
-			'wikibase-query~update' => 'Wikibase\EntityChange',
-
-			'wikibase-item~remove' => 'Wikibase\ItemChange',
-			'wikibase-property~remove' => 'Wikibase\EntityChange',
-			'wikibase-query~remove' => 'Wikibase\EntityChange',
-
-			'wikibase-item~refresh' => 'Wikibase\ItemChange',
-			'wikibase-property~refresh' => 'Wikibase\EntityChange',
-			'wikibase-query~refresh' => 'Wikibase\EntityChange',
-
-			'wikibase-item~restore' => 'Wikibase\ItemChange',
-			'wikibase-property~restore' => 'Wikibase\EntityChange',
-			'wikibase-query~restore' => 'Wikibase\EntityChange',
-		),
-
-		'dataTypes' => array(
-			'commonsMedia',
-			'globe-coordinate',
-			'quantity',
-			'string',
-			'time',
-			'url',
-			'wikibase-item',
-		),
-
-		// URL schemes allowed for values of the URL type.
-		// Supported types include 'http', 'https', 'ftp', and 'mailto'.
-		'urlSchemes' => array( 'http', 'https', 'ftp' )
+// experimental stuff
+if ( defined( 'WB_EXPERIMENTAL_FEATURES' ) && WB_EXPERIMENTAL_FEATURES ) {
+	// experimental data types
+	$wgWBLibDefaultSettings['dataTypes'] = array_merge(
+		$wgWBLibDefaultSettings['dataTypes'],
+		array() //'multilingual-text'
 	);
+}
 
-	// experimental stuff
-	if ( defined( 'WB_EXPERIMENTAL_FEATURES' ) && WB_EXPERIMENTAL_FEATURES ) {
-		// experimental data types
-		$defaults['dataTypes'] = array_merge( $defaults['dataTypes'], array(
-			'monolingual-text',
-			//'multilingual-text',
-		) );
-	}
-
-	return $defaults;
-} );
+return $wgWBLibDefaultSettings;

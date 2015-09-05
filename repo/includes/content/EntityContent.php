@@ -3,26 +3,37 @@
 namespace Wikibase;
 
 use AbstractContent;
+use Article;
 use Content;
-use IContextSource;
+use DataUpdate;
+use Diff\Differ\MapDiffer;
+use Diff\DiffOp\Diff\Diff;
+use Diff\Patcher\MapPatcher;
+use Diff\Patcher\PatcherException;
+use Hooks;
+use Language;
+use LogicException;
+use MWException;
 use ParserOptions;
 use ParserOutput;
-use RequestContext;
+use RuntimeException;
 use Status;
 use Title;
 use User;
-use Revision;
-use ValueFormatters\FormatterOptions;
-use ValueFormatters\ValueFormatter;
 use ValueValidators\Result;
-use Wikibase\DataModel\Entity\BasicEntityIdParser;
-use Wikibase\DataModel\Entity\EntityIdParser;
-use Wikibase\Lib\PropertyDataTypeLookup;
-use Wikibase\Lib\Serializers\SerializationOptions;
-use Wikibase\Lib\SnakFormatter;
-use Wikibase\Repo\EntitySearchTextGenerator;
+use Wikibase\Content\DeferredCopyEntityHolder;
+use Wikibase\Content\EntityHolder;
+use Wikibase\Content\EntityInstanceHolder;
+use Wikibase\DataModel\Entity\Entity;
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Entity\EntityRedirect;
+use Wikibase\DataModel\Services\Diff\EntityDiffer;
+use Wikibase\DataModel\Services\Diff\EntityPatcher;
+use Wikibase\Repo\Content\EntityContentDiff;
+use Wikibase\Repo\Content\EntityHandler;
+use Wikibase\Repo\FingerprintSearchTextGenerator;
+use Wikibase\Repo\Validators\EntityValidator;
 use Wikibase\Repo\WikibaseRepo;
-use Wikibase\Validators\EntityValidator;
 use WikiPage;
 
 /**
@@ -33,9 +44,9 @@ use WikiPage;
  * @licence GNU GPL v2+
  * @author Jeroen De Dauw < jeroendedauw@gmail.com >
  * @author Daniel Kinzler
+ * @author Bene* < benestar.wikimedia@gmail.com >
  */
 abstract class EntityContent extends AbstractContent {
-
 
 	/**
 	 * For use in the wb-status page property to indicate that the entity has no special
@@ -55,9 +66,19 @@ abstract class EntityContent extends AbstractContent {
 
 	/**
 	 * For use in the wb-status page property to indicate that the entity is empty.
+	 *
 	 * @see getEntityStatus()
 	 */
 	const STATUS_EMPTY = 200;
+
+	/**
+	 * Flag for use with prepareSave(), indicating that no pre-save validation should be applied.
+	 * Can be passed in via EditEntity::attemptSave, EntityStore::saveEntity,
+	 * as well as WikiPage::doEditContent()
+	 *
+	 * @note: must not collide with the EDIT_XXX flags defined by MediaWiki core in Defines.php.
+	 */
+	const EDIT_IGNORE_CONSTRAINTS = 1024;
 
 	/**
 	 * Checks if this EntityContent is valid for saving.
@@ -67,41 +88,33 @@ abstract class EntityContent extends AbstractContent {
 	 * @see Content::isValid()
 	 */
 	public function isValid() {
-		if ( is_null( $this->getEntity()->getId() ) ) {
-			return false;
+		if ( $this->isRedirect() ) {
+			// Under some circumstances, the handler will not support redirects,
+			// but it's still possible to construct Content objects that represent
+			// redirects. In such a case, make sure such Content objects are considered
+			// invalid and do not get saved.
+			return $this->getContentHandler()->supportsRedirects();
 		}
 
-		return true;
+		return $this->getEntityId() !== null;
 	}
 
 	/**
-	 * Returns the Title for the item or false if there is none.
+	 * Returns the EntityRedirect represented by this EntityContent, or null if this
+	 * EntityContent is not a redirect.
 	 *
-	 * @since 0.1
-	 * @deprecated use EntityTitleLookup instead
+	 * @note This default implementation will fail if isRedirect() is true.
+	 * Subclasses that support redirects must override getEntityRedirect().
 	 *
-	 * @return Title|bool
+	 * @throws LogicException
+	 * @return EntityRedirect|null
 	 */
-	public function getTitle() {
-		$id = $this->getEntity()->getId();
-
-		if ( $id === null ) {
-			return false;
+	public function getEntityRedirect() {
+		if ( $this->isRedirect() ) {
+			throw new LogicException( 'EntityContent subclasses that support redirects must override getEntityRedirect()' );
 		}
 
-		$lookup = WikibaseRepo::getDefaultInstance()->getEntityTitleLookup();
-		return $lookup->getTitleForId( $id );
-	}
-
-	/**
-	 * Returns if the item has an ID set or not.
-	 *
-	 * @since 0.1
-	 *
-	 * @return bool
-	 */
-	public function isNew() {
-		return is_null( $this->getEntity()->getId() );
+		return null;
 	}
 
 	/**
@@ -109,169 +122,230 @@ abstract class EntityContent extends AbstractContent {
 	 * Deriving classes typically have a more specific get method as
 	 * for greater clarity and type hinting.
 	 *
-	 * @since 0.1
-	 *
+	 * @throws MWException when it's a redirect (targets will never be resolved)
 	 * @return Entity
 	 */
 	abstract public function getEntity();
 
 	/**
+	 * Returns a holder for the entity contained in this EntityContent object.
+	 *
+	 * @throws MWException when it's a redirect (targets will never be resolved)
+	 * @return EntityHolder
+	 */
+	abstract protected function getEntityHolder();
+
+	/**
+	 * Returns the ID of the entity represented by this EntityContent;
+	 *
+	 * @throws RuntimeException if no entity ID is set
+	 * @return EntityId
+	 */
+	public function getEntityId() {
+		if ( $this->isRedirect() ) {
+			return $this->getEntityRedirect()->getEntityId();
+		} else {
+			$id = $this->getEntityHolder()->getEntityId();
+			if ( !$id ) {
+				// @todo: Force an ID to be present; Entity objects without an ID make sense,
+				// EntityContent objects with no entity ID don't.
+				throw new RuntimeException( 'EntityContent was constructed without an EntityId!' );
+			}
+
+			return $id;
+		}
+	}
+
+	/**
+	 * @see Content::getDeletionUpdates
+	 * @see EntityHandler::getEntityDeletionUpdates
+	 *
+	 * @param WikiPage $page
+	 * @param ParserOutput|null $parserOutput
+	 *
+	 * @return DataUpdate[]
+	 */
+	public function getDeletionUpdates( WikiPage $page, ParserOutput $parserOutput = null ) {
+		/* @var EntityHandler $handler */
+		$handler = $this->getContentHandler();
+		$updates = $handler->getEntityDeletionUpdates( $this, $page->getTitle() );
+
+		return array_merge(
+			parent::getDeletionUpdates( $page, $parserOutput ),
+			$updates
+		);
+	}
+
+	/**
+	 * @see Content::getSecondaryDataUpdates
+	 * @see EntityHandler::getEntityModificationUpdates
+	 *
+	 * @param Title $title
+	 * @param Content|null $oldContent
+	 * @param bool $recursive
+	 * @param ParserOutput|null $parserOutput
+	 *
+	 * @return DataUpdate[]
+	 */
+	public function getSecondaryDataUpdates(
+		Title $title,
+		Content $oldContent = null,
+		$recursive = false,
+		ParserOutput $parserOutput = null
+	) {
+		/** @var EntityHandler $handler */
+		$handler = $this->getContentHandler();
+		$updates = $handler->getEntityModificationUpdates( $this, $title );
+
+		return array_merge(
+			parent::getSecondaryDataUpdates( $title, $oldContent, $recursive, $parserOutput ),
+			$updates
+		);
+	}
+
+	/**
 	 * Returns a ParserOutput object containing the HTML.
-	 * The actual work of generating a ParserOutput object is done by calling
-	 * EntityView::getParserOutput().
 	 *
 	 * @note: this calls ParserOutput::recordOption( 'userlang' ) to split the cache
 	 * by user language.
 	 *
 	 * @see Content::getParserOutput
 	 *
-	 * @since 0.1
-	 *
 	 * @param Title $title
-	 * @param int|null $revId
+	 * @param int|null $revisionId
 	 * @param ParserOptions|null $options
 	 * @param bool $generateHtml
 	 *
 	 * @return ParserOutput
 	 */
-	public function getParserOutput( Title $title, $revId = null, ParserOptions $options = null,
+	public function getParserOutput(
+		Title $title,
+		$revisionId = null,
+		ParserOptions $options = null,
 		$generateHtml = true
 	) {
-		$entityView = $this->getEntityView( null, $options, null );
-		$editable = !$options? true : $options->getEditSection();
+		if ( $this->isRedirect() ) {
+			return $this->getParserOutputForRedirect( $generateHtml );
+		} else {
+			if ( $options === null ) {
+				$options = $this->getContentHandler()->makeParserOptions( 'canonical' );
+			}
 
-		if ( $revId === null || $revId === 0 ) {
-			$revId = $title->getLatestRevID();
+			return $this->getParserOutputFromEntityView( $title, $revisionId, $options, $generateHtml );
 		}
+	}
 
-		$revision = new EntityRevision( $this->getEntity(), $revId );
+	/**
+	 * @since 0.5
+	 *
+	 * @note Will fail if this EntityContent does not represent a redirect.
+	 *
+	 * @param bool $generateHtml
+	 *
+	 * @return ParserOutput
+	 */
+	protected function getParserOutputForRedirect( $generateHtml ) {
+		$output = new ParserOutput();
+		/** @var Title $target */
+		$target = $this->getRedirectTarget();
 
-		// generate HTML
-		$output = $entityView->getParserOutput( $revision, $editable, $generateHtml );
+		// Make sure to include the redirect link in pagelinks
+		$output->addLink( $target );
 
 		// Since the output depends on the user language, we must make sure
 		// ParserCache::getKey() includes it in the cache key.
 		$output->recordOption( 'userlang' );
+		if ( $generateHtml ) {
+			$chain = $this->getRedirectChain();
+			$language = $this->getContentHandler()->getPageViewLanguage( $target );
+			$html = Article::getRedirectHeaderHtml( $language, $chain, false );
+			$output->setText( $html );
+		}
 
-		// register page properties
+		return $output;
+	}
+
+	/**
+	 * @since 0.5
+	 *
+	 * @note Will fail if this EntityContent represents a redirect.
+	 *
+	 * @param Title $title
+	 * @param int|null $revisionId
+	 * @param ParserOptions $options
+	 * @param bool $generateHtml
+	 *
+	 * @return ParserOutput
+	 */
+	protected function getParserOutputFromEntityView(
+		Title $title,
+		$revisionId = null,
+		ParserOptions $options,
+		$generateHtml = true
+	) {
+		// @todo: move this to the ContentHandler
+		$entityParserOutputGeneratorFactory = WikibaseRepo::getDefaultInstance()->getEntityParserOutputGeneratorFactory();
+
+		$outputGenerator = $entityParserOutputGeneratorFactory->getEntityParserOutputGenerator(
+			$options
+		);
+
+		$entityRevision = $this->getEntityRevision( $revisionId );
+
+		$output = $outputGenerator->getParserOutput( $entityRevision, $options, $generateHtml );
+
 		$this->applyEntityPageProperties( $output );
 
 		return $output;
 	}
 
 	/**
-	 * Creates an EntityView suitable for rendering the entity.
+	 * @param int|null $revisionId
 	 *
-	 * @note: this uses global state to access the services needed for
-	 * displaying the entity.
-	 *
-	 * @since 0.5
-	 *
-	 * @param IContextSource|null $context
-	 * @param ParserOptions|null $options
-	 * @param LanguageFallbackChain|null $uiLanguageFallbackChain
-	 *
-	 * @return EntityView
+	 * @return EntityRevision
 	 */
-	public function getEntityView( IContextSource $context = null, ParserOptions $options = null,
-		LanguageFallbackChain $uiLanguageFallbackChain = null
-	) {
-		//TODO: cache last used entity view
+	private function getEntityRevision( $revisionId = null ) {
+		$entity = $this->getEntity();
 
-		if ( $context === null ) {
-			$context = RequestContext::getMain();
+		if ( $revisionId !== null ) {
+			return new EntityRevision( $entity, $revisionId );
 		}
 
-		// determine output language ----
-		$langCode = $context->getLanguage()->getCode();
-
-		if ( $options !== null ) {
-			// NOTE: Parser Options language overrides context language!
-			$langCode = $options->getUserLang();
-		}
-
-		// make formatter options ----
-		$formatterOptions = new FormatterOptions();
-		$formatterOptions->setOption( ValueFormatter::OPT_LANG, $langCode );
-
-		// Force the context's language to be the one specified by the parser options.
-		if ( $context && $context->getLanguage()->getCode() !== $langCode ) {
-			$context = clone $context;
-			$context->setLanguage( $langCode );
-		}
-
-		// apply language fallback chain ----
-		if ( !$uiLanguageFallbackChain ) {
-			$factory = WikibaseRepo::getDefaultInstance()->getLanguageFallbackChainFactory();
-			$uiLanguageFallbackChain = $factory->newFromContextForPageView( $context );
-		}
-
-		$formatterOptions->setOption( 'languages', $uiLanguageFallbackChain );
-
-		// get all the necessary services ----
-		$snakFormatter = WikibaseRepo::getDefaultInstance()->getSnakFormatterFactory()
-			->getSnakFormatter( SnakFormatter::FORMAT_HTML_WIDGET, $formatterOptions );
-
-		$dataTypeLookup = WikibaseRepo::getDefaultInstance()->getPropertyDataTypeLookup();
-		$entityInfoBuilder = WikibaseRepo::getDefaultInstance()->getStore()->getEntityInfoBuilder();
-		$entityContentFactory = WikibaseRepo::getDefaultInstance()->getEntityContentFactory();
-		$idParser = new BasicEntityIdParser();
-
-		$options = $this->makeSerializationOptions( $langCode, $uiLanguageFallbackChain );
-
-		// construct the instance ----
-		$entityView = $this->newEntityView(
-			$context,
-			$snakFormatter,
-			$dataTypeLookup,
-			$entityInfoBuilder,
-			$entityContentFactory,
-			$idParser,
-			$options
-		);
-
-		return $entityView;
+		// Revision defaults to 0 (latest), which is desired and suitable in cases where
+		// getParserOutput specifies no revision. (e.g. is called during save process
+		// when revision id is unknown or not assigned yet)
+		return new EntityRevision( $entity );
 	}
-
-	/**
-	 * Instantiates an EntityView.
-	 *
-	 * @see getEntityView()
-	 *
-	 * @param IContextSource $context
-	 * @param SnakFormatter $snakFormatter
-	 * @param Lib\PropertyDataTypeLookup $dataTypeLookup
-	 * @param EntityInfoBuilder $entityInfoBuilder
-	 * @param EntityTitleLookup $entityTitleLookup
-	 * @param EntityIdParser $idParser
-	 * @param SerializationOptions $options
-	 *
-	 * @return EntityView
-	 */
-	protected abstract function newEntityView(
-		IContextSource $context,
-		SnakFormatter $snakFormatter,
-		PropertyDataTypeLookup $dataTypeLookup,
-		EntityInfoBuilder $entityInfoBuilder,
-		EntityTitleLookup $entityTitleLookup,
-		EntityIdParser $idParser,
-		SerializationOptions $options
-	);
 
 	/**
 	 * @return String a string representing the content in a way useful for building a full text
 	 *         search index.
 	 */
 	public function getTextForSearchIndex() {
-		wfProfileIn( __METHOD__ );
+		if ( $this->isRedirect() ) {
+			return '';
+		}
 
-		$entity = $this->getEntity();
+		$searchTextGenerator = new FingerprintSearchTextGenerator();
+		$text = $searchTextGenerator->generate( $this->getEntity()->getFingerprint() );
 
-		$searchTextGenerator = new EntitySearchTextGenerator();
-		$text = $searchTextGenerator->generate( $entity );
+		if ( !Hooks::run( 'WikibaseTextForSearchIndex', array( $this, &$text ) ) ) {
+			return '';
+		}
 
-		wfProfileOut( __METHOD__ );
 		return $text;
+	}
+
+	/**
+	 * @return string Returns the string representation of the redirect
+	 * represented by this EntityContent (if any).
+	 *
+	 * @note Will fail if this EntityContent is not a redirect.
+	 */
+	protected function getRedirectText() {
+		/** @var Title $target */
+		$target = $this->getRedirectTarget();
+		return '#REDIRECT [[' . $target->getFullText() . ']]';
 	}
 
 	/**
@@ -279,7 +353,9 @@ abstract class EntityContent extends AbstractContent {
 	 *         performed by extensions like AbuseFilter.
 	 */
 	public function getTextForFilters() {
-		wfProfileIn( __METHOD__ );
+		if ( $this->isRedirect() ) {
+			return $this->getRedirectText();
+		}
 
 		//XXX: $ignore contains knowledge about the Entity's internal representation.
 		//     This list should therefore rather be maintained in the Entity class.
@@ -289,14 +365,14 @@ abstract class EntityContent extends AbstractContent {
 			'type',
 		);
 
-		$data = $this->getEntity()->toArray();
+		// @todo this text for filters stuff should be it's own class with test coverage!
+		$codec = WikibaseRepo::getDefaultInstance()->getEntityContentDataCodec();
+		$json = $codec->encodeEntity( $this->getEntity(), CONTENT_FORMAT_JSON );
+		$data = json_decode( $json, true );
 
 		$values = self::collectValues( $data, $ignore );
 
-		$text = implode( "\n", $values );
-
-		wfProfileOut( __METHOD__ );
-		return $text;
+		return implode( "\n", $values );
 	}
 
 	/**
@@ -339,20 +415,58 @@ abstract class EntityContent extends AbstractContent {
 	 * Returns a textual representation of the content suitable for use in edit summaries and log
 	 * messages.
 	 *
-	 * @param int $maxlength maximum length of the summary text
+	 * @param int $maxLength maximum length of the summary text
 	 * @return String the summary text
 	 */
-	public function getTextForSummary( $maxlength = 250 ) {
-		return $this->getEntity()->getDescription( $GLOBALS['wgLang']->getCode() );
+	public function getTextForSummary( $maxLength = 250 ) {
+		if ( $this->isRedirect() ) {
+			return $this->getRedirectText();
+		}
+
+		/* @var Language $language */
+		$language = $GLOBALS['wgLang'];
+		$fingerprint = $this->getEntity()->getFingerprint();
+		$description = $fingerprint->hasDescription( $language->getCode() )
+			? $fingerprint->getDescription( $language->getCode() )->getText() : '';
+		return substr( $description, 0, $maxLength );
+	}
+
+	/**
+	 * Returns an array structure for the redirect represented by this EntityContent, if any.
+	 *
+	 * @note This may or may not be consistent with what EntityContentCodec does.
+	 *       It it intended to be used primarily for diffing.
+	 */
+	private function getRedirectData() {
+		// NOTE: keep in sync with getPatchedRedirect
+		$data = array(
+			'entity' => $this->getEntityId()->getSerialization(),
+		);
+
+		if ( $this->isRedirect() ) {
+			$data['redirect'] = $this->getEntityRedirect()->getTargetId()->getSerialization();
+		}
+
+		return $data;
 	}
 
 	/**
 	 * @see Content::getNativeData
 	 *
-	 * @return array
+	 * @note Avoid relying on this method! It bypasses EntityContentCodec, and does
+	 *       not make any guarantees about the structure of the array returned.
+	 *
+	 * @return array An undefined data structure representing the content. This is not guaranteed
+	 *         to conform to any serialization structure used in the database or externally.
 	 */
 	public function getNativeData() {
-		return $this->getEntity()->toArray();
+		if ( $this->isRedirect() ) {
+			return $this->getRedirectData();
+		}
+
+		// NOTE: this may or may not be consistent with what EntityContentCodec does!
+		$serializer = WikibaseRepo::getDefaultInstance()->getInternalEntitySerializer();
+		return $serializer->serialize( $this->getEntity() );
 	}
 
 	/**
@@ -372,149 +486,225 @@ abstract class EntityContent extends AbstractContent {
 	 * @see Content::equals
 	 */
 	public function equals( Content $that = null ) {
-		if ( is_null( $that ) ) {
-			return false;
-		}
-
 		if ( $that === $this ) {
 			return true;
 		}
 
-		if ( $that->getModel() !== $this->getModel() ) {
+		if ( !( $that instanceof self ) || $that->getModel() !== $this->getModel() ) {
 			return false;
 		}
 
-		if ( !( $that instanceof EntityContent ) ) {
+		/** @var Title $thisRedirect */
+		$thisRedirect = $this->getRedirectTarget();
+		$thatRedirect = $that->getRedirectTarget();
+
+		if ( $thisRedirect !== null ) {
+			if ( $thatRedirect === null ) {
+				return false;
+			} else {
+				return $thisRedirect->equals( $thatRedirect )
+					&& $this->getEntityRedirect()->equals( $that->getEntityRedirect() );
+			}
+		} elseif ( $thatRedirect !== null ) {
+			return false;
+		}
+
+		$thisId = $this->getEntityHolder()->getEntityId();
+		$thatId = $that->getEntityHolder()->getEntityId();
+
+		if ( $thisId !== null && $thatId !== null
+			&& !$thisId->equals( $thatId )
+		) {
 			return false;
 		}
 
 		$thisEntity = $this->getEntity();
 		$thatEntity = $that->getEntity();
 
-		if ( !$this->isNew() && !$that->isNew()
-			&& !$thisEntity->getId()->equals( $thatEntity->getId() )
-		) {
-			return false;
-		}
-
 		return $thisEntity->equals( $thatEntity );
 	}
 
 	/**
-	 * Returns true if this content is countable as a "real" wiki page, provided
-	 * that it's also in a countable location (e.g. a current revision in the main namespace).
-	 *
-	 * @param bool $hasLinks: if it is known whether this content contains links, provide this
-	 *        information here, to avoid redundant parsing to find out.
-	 *
-	 * @return bool
+	 * @return Entity
 	 */
-	public function isCountable( $hasLinks = null ) {
-		return !$this->getEntity()->isEmpty();
+	private function makeEmptyEntity() {
+		/** @var EntityHandler $handler */
+		$handler = $this->getContentHandler();
+		return $handler->makeEmptyEntity();
 	}
 
 	/**
-	 * @since 0.1
+	 * Returns a diff between this EntityContent and the given EntityContent.
 	 *
-	 * @return bool
+	 * @param EntityContent $toContent
+	 *
+	 * @return EntityContentDiff
+	 */
+	public function getDiff( EntityContent $toContent ) {
+		$fromContent = $this;
+
+		$differ = new MapDiffer();
+		$redirectDiffOps = $differ->doDiff(
+			$fromContent->getRedirectData(),
+			$toContent->getRedirectData()
+		);
+
+		$redirectDiff = new Diff( $redirectDiffOps, true );
+
+		$fromEntity = $fromContent->isRedirect() ? $this->makeEmptyEntity() : $fromContent->getEntity();
+		$toEntity = $toContent->isRedirect() ? $this->makeEmptyEntity() : $toContent->getEntity();
+
+		$entityDiffer = new EntityDiffer();
+		$entityDiff = $entityDiffer->diffEntities( $fromEntity, $toEntity );
+
+		return new EntityContentDiff( $entityDiff, $redirectDiff );
+	}
+
+	/**
+	 * Returns a patched copy of this Content object.
+	 *
+	 * @param EntityContentDiff $patch
+	 *
+	 * @throws PatcherException
+	 * @return EntityContent
+	 */
+	public function getPatchedCopy( EntityContentDiff $patch ) {
+		/* @var EntityHandler $handler */
+		$handler = $this->getContentHandler();
+
+		if ( $this->isRedirect() ) {
+			$entityAfterPatch = $this->makeEmptyEntity();
+		} else {
+			$entityAfterPatch = unserialize( serialize( $this->getEntity() ) );
+		}
+
+		// FIXME: this should either be done in the derivatives, or the patcher
+		// should be injected, so the application can add support for additional entity types.
+		$patcher = new EntityPatcher();
+		$patcher->patchEntity( $entityAfterPatch, $patch->getEntityDiff() );
+
+		$redirAfterPatch = $this->getPatchedRedirect( $patch->getRedirectDiff() );
+
+		if ( $redirAfterPatch !== null && !$entityAfterPatch->isEmpty() ) {
+			throw new PatcherException( 'EntityContent must not contain Entity data as well as'
+				. ' a redirect after applying the patch!' );
+		} elseif ( $redirAfterPatch ) {
+			$patched = $handler->makeEntityRedirectContent( $redirAfterPatch );
+
+			if ( !$patched ) {
+				throw new PatcherException( 'Cannot create a redirect using content model '
+					. $this->getModel() . '!' );
+			}
+		} else {
+			$patched = $handler->makeEntityContent( new EntityInstanceHolder( $entityAfterPatch ) );
+		}
+
+		return $patched;
+	}
+
+	/**
+	 * @param Diff $redirectPatch
+	 *
+	 * @return EntityRedirect|null
+	 */
+	private function getPatchedRedirect( Diff $redirectPatch ) {
+		// See getRedirectData() for the structure of the data array.
+		$redirData = $this->getRedirectData();
+
+		if ( !$redirectPatch->isEmpty() ) {
+			$patcher = new MapPatcher();
+			$redirData = $patcher->patch( $redirData, $redirectPatch );
+		}
+
+		if ( isset( $redirData['redirect'] ) ) {
+			/* @var EntityHandler $handler */
+			$handler = $this->getContentHandler();
+
+			$entityId = $this->getEntityId();
+			$targetId = $handler->makeEntityId( $redirData['redirect'] );
+
+			return new EntityRedirect( $entityId, $targetId );
+		} else {
+			return null;
+		}
+	}
+
+	/**
+	 * @return bool True if this is not a redirect and the page is empty.
 	 */
 	public function isEmpty() {
-		return $this->getEntity()->isEmpty();
+		return !$this->isRedirect() && parent::isEmpty();
 	}
+
+	/**
+	 * @return bool
+	 */
+	abstract public function isStub();
 
 	/**
 	 * @see Content::copy
 	 *
-	 * @since 0.1
-	 *
 	 * @return ItemContent
 	 */
 	public function copy() {
-		$array = array();
-
-		foreach ( $this->getEntity()->toArray() as $key => $value ) {
-			$array[$key] = is_object( $value ) ? clone $value : $value;
+		/* @var EntityHandler $handler */
+		$handler = $this->getContentHandler();
+		if ( $this->isRedirect() ) {
+			return $handler->makeEntityRedirectContent( $this->getEntityRedirect() );
+		} else {
+			return $handler->makeEntityContent( new DeferredCopyEntityHolder( $this->getEntityHolder() ) );
 		}
-
-		return static::newFromArray( $array );
 	}
 
 	/**
 	 * @see Content::prepareSave
 	 *
 	 * @param WikiPage $page
-	 * @param int      $flags
-	 * @param int      $baseRevId
-	 * @param User     $user
+	 * @param int $flags
+	 * @param int $baseRevId
+	 * @param User $user
 	 *
 	 * @return Status
 	 */
 	public function prepareSave( WikiPage $page, $flags, $baseRevId, User $user ) {
-		wfProfileIn( __METHOD__ );
-
 		// Chain to parent
 		$status = parent::prepareSave( $page, $flags, $baseRevId, $user );
-		if ( !$status->isOK() ) {
-			wfProfileOut( __METHOD__ );
-			return $status;
-		}
 
-		// If $baseRevId is set, check whether the current revision is still what
-		// the caller of save() thought it was.
-		// If it isn't, then someone managed to squeeze in an edit after we checked for conflicts.
-		// XXX: This should really be done by WikiPage. I wonder why it isn't.
-		if ( $baseRevId !== false && $page->getRevision() !== null ) {
-			if ( $page->getRevision()->getId() !== $baseRevId ) {
-				wfDebugLog( __CLASS__, __FUNCTION__ . ': encountered late edit conflict: '
-					. 'current revision changed after regular conflict check.' );
-				$status->fatal('edit-conflict');
-				return $status;
+		if ( $status->isOK() ) {
+			if ( !$this->isRedirect() && ( $flags & self::EDIT_IGNORE_CONSTRAINTS ) === 0 ) {
+				/* @var EntityHandler $handler */
+				$handler = $this->getContentHandler();
+				$validators = $handler->getOnSaveValidators( ( $flags & EDIT_NEW ) > 0 );
+				$status = $this->applyValidators( $validators );
 			}
 		}
 
-		$status = $this->applyOnSaveValidators();
-
-		wfProfileOut( __METHOD__ );
 		return $status;
 	}
 
 	/**
-	 * Apply all EntityValidators registered for on-save validation.
+	 * Apply the given validators.
+	 *
+	 * @param EntityValidator[] $validators
+	 *
+	 * @return Result
 	 */
-	protected function applyOnSaveValidators() {
-		/* @var EntityHandler $handler */
-		$handler = $this->getContentHandler();
-		$validators = $handler->getOnSaveValidators();
-
-		$entity = $this->getEntity();
+	private function applyValidators( array $validators ) {
 		$result = Result::newSuccess();
 
 		/* @var EntityValidator $validator */
 		foreach ( $validators as $validator ) {
-			$result = $validator->validateEntity( $entity );
+			$result = $validator->validateEntity( $this->getEntity() );
 
 			if ( !$result->isValid() ) {
 				break;
 			}
 		}
 
-		$localizer = WikibaseRepo::getDefaultInstance()->getValidatorErrorLocalizer();
-		return $localizer->getResultStatus( $result );
-	}
-
-	/**
-	 * @param $langCode
-	 * @param LanguageFallbackChain $fallbackChain
-	 *
-	 * @return SerializationOptions
-	 */
-	protected function makeSerializationOptions( $langCode, LanguageFallbackChain $fallbackChain ) {
-		$langCodes = Utils::getLanguageCodes() + array( $langCode => $fallbackChain );
-
-		$options = new SerializationOptions();
-		$options->setLanguages( $langCodes );
-
-		return $options;
+		/* @var EntityHandler $handler */
+		$handler = $this->getContentHandler();
+		$status = $handler->getValidationErrorLocalizer()->getResultStatus( $result );
+		return $status;
 	}
 
 	/**
@@ -524,8 +714,11 @@ abstract class EntityContent extends AbstractContent {
 	 * @param ParserOutput $output
 	 */
 	private function applyEntityPageProperties( ParserOutput $output ) {
-		$properties = $this->getEntityPageProperties();
+		if ( $this->isRedirect() ) {
+			return;
+		}
 
+		$properties = $this->getEntityPageProperties();
 		foreach ( $properties as $name => $value ) {
 			$output->setProperty( $name, $value );
 		}
@@ -538,21 +731,14 @@ abstract class EntityContent extends AbstractContent {
 	 *
 	 * @see getEntityStatus()
 	 *
-	 * Keys used:
-	 * - wb-status: the entity's status, according to getEntityStatus()
-	 * - wb-claims: the number of claims in the entity
+	 * Records the entity's status in the 'wb-status' key.
 	 *
 	 * @return array A map from property names to property values.
 	 */
 	public function getEntityPageProperties() {
-		$entity = $this->getEntity();
-
-		$properties = array(
-			'wb-claims' => count( $entity->getClaims() ),
-		);
+		$properties = array();
 
 		$status = $this->getEntityStatus();
-
 		if ( $status !== self::STATUS_NONE ) {
 			$properties['wb-status'] = $status;
 		}
@@ -565,20 +751,23 @@ abstract class EntityContent extends AbstractContent {
 	 * e.g. STATUS_EMPTY or STATUS_NONE.
 	 * Used by getEntityPageProperties().
 	 *
+	 * @note Will fail if this EntityContent is a redirect.
+	 *
 	 * @see getEntityPageProperties()
-	 * @see STATUS_NONE
-	 * @see STATUS_EMPTY
-	 * @see STATUS_STUB
+	 * @see EntityContent::STATUS_NONE
+	 * @see EntityContent::STATUS_STUB
+	 * @see EntityContent::STATUS_EMPTY
 	 *
 	 * @return int
 	 */
 	public function getEntityStatus() {
 		if ( $this->isEmpty() ) {
 			return self::STATUS_EMPTY;
-		} elseif ( !$this->getEntity()->hasClaims() ) {
+		} elseif ( $this->isStub() ) {
 			return self::STATUS_STUB;
 		} else {
 			return self::STATUS_NONE;
 		}
 	}
+
 }

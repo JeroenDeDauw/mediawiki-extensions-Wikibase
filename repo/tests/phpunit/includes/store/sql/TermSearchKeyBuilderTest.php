@@ -2,11 +2,12 @@
 
 namespace Wikibase\Test;
 
-use Wikibase\Item;
-use Wikibase\StoreFactory;
-use Wikibase\Term;
-use Wikibase\TermSearchKeyBuilder;
+use Wikibase\DataModel\Entity\Item;
+use Wikibase\DataModel\Entity\ItemId;
 use Wikibase\Repo\WikibaseRepo;
+use Wikibase\TermIndexEntry;
+use Wikibase\TermSearchKeyBuilder;
+use Wikibase\TermSqlIndex;
 
 /**
  * @covers Wikibase\TermSearchKeyBuilder
@@ -37,27 +38,16 @@ class TermSearchKeyBuilderTest extends \MediaWikiTestCase {
 
 	/**
 	 * @dataProvider termProvider
-	 * @param $languageCode
-	 * @param $termText
-	 * @param $searchText
-	 * @param boolean $matches
 	 */
 	public function testRebuildSearchKey( $languageCode, $termText, $searchText, $matches ) {
-		$withoutTermSearchKey = WikibaseRepo::getDefaultInstance()->
-			getSettings()->getSetting( 'withoutTermSearchKey' );
-
-		if ( $withoutTermSearchKey ) {
-			$this->markTestSkipped( "can't test search key if withoutTermSearchKey option is set." );
-		}
+		/* @var TermSqlIndex $termCache */
+		$termCache = WikibaseRepo::getDefaultInstance()->getStore()->getTermIndex();
 
 		// make term in item
-		$item = Item::newEmpty();
-		$item->setId( 42 );
+		$item = new Item( new ItemId( 'Q42' ) );
 		$item->setLabel( $languageCode, $termText );
 
 		// save term
-		/* @var TermSqlIndex $termCache */
-		$termCache = StoreFactory::getStore( 'sqlstore' )->getTermIndex();
 		$termCache->clear();
 		$termCache->saveTermsOfEntity( $item );
 
@@ -71,7 +61,7 @@ class TermSearchKeyBuilderTest extends \MediaWikiTestCase {
 		$builder->rebuildSearchKey();
 
 		// remove search key
-		$term = new Term();
+		$term = new TermIndexEntry();
 		$term->setLanguage( $languageCode );
 		$term->setText( $searchText );
 
@@ -79,7 +69,7 @@ class TermSearchKeyBuilderTest extends \MediaWikiTestCase {
 			'caseSensitive' => false,
 		);
 
-		$obtainedTerms = $termCache->getMatchingTerms( array( $term ), Term::TYPE_LABEL, Item::ENTITY_TYPE, $options );
+		$obtainedTerms = $termCache->getMatchingTerms( array( $term ), TermIndexEntry::TYPE_LABEL, Item::ENTITY_TYPE, $options );
 
 		$this->assertEquals( $matches ? 1 : 0, count( $obtainedTerms ) );
 

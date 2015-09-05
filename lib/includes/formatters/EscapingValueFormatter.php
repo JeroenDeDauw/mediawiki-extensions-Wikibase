@@ -24,7 +24,12 @@ class EscapingValueFormatter implements ValueFormatter {
 	 */
 	private $escapeCallback;
 
-	function __construct( ValueFormatter $formatter, $escapeCallback ) {
+	/**
+	 * @param ValueFormatter $formatter
+	 * @param callable $escapeCallback A callable taking plain text and returning escaped HTML
+	 * @throws InvalidArgumentException
+	 */
+	public function __construct( ValueFormatter $formatter, $escapeCallback ) {
 		if ( !is_callable( $escapeCallback ) ) {
 			throw new InvalidArgumentException( '$escapeCallback must be callable' );
 		}

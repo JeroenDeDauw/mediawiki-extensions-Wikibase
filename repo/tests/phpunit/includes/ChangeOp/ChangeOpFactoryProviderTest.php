@@ -4,7 +4,7 @@ namespace Wikibase\Test;
 
 use Wikibase\ChangeOp\ChangeOpFactoryProvider;
 use Wikibase\DataModel\Entity\ItemId;
-use Wikibase\Validators\EntityConstraintProvider;
+use Wikibase\Repo\Validators\EntityConstraintProvider;
 
 /**
  * @covers Wikibase\ChangeOp\ChangeOpFactoryProvider
@@ -42,7 +42,7 @@ class ChangeOpFactoryProviderTest extends \PHPUnit_Framework_TestCase {
 
 		$constraintProvider = new EntityConstraintProvider(
 			$this->mockProvider->getMockLabelDescriptionDuplicateDetector(),
-			$this->mockProvider->getMockSitelinkCache()
+			$this->mockProvider->getMockSiteLinkConflictLookup()
 		);
 
 		return new ChangeOpFactoryProvider(
@@ -51,18 +51,14 @@ class ChangeOpFactoryProviderTest extends \PHPUnit_Framework_TestCase {
 			$this->mockProvider->getMockGuidValidator(),
 			$this->mockProvider->getMockGuidParser( $entityId ),
 			$this->mockProvider->getMockSnakValidator(),
-			$this->mockProvider->getMockTermValidatorFactory()
+			$this->mockProvider->getMockTermValidatorFactory(),
+			MockSiteStore::newFromTestSites()
 		);
 	}
 
 	public function testGetFingerprintChangeOpFactory() {
 		$factory = $this->newChangeOpFactoryProvider()->getFingerprintChangeOpFactory();
 		$this->assertInstanceOf( 'Wikibase\ChangeOp\FingerprintChangeOpFactory', $factory );
-	}
-
-	public function testGetClaimChangeOpFactory() {
-		$factory = $this->newChangeOpFactoryProvider()->getClaimChangeOpFactory();
-		$this->assertInstanceOf( 'Wikibase\ChangeOp\ClaimChangeOpFactory', $factory );
 	}
 
 	public function testGetStatementChangeOpFactory() {

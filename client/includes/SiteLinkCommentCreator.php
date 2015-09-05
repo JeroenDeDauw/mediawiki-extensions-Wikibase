@@ -1,8 +1,12 @@
 <?php
+
 namespace Wikibase;
 
-use Diff\Diff;
-use Diff\DiffOp;
+use Diff\DiffOp\Diff\Diff;
+use Diff\DiffOp\DiffOp;
+use Diff\DiffOp\DiffOpAdd;
+use Diff\DiffOp\DiffOpChange;
+use Diff\DiffOp\DiffOpRemove;
 
 /**
  * Creates an array structure with comment information for storing
@@ -34,13 +38,13 @@ class SiteLinkCommentCreator {
 	 *
 	 * @since 0.5
 	 *
-	 * @param Diff $siteLinkDiff
-	 * @param string $action
+	 * @param Diff|null $siteLinkDiff
+	 * @param string $action e.g. 'remove', see the constants in EntityChange
 	 * @param string $comment
 	 *
 	 * @return array|string
 	 */
-	public function getEditComment( Diff $siteLinkDiff, $action, $comment ) {
+	public function getEditComment( Diff $siteLinkDiff = null, $action, $comment ) {
 		if ( $siteLinkDiff !== null && !$siteLinkDiff->isEmpty() ) {
 			$siteLinkComment = $this->getSiteLinkComment( $action, $siteLinkDiff );
 
@@ -56,7 +60,7 @@ class SiteLinkCommentCreator {
 	 * Returns an array structure suitable for building an edit summary for the respective
 	 * change to site links.
 	 *
-	 * @param string $action Change action
+	 * @param string $action e.g. 'remove', see the constants in EntityChange
 	 * @param Diff $siteLinkDiff The change's site link diff
 	 *
 	 * @return array|null
@@ -74,7 +78,6 @@ class SiteLinkCommentCreator {
 
 		// change involved site link to client wiki
 		if ( array_key_exists( $siteId, $diffOps ) ) {
-
 			// $siteLinkDiff changed from containing atomic diffs to
 			// containing map diffs. For B/C, handle both cases.
 			$diffOp = $diffOps[$siteId];
@@ -116,7 +119,7 @@ class SiteLinkCommentCreator {
 		*/
 		$params['message'] = $messagePrefix . 'change';
 
-		foreach( $diffs as $siteId => $diff ) {
+		foreach ( $diffs as $siteId => $diff ) {
 			// backwards compatibility in case of old, pre-badges changes in the queue
 			$diffOp = ( ( $diff instanceof Diff ) && array_key_exists( 'name', $diff ) ) ? $diff['name'] : $diff;
 			$args = $this->getChangeParamsForDiffOp( $diffOp, $siteId, $messagePrefix );
@@ -130,7 +133,7 @@ class SiteLinkCommentCreator {
 				$args
 			);
 
-			// todo handle if there are multiple diffOps here
+			// TODO: Handle if there are multiple DiffOp's here.
 			break;
 		}
 
@@ -147,7 +150,7 @@ class SiteLinkCommentCreator {
 	private function getChangeParamsForDiffOp( DiffOp $diffOp, $siteId, $messagePrefix ) {
 		$params = array();
 
-		if ( $diffOp instanceof \Diff\DiffOpAdd ) {
+		if ( $diffOp instanceof DiffOpAdd ) {
 			$params['message'] = $messagePrefix . 'add';
 			$params['sitelink'] = array(
 				'newlink' => array(
@@ -155,7 +158,7 @@ class SiteLinkCommentCreator {
 					'page' => $diffOp->getNewValue()
 				)
 			);
-		} elseif ( $diffOp instanceof \Diff\DiffOpRemove ) {
+		} elseif ( $diffOp instanceof DiffOpRemove ) {
 			$params['message'] = $messagePrefix . 'remove';
 			$params['sitelink'] = array(
 				'oldlink' => array(
@@ -163,7 +166,7 @@ class SiteLinkCommentCreator {
 					'page' => $diffOp->getOldValue()
 				)
 			);
-		} elseif ( $diffOp instanceof \Diff\DiffOpChange ) {
+		} elseif ( $diffOp instanceof DiffOpChange ) {
 			$params['sitelink'] = array(
 				'oldlink' => array(
 					'site' => $siteId,
@@ -184,7 +187,7 @@ class SiteLinkCommentCreator {
 
 	/**
 	 * @param DiffOp $diffOp
-	 * @param string $action
+	 * @param string $action e.g. 'remove', see the constants in EntityChange
 	 * @param string $siteId
 	 *
 	 * @return array|null
@@ -195,11 +198,11 @@ class SiteLinkCommentCreator {
 		if ( in_array( $action, array( 'remove', 'restore' ) ) ) {
 			// Messages: wikibase-comment-remove, wikibase-comment-restore
 			$params['message'] = 'wikibase-comment-' . $action;
-		} elseif ( $diffOp instanceof \Diff\DiffOpAdd ) {
+		} elseif ( $diffOp instanceof DiffOpAdd ) {
 			$params['message'] = 'wikibase-comment-linked';
-		} elseif ( $diffOp instanceof \Diff\DiffOpRemove ) {
+		} elseif ( $diffOp instanceof DiffOpRemove ) {
 			$params['message'] = 'wikibase-comment-unlink';
-		} elseif ( $diffOp instanceof \Diff\DiffOpChange ) {
+		} elseif ( $diffOp instanceof DiffOpChange ) {
 			$params['message'] = 'wikibase-comment-sitelink-change';
 
 			// FIXME: this code appears to be doing something incorrect as "best effort"
@@ -221,4 +224,5 @@ class SiteLinkCommentCreator {
 
 		return $params;
 	}
+
 }

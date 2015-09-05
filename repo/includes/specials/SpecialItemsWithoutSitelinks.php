@@ -2,8 +2,8 @@
 
 namespace Wikibase\Repo\Specials;
 
-use Wikibase\Lib\Specials\SpecialWikibaseQueryPage;
-use Wikibase\StoreFactory;
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\Repo\WikibaseRepo;
 
 /**
  * Page for listing entities without label.
@@ -23,13 +23,10 @@ class SpecialItemsWithoutSitelinks extends SpecialWikibaseQueryPage {
 	 *
 	 * @since 0.4
 	 *
-	 * @param string $subPage
-	 * @return boolean
+	 * @param string|null $subPage
 	 */
 	public function execute( $subPage ) {
-		if ( !parent::execute( $subPage ) ) {
-			return false;
-		}
+		parent::execute( $subPage );
 
 		$this->showQuery();
 	}
@@ -38,9 +35,14 @@ class SpecialItemsWithoutSitelinks extends SpecialWikibaseQueryPage {
 	 * @see SpecialWikibaseQueryPage::getResult
 	 *
 	 * @since 0.4
+	 *
+	 * @param int $offset
+	 * @param int $limit
+	 *
+	 * @return EntityId[]
 	 */
 	protected function getResult( $offset = 0, $limit = 0 ) {
-		$entityPerPage = StoreFactory::getStore( 'sqlstore' )->newEntityPerPage();
+		$entityPerPage = WikibaseRepo::getDefaultInstance()->getStore()->newEntityPerPage();
 		return $entityPerPage->getItemsWithoutSitelinks( null, $limit, $offset );
 	}
 

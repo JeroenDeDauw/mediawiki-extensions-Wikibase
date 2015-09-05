@@ -2,14 +2,20 @@
 
 namespace Wikibase\Lib\Test;
 
+use DataValues\StringValue;
 use Wikibase\DataModel\Entity\PropertyId;
+use Wikibase\DataModel\Snak\PropertyNoValueSnak;
+use Wikibase\DataModel\Snak\PropertySomeValueSnak;
+use Wikibase\DataModel\Snak\PropertyValueSnak;
+use Wikibase\DataModel\Snak\Snak;
 use Wikibase\Lib\MessageSnakFormatter;
 use Wikibase\Lib\SnakFormatter;
-use Wikibase\PropertyNoValueSnak;
-use Wikibase\PropertySomeValueSnak;
 
 /**
  * @covers Wikibase\Lib\MessageSnakFormatter
+ * @uses Wikibase\DataModel\Entity\PropertyId
+ * @uses Wikibase\DataModel\Snak\PropertyNoValueSnak
+ * @uses Wikibase\DataModel\Snak\PropertySomeValueSnak
  *
  * @group ValueFormatters
  * @group DataValueExtensions
@@ -18,46 +24,93 @@ use Wikibase\PropertySomeValueSnak;
  *
  * @licence GNU GPL v2+
  * @author Daniel Kinzler
+ * @author Thiemo Mättig
  */
-class MessageSnakFormatterTest extends \PHPUnit_Framework_TestCase {
+class MessageSnakFormatterTest extends \MediaWikiTestCase {
 
 	/**
-	 * @covers MessageSnakFormatter::formatSnak()
+	 * @param string $snakType
+	 * @param string $format
+	 *
+	 * @return MessageSnakFormatter
 	 */
-	public function testFormatSnak() {
-		//TODO: Find a better message for testing, one that actually contains wikitext.
-		$msg = wfMessage( 'wikibase-snakview-snaktypeselector-novalue' );
-		$snak = new PropertyNoValueSnak( new PropertyId( "P23" ) );
+	private function getFormatter( $snakType, $format ) {
+		$message = $this->getMockBuilder( 'Message' )
+			->disableOriginalConstructor()
+			->getMock();
 
-		$formatter = new MessageSnakFormatter( $snak->getType(), $msg, SnakFormatter::FORMAT_WIKI );
-		$this->assertEquals( $msg->text(), $formatter->formatSnak( $snak ) );
+		foreach ( array( 'parse', 'text', 'plain' ) as $method ) {
+			$message->expects( $this->any() )
+				->method( $method )
+				->will( $this->returnValue( $method ) );
+		}
 
-		$formatter = new MessageSnakFormatter( $snak->getType(), $msg, SnakFormatter::FORMAT_HTML );
-		$this->assertEquals( $msg->parse(), $formatter->formatSnak( $snak ) );
+		return new MessageSnakFormatter( $snakType, $message, $format );
 	}
 
-	/**
-	 * @covers MessageSnakFormatter::getFormat()
-	 */
 	public function testGetFormat() {
-		$msg = wfMessage( 'wikibase-snakview-snaktypeselector-novalue' );
-		$formatter = new MessageSnakFormatter( 'any', $msg, 'test' );
+		$formatter = $this->getFormatter( 'any', 'test' );
 
 		$this->assertEquals( 'test', $formatter->getFormat() );
 	}
 
-	/**
-	 * @covers MessageSnakFormatter::canFormatSnak()
-	 */
 	public function testCanFormatSnak() {
-		$msg = wfMessage( 'wikibase-snakview-snaktypeselector-novalue' );
-		$formatter = new MessageSnakFormatter( 'novalue', $msg, 'test' );
+		$id = new PropertyId( 'P1' );
+		$formatter = $this->getFormatter( 'novalue', 'test' );
 
-		$snak = new PropertyNoValueSnak( new PropertyId( "P23" ) );
+		$snak = new PropertyNoValueSnak( $id );
 		$this->assertTrue( $formatter->canFormatSnak( $snak ), $snak->getType() );
 
-		$snak = new PropertySomeValueSnak( new PropertyId( "P23" ) );
+		$snak = new PropertySomeValueSnak( $id );
 		$this->assertFalse( $formatter->canFormatSnak( $snak ), $snak->getType() );
+	}
+
+	/**
+	 * @dataProvider snakProvider
+	 */
+	public function testFormatSnak_givenDifferentSnakTypes( Snak $snak, $expected ) {
+		$formatter = $this->getFormatter( $snak->getType(), SnakFormatter::FORMAT_HTML );
+
+		$this->assertEquals( $expected, $formatter->formatSnak( $snak ) );
+	}
+
+	public function snakProvider() {
+		$id = new PropertyId( 'P1' );
+
+		return array(
+			array(
+				new PropertyValueSnak( $id, new StringValue( 'string' ) ),
+				'parse'
+			),
+			array(
+				new PropertySomeValueSnak( $id ),
+				'<span class="wikibase-snakview-variation-somevaluesnak">parse</span>'
+			),
+			array(
+				new PropertyNoValueSnak( $id ),
+				'<span class="wikibase-snakview-variation-novaluesnak">parse</span>'
+			),
+		);
+	}
+
+	/**
+	 * @dataProvider formatProvider
+	 */
+	public function testFormatSnak_givenDifferentFormats( $format, $expected ) {
+		$snak = new PropertyValueSnak( new PropertyId( 'P1' ), new StringValue( 'string' ) );
+		$formatter = $this->getFormatter( $snak->getType(), $format );
+
+		$this->assertEquals( $expected, $formatter->formatSnak( $snak ) );
+	}
+
+	public function formatProvider() {
+		return array(
+			array( SnakFormatter::FORMAT_PLAIN, 'plain' ),
+			array( SnakFormatter::FORMAT_WIKI, 'text' ),
+			array( SnakFormatter::FORMAT_HTML, 'parse' ),
+			array( SnakFormatter::FORMAT_HTML_WIDGET, 'parse' ),
+			array( SnakFormatter::FORMAT_HTML_DIFF, 'parse' ),
+		);
 	}
 
 }

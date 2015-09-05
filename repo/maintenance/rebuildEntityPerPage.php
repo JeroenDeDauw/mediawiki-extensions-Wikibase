@@ -1,8 +1,10 @@
 <?php
 
-namespace Wikibase;
+namespace Wikibase\Repo\Maintenance;
 
 use LoggedUpdateMaintenance;
+use Wikibase\Lib\Reporting\ObservableMessageReporter;
+use Wikibase\Repo\Store\SQL\EntityPerPageBuilder;
 use Wikibase\Repo\WikibaseRepo;
 
 $basePath = getenv( 'MW_INSTALL_PATH' ) !== false ? getenv( 'MW_INSTALL_PATH' ) : __DIR__ . '/../../../..';
@@ -32,7 +34,7 @@ class RebuildEntityPerPage extends LoggedUpdateMaintenance {
 	/**
 	 * @see LoggedUpdateMaintenance::doDBUpdates
 	 *
-	 * @return boolean
+	 * @return bool
 	 */
 	public function doDBUpdates() {
 		if ( !defined( 'WB_VERSION' ) ) {
@@ -40,23 +42,21 @@ class RebuildEntityPerPage extends LoggedUpdateMaintenance {
 			exit;
 		}
 
-		$batchSize = intval( $this->getOption( 'batch-size', 100 ) );
+		$batchSize = (int)$this->getOption( 'batch-size', 100 );
 		$rebuildAll = $this->getOption( 'rebuild-all', false );
 
-		$reporter = new \ObservableMessageReporter();
+		$reporter = new ObservableMessageReporter();
 		$reporter->registerReporterCallback(
 			array( $this, 'report' )
 		);
 
-		$entityPerPageTable = StoreFactory::getStore( 'sqlstore' )->newEntityPerPage();
 		$wikibaseRepo =  WikibaseRepo::getDefaultInstance();
-		$entityIdParser = $wikibaseRepo->getEntityIdParser();
-		$contentModels = $wikibaseRepo->getContentModelMappings();
 
 		$builder = new EntityPerPageBuilder(
-			$entityPerPageTable,
-			$entityIdParser,
-			$contentModels
+			$wikibaseRepo->getStore()->newEntityPerPage(),
+			$wikibaseRepo->getEntityIdParser(),
+			$wikibaseRepo->getEntityNamespaceLookup(),
+			$wikibaseRepo->getContentModelMappings()
 		);
 
 		$builder->setReporter( $reporter );
@@ -74,7 +74,7 @@ class RebuildEntityPerPage extends LoggedUpdateMaintenance {
 	 *
 	 * @since 0.4
 	 *
-	 * @param $msg
+	 * @param string $msg
 	 */
 	public function report( $msg ) {
 		$this->output( "$msg\n" );
@@ -86,10 +86,10 @@ class RebuildEntityPerPage extends LoggedUpdateMaintenance {
 	 * @return string
 	 */
 	public function getUpdateKey() {
-		return 'Wikibase\RebuildEntityPerPage';
+		return 'Wikibase\Repo\Maintenance\RebuildEntityPerPage';
 	}
 
 }
 
-$maintClass = 'Wikibase\RebuildEntityPerPage';
-require_once( RUN_MAINTENANCE_IF_MAIN );
+$maintClass = 'Wikibase\Repo\Maintenance\RebuildEntityPerPage';
+require_once RUN_MAINTENANCE_IF_MAIN;

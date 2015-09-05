@@ -1,10 +1,11 @@
 <?php
 
-namespace Wikibase\Test;
+namespace Wikibase\Client\Tests\Specials;
 
 use Title;
 use Wikibase\Client\Specials\SpecialUnconnectedPages;
 use Wikibase\NamespaceChecker;
+use Wikibase\Test\SpecialPageTestBase;
 
 /**
  * @covers Wikibase\Client\Specials\SpecialUnconnectedPages
@@ -14,9 +15,11 @@ use Wikibase\NamespaceChecker;
  * @group WikibaseSpecialPage
  * @group WikibaseSpecialUnconnectedPages
  * @group Wikibase
+ * @group Database
  *
  * @licence GNU GPL v2+
  * @author John Erling Blad < jeblad@gmail.com >
+ * @author Thiemo Mättig
  */
 class SpecialUnconnectedPagesTest extends SpecialPageTestBase {
 
@@ -24,10 +27,8 @@ class SpecialUnconnectedPagesTest extends SpecialPageTestBase {
 		return new SpecialUnconnectedPages();
 	}
 
-	public function testExecute(  ) {
-		//TODO: Actually verify that the output is correct.
-		//      Currently this just tests that there is no fatal error.
-		list( $output, ) = $this->executeSpecialPage( '' );
+	public function testExecuteDoesNotCauseFatalError() {
+		$this->executeSpecialPage( '' );
 		$this->assertTrue( true, 'Calling execute without any subpage value' );
 	}
 
@@ -59,7 +60,7 @@ class SpecialUnconnectedPagesTest extends SpecialPageTestBase {
 	 */
 	public function testBuildConditionals( $text, $expected ) {
 		$page = $this->newSpecialPage();
-		$title = Title::newFromText( $text);
+		$title = Title::newFromText( $text );
 		$checker = new NamespaceChecker( array( 2, 4 ), array( 0 ) );
 		$dbr = wfGetDB( DB_SLAVE );
 		$this->assertEquals( $expected, $page->buildConditionals( $dbr, $title, $checker ) );
@@ -72,6 +73,26 @@ class SpecialUnconnectedPagesTest extends SpecialPageTestBase {
 			array( 'user:foo', array( "page_title >= 'Foo'", "page_namespace = 2", 'page_namespace IN (0)' ) ),
 			array( 'user talk:foo', array( "page_title >= 'Foo'", "page_namespace = 3", 'page_namespace IN (0)' ) ),
 		);
+	}
+
+	public function testGetQueryInfo() {
+		$page = $this->newSpecialPage();
+		$queryInfo = $page->getQueryInfo();
+		$this->assertInternalType( 'array', $queryInfo );
+		$this->assertNotEmpty( $queryInfo );
+		$this->assertArrayHasKey( 'conds', $queryInfo );
+	}
+
+	public function testReallyDoQueryReturnsEmptyResultWhenExceedingLimit() {
+		$page = $this->newSpecialPage();
+		$result = $page->reallyDoQuery( 1, 10001 );
+		$this->assertSame( 0, $result->numRows() );
+	}
+
+	public function testFetchFromCacheReturnsEmptyResultWhenExceedingLimit() {
+		$page = $this->newSpecialPage();
+		$result = $page->fetchFromCache( 1, 10001 );
+		$this->assertSame( 0, $result->numRows() );
 	}
 
 }

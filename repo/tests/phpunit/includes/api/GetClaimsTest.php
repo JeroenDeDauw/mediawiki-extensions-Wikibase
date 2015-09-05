@@ -1,26 +1,27 @@
 <?php
 
-namespace Wikibase\Test\Api;
+namespace Wikibase\Test\Repo\Api;
 
+use ApiTestCase;
+use DataValues\Serializers\DataValueSerializer;
 use DataValues\StringValue;
 use UsageException;
-use Wikibase\DataModel\Claim\Statement;
-use Wikibase\DataModel\Entity\Entity;
-use Wikibase\DataModel\Claim\Claim;
-use Wikibase\DataModel\Claim\Claims;
+use Wikibase\DataModel\Entity\EntityDocument;
 use Wikibase\DataModel\Entity\Item;
-use Wikibase\Lib\Serializers\ClaimSerializer;
-use Wikibase\Lib\Serializers\SerializationOptions;
-use Wikibase\Lib\Serializers\SerializerFactory;
 use Wikibase\DataModel\Entity\Property;
 use Wikibase\DataModel\Entity\PropertyId;
+use Wikibase\DataModel\SerializerFactory;
 use Wikibase\DataModel\Snak\PropertyNoValueSnak;
 use Wikibase\DataModel\Snak\PropertySomeValueSnak;
 use Wikibase\DataModel\Snak\PropertyValueSnak;
+use Wikibase\DataModel\Statement\Statement;
+use Wikibase\DataModel\Statement\StatementList;
+use Wikibase\DataModel\Statement\StatementListProvider;
 use Wikibase\Repo\WikibaseRepo;
+use Wikibase\StatementRankSerializer;
 
 /**
- * @covers Wikibase\Api\GetClaims
+ * @covers Wikibase\Repo\Api\GetClaims
  *
  * @group API
  * @group Database
@@ -36,93 +37,114 @@ use Wikibase\Repo\WikibaseRepo;
  * @author Katie Filbert < aude.wiki@gmail.com >
  * @author Adam Shorland
  */
-class GetClaimsTest extends \ApiTestCase {
+class GetClaimsTest extends ApiTestCase {
 
 	/**
-	 * @param Entity $entity
-	 *
-	 * @return Entity
+	 * @var SerializerFactory
 	 */
-	protected function addClaimsAndSave( Entity $entity ) {
-		wfSuppressWarnings(); // We are referencing properties that don't exist. Not relevant here.
+	private $serializerFactory;
 
-		$store = WikibaseRepo::getDefaultInstance()->getEntityStore();
-		$store->saveEntity( $entity, '', $GLOBALS['wgUser'], EDIT_NEW );
+	protected function setUp() {
+		parent::setUp();
 
-		/** @var $claims Claim[] */
-		$claims[0] = $entity->newClaim( new PropertyNoValueSnak( new PropertyId( 'P42' ) ) );
-		$claims[1] = $entity->newClaim( new PropertyNoValueSnak( new PropertyId( 'P404' ) ) );
-		$claims[2] = $entity->newClaim( new PropertySomeValueSnak( new PropertyId( 'P42' ) ) );
-		$claims[3] = $entity->newClaim( new PropertyValueSnak( new PropertyId( 'P9001' ), new StringValue( 'o_O' ) ) );
-
-		foreach( $claims as $key => $claim ){
-			$claim->setGuid( $entity->getId()->getPrefixedId() . '$D8404CDA-56A1-4334-AF13-A3290BCD9CL' . $key );
-			$entity->addClaim( $claim );
-		}
-
-		$store->saveEntity( $entity, '', $GLOBALS['wgUser'], EDIT_UPDATE );
-		wfRestoreWarnings();
-
-		return $entity;
-	}
-
-	/**
-	 * @return Entity[]
-	 */
-	protected function getNewEntities() {
-		$property = Property::newEmpty();
-
-		$property->setDataTypeId( 'string' );
-
-		return array(
-			$this->addClaimsAndSave( Item::newEmpty() ),
-			$this->addClaimsAndSave( $property ),
+		$this->serializerFactory = new SerializerFactory(
+			new DataValueSerializer(),
+			SerializerFactory::OPTION_SERIALIZE_REFERENCE_SNAKS_WITHOUT_HASH +
+			SerializerFactory::OPTION_SERIALIZE_MAIN_SNAKS_WITHOUT_HASH
 		);
 	}
 
+	/**
+	 * @param EntityDocument $entity
+	 */
+	private function save( EntityDocument $entity ) {
+		$flags = $entity->getId() ? EDIT_UPDATE : EDIT_NEW;
+
+		$store = WikibaseRepo::getDefaultInstance()->getEntityStore();
+
+		$rev = $store->saveEntity( $entity, '', $GLOBALS['wgUser'], $flags );
+
+		$entity->setId( $rev->getEntity()->getId() );
+	}
+
+	/**
+	 * @param Item $item
+	 * @param PropertyId $propertyId
+	 */
+	private function addStatements( Item $item, PropertyId $propertyId ) {
+		if ( !$item->getId() ) {
+			$this->save( $item );
+		}
+
+		/** @var Statement[] $statements */
+		$statements[0] = new Statement( new PropertyNoValueSnak( $propertyId ) );
+		$statements[1] = new Statement( new PropertyNoValueSnak( $propertyId ) );
+		$statements[2] = new Statement( new PropertySomeValueSnak( $propertyId ) );
+		$statements[3] = new Statement( new PropertyValueSnak( $propertyId, new StringValue( 'o_O' ) ) );
+
+		foreach ( $statements as $key => $statement ) {
+			$statement->setGuid( $item->getId()->getSerialization() . '$D8404CDA-56A1-4334-AF13-A3290BCD9CL' . $key );
+			$item->getStatements()->addStatement( $statement );
+		}
+	}
+
+	/**
+	 * @return EntityDocument[]
+	 */
+	private function getNewEntities() {
+		$property = Property::newFromType( 'string' );
+		$this->save( $property );
+
+		$propertyId = $property->getId();
+
+		$item = new Item();
+		$this->addStatements( $item, $propertyId );
+		$this->save( $item );
+
+		return array(
+			$property,
+			$item,
+		);
+	}
+
+	/**
+	 * @return array( $params, $statements, $groupedByProperty )
+	 */
 	public function validRequestProvider() {
 		$entities = $this->getNewEntities();
 
 		$argLists = array();
 
 		foreach ( $entities as $entity ) {
+			$idSerialization = $entity->getId()->getSerialization();
+			/** @var StatementListProvider $entity */
+			$statements = $entity->getStatements();
+
 			$params = array(
 				'action' => 'wbgetclaims',
-				'entity' => $entity->getId()->getSerialization(),
+				'entity' => $idSerialization,
 			);
 
-			$argLists[] = array( $params, $entity->getClaims(), true );
+			$argLists[] = array( $params, $statements->toArray() );
 
-			/**
-			 * @var Claim $claim
-			 */
-			foreach ( $entity->getClaims() as $claim ) {
+			foreach ( $statements->toArray() as $statement ) {
 				$params = array(
 					'action' => 'wbgetclaims',
-					'claim' => $claim->getGuid(),
+					'claim' => $statement->getGuid(),
 				);
-				$argLists[] = array( $params, array( $claim ), true );
-
-				$params['ungroupedlist'] = true;
-				$argLists[] = array( $params, array( $claim ), false );
+				$argLists[] = array( $params, array( $statement ) );
 			}
 
 			foreach ( array( Statement::RANK_DEPRECATED, Statement::RANK_NORMAL, Statement::RANK_PREFERRED ) as $rank ) {
+				$statementRankSerializer = new StatementRankSerializer();
 				$params = array(
 					'action' => 'wbgetclaims',
-					'entity' => $entity->getId()->getSerialization(),
-					'rank' => ClaimSerializer::serializeRank( $rank ),
+					'entity' => $idSerialization,
+					'rank' => $statementRankSerializer->serialize( $rank ),
 				);
 
-				$claims = array();
-
-				foreach ( $entity->getClaims() as $claim ) {
-					if ( $claim instanceof Statement && $claim->getRank() === $rank ) {
-						$claims[] = $claim;
-					}
-				}
-
-				$argLists[] = array( $params, $claims, true );
+				$statementsByRank = $statements->getByRank( $rank )->toArray();
+				$argLists[] = array( $params, $statementsByRank );
 			}
 		}
 
@@ -131,34 +153,34 @@ class GetClaimsTest extends \ApiTestCase {
 
 	public function testValidRequests() {
 		foreach ( $this->validRequestProvider() as $argList ) {
-			list( $params, $claims, $groupedByProperty ) = $argList;
+			list( $params, $statements ) = $argList;
 
-			$this->doTestValidRequest( $params, $claims, $groupedByProperty );
+			$this->doTestValidRequest( $params, $statements );
 		}
 	}
 
 	/**
 	 * @param string[] $params
-	 * @param Claims|Claim[] $claims
-	 * @param bool $groupedByProperty
+	 * @param Statement[] $statements
 	 */
-	public function doTestValidRequest( array $params, $claims, $groupedByProperty ) {
-		if ( is_array( $claims ) ) {
-			$claims = new Claims( $claims );
-		}
-		$options = new SerializationOptions();
-		if( !$groupedByProperty ) {
-			$options->setOption( SerializationOptions::OPT_GROUP_BY_PROPERTIES, array() );
-		}
-		$serializerFactory = new SerializerFactory();
-		$serializer = $serializerFactory->newSerializerForObject( $claims );
-		$serializer->setOptions( $options );
-		$expected = $serializer->getSerialized( $claims );
+	public function doTestValidRequest( array $params, array $statements ) {
+		$statements = new StatementList( $statements );
+
+		$serializer = $this->serializerFactory->newStatementListSerializer();
+		$expected = $serializer->serialize( $statements );
 
 		list( $resultArray, ) = $this->doApiRequest( $params );
 
 		$this->assertInternalType( 'array', $resultArray, 'top level element is an array' );
 		$this->assertArrayHasKey( 'claims', $resultArray, 'top level element has a claims key' );
+
+		// Assert that value mainsnaks have a datatype added
+		foreach ( $resultArray['claims'] as &$claimsByProperty ) {
+			foreach ( $claimsByProperty as &$claimArray ) {
+				$this->assertArrayHasKey( 'datatype', $claimArray['mainsnak'] );
+				unset( $claimArray['mainsnak']['datatype'] );
+			}
+		}
 
 		$this->assertEquals( $expected, $resultArray['claims'] );
 	}
@@ -166,10 +188,10 @@ class GetClaimsTest extends \ApiTestCase {
 	/**
 	 * @dataProvider invalidClaimProvider
 	 */
-	public function testGetInvalidClaims( $claimGuid ) {
+	public function testGetInvalidClaims( $guid ) {
 		$params = array(
 			'action' => 'wbgetclaims',
-			'claim' => $claimGuid
+			'claim' => $guid
 		);
 
 		try {
@@ -192,8 +214,10 @@ class GetClaimsTest extends \ApiTestCase {
 	 */
 	public function testGetInvalidIds( $entity, $property ) {
 		if ( !$entity ) {
-			$item = Item::newEmpty();
-			$this->addClaimsAndSave( $item );
+			$item = new Item();
+			$this->addStatements( $item, new PropertyId( 'P13' ) );
+
+			$this->save( $item );
 			$entity = $item->getId()->getSerialization();
 		}
 
@@ -217,4 +241,5 @@ class GetClaimsTest extends \ApiTestCase {
 			array( 'whatTheFuck', 'P42' ),
 		);
 	}
+
 }

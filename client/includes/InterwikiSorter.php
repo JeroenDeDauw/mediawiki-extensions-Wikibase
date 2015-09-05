@@ -2,6 +2,8 @@
 
 namespace Wikibase;
 
+use InvalidArgumentException;
+
 /**
  * Language sorting utility functions.
  *
@@ -10,25 +12,46 @@ namespace Wikibase;
  * @licence GNU GPL v2+
  * @author Nikola Smolenski <smolensk@eunet.rs>
  * @author Katie Filbert < aude.wiki@gmail.com >
+ * @author Thiemo Mättig
  */
 class InterwikiSorter {
 
+	/**
+	 * @var array[]
+	 */
 	private $sortOrders;
 
+	/**
+	 * @var string
+	 */
 	private $sort;
 
+	/**
+	 * @var string[]
+	 */
 	private $sortPrepend;
 
-	private $sortOrder;
+	/**
+	 * @var int[]|null
+	 */
+	private $sortOrder = null;
 
 	/**
 	 * @since 0.4
 	 *
 	 * @param string $sort
-	 * @param $sortOrders[]
-	 * @param $sortPrepend[]
+	 * @param array[] $sortOrders
+	 * @param string[] $sortPrepend
+	 *
+	 * @throws InvalidArgumentException
 	 */
 	public function __construct( $sort, array $sortOrders, array $sortPrepend ) {
+		if ( !array_key_exists( 'alphabetic', $sortOrders ) ) {
+			throw new InvalidArgumentException(
+				'alphabetic interwiki sorting order is missing from Wikibase Client settings.'
+			);
+		}
+
 		$this->sort = $sort;
 		$this->sortOrders = $sortOrders;
 		$this->sortPrepend = $sortPrepend;
@@ -40,78 +63,79 @@ class InterwikiSorter {
 	 *
 	 * @since 0.1
 	 *
-	 * @param $links[]
+	 * @param string[] $links
 	 *
-	 * @return array
+	 * @return string[]
 	 */
 	public function sortLinks( array $links ) {
-		wfProfileIn( __METHOD__ );
-
-		// Prepare the sorting array.
-		$this->sortOrder = $this->buildSortOrder(
-			$this->sort,
-			$this->sortOrders,
-			$this->sortPrepend
-		);
+		if ( $this->sortOrder === null ) {
+			$this->sortOrder = $this->buildSortOrder( $this->sort, $this->sortOrders );
+		}
 
 		// Prepare the array for sorting.
-		foreach( $links as $k => $langLink ) {
+		foreach ( $links as $k => $langLink ) {
 			$links[$k] = explode( ':', $langLink, 2 );
 		}
 
 		usort( $links, array( $this, 'compareLinks' ) );
 
 		// Restore the sorted array.
-		foreach( $links as $k => $langLink ) {
+		foreach ( $links as $k => $langLink ) {
 			$links[$k] = implode( ':', $langLink );
 		}
 
-		wfProfileOut( __METHOD__ );
 		return $links;
 	}
 
 	/**
 	 * usort() callback function, compares the links on the basis of $sortOrder
 	 *
-	 * @param mixed $a
-	 * @param mixed $b
+	 * @param string[] $a
+	 * @param string[] $b
 	 *
-	 * @return integer
+	 * @return int
 	 */
 	private function compareLinks( $a, $b ) {
 		$a = $a[0];
 		$b = $b[0];
 
-		if( $a == $b ) return 0;
+		if ( $a === $b ) {
+			return 0;
+		}
 
-		// If we encounter an unknown language, which may happen if the sort table is not updated, we move it to the bottom.
-		$a = array_key_exists( $a, $this->sortOrder ) ? $this->sortOrder[$a] : 999999;
-		$b = array_key_exists( $b, $this->sortOrder ) ? $this->sortOrder[$b] : 999999;
+		$aIndex = array_key_exists( $a, $this->sortOrder ) ? $this->sortOrder[$a] : null;
+		$bIndex = array_key_exists( $b, $this->sortOrder ) ? $this->sortOrder[$b] : null;
 
-		return ( $a > $b ) ? 1 : ( ( $a < $b ) ? -1: 0 );
+		if ( $aIndex === $bIndex ) {
+			// If we encounter multiple unknown languages, which may happen if the sort table is not
+			// updated, we list them alphabetically.
+			return strcmp( $a, $b );
+		} elseif ( $aIndex === null ) {
+			// Unknown languages must go under the known languages.
+			return 1;
+		} elseif ( $bIndex === null ) {
+			return -1;
+		} else {
+			return $aIndex - $bIndex;
+		}
 	}
 
 	/**
 	 * Build sort order to be used by compareLinks().
 	 *
 	 * @param string $sort
-	 * @param array $sortOrders []
-	 * @param array $sortPrepend []
+	 * @param array[] $sortOrders
 	 *
-	 * @throws \MWException
-	 * @return array
+	 * @return int[]
 	 */
-	private function buildSortOrder( $sort, array $sortOrders, array $sortPrepend ) {
-		if ( !array_key_exists( 'alphabetic', $sortOrders ) ) {
-			throw new \MWException( 'alphabetic interwiki sorting order is missing from Wikibase Client settings.' );
-		}
-
+	private function buildSortOrder( $sort, array $sortOrders ) {
 		$sortOrder = $sortOrders['alphabetic'];
 
 		if ( $sort === 'alphabetic' ) {
 			// do nothing
-		} else if ( $sort === 'code' ) {
-			sort( $sortOrder );
+		} elseif ( $sort === 'code' ) {
+			// The concept of known/unknown languages is irrelevant in strict code order.
+			$sortOrder = array();
 		} else {
 			if ( array_key_exists( $sort, $sortOrders ) ) {
 				$sortOrder = $sortOrders[$sort];
@@ -123,8 +147,8 @@ class InterwikiSorter {
 			}
 		}
 
-		if ( $sortPrepend !== array() ) {
-			$sortOrder = array_unique( array_merge( $sortPrepend, $sortOrder ) );
+		if ( $this->sortPrepend !== array() ) {
+			$sortOrder = array_unique( array_merge( $this->sortPrepend, $sortOrder ) );
 		}
 
 		return array_flip( $sortOrder );

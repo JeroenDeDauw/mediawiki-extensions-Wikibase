@@ -15,13 +15,13 @@ class PermissionsHelper {
 	 * This modifies the global $wgGroupPermissions and $wgUser variables.
 	 * No measures are taken to restore the original permissions later, this is up to the caller.
 	 *
-	 * @param $permissions
-	 * @param null|array $groups groups to apply to $wgUser. If not given, group
+	 * @param array[]|null $permissions
+	 * @param string[]|null $groups groups to apply to $wgUser. If not given, group
 	 * membership is not modified.
 	 *
 	 * @todo: try to do this without messing with the globals, or at least without hardcoding them.
 	 */
-	public static function applyPermissions( $permissions, $groups = null ) {
+	public static function applyPermissions( array $permissions = null, array $groups = null ) {
 		global $wgGroupPermissions;
 		global $wgUser;
 

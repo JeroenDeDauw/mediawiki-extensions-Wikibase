@@ -3,6 +3,8 @@
 namespace Wikibase\Lib;
 
 use Wikibase\DataModel\Entity\PropertyId;
+use Wikibase\DataModel\Services\Lookup\PropertyDataTypeLookup;
+use Wikibase\DataModel\Services\Lookup\PropertyDataTypeLookupException;
 use Wikibase\PropertyInfoStore;
 
 /**
@@ -41,7 +43,7 @@ class PropertyInfoDataTypeLookup implements PropertyDataTypeLookup {
 	 * @param PropertyId $propertyId
 	 *
 	 * @return string
-	 * @throws PropertyNotFoundException
+	 * @throws PropertyDataTypeLookupException
 	 */
 	public function getDataTypeIdForProperty( PropertyId $propertyId ) {
 		$dataTypeId = null;
@@ -64,7 +66,7 @@ class PropertyInfoDataTypeLookup implements PropertyDataTypeLookup {
 		}
 
 		if ( $dataTypeId === null ) {
-			throw new PropertyNotFoundException( $propertyId );
+			throw new PropertyDataTypeLookupException( $propertyId );
 		}
 
 		return $dataTypeId;

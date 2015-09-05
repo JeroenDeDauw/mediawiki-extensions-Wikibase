@@ -1,23 +1,24 @@
 <?php
 
-namespace Wikibase\Test\Api;
+namespace Wikibase\Test\Repo\Api;
 
 use DataValues\StringValue;
+use FormatJson;
+use UsageException;
+use Wikibase\DataModel\Claim\Claims;
 use Wikibase\DataModel\Entity\EntityId;
 use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\ItemId;
 use Wikibase\DataModel\Entity\Property;
+use Wikibase\DataModel\Services\Statement\GuidGenerator;
 use Wikibase\DataModel\Snak\PropertyValueSnak;
-use Wikibase\Repo\WikibaseRepo;
 use Wikibase\DataModel\Snak\Snak;
-use Wikibase\DataModel\Claim\Statement;
-use Wikibase\DataModel\Claim\Claims;
-use Wikibase\Lib\ClaimGuidGenerator;
-use FormatJson;
-use UsageException;
+use Wikibase\DataModel\Statement\Statement;
+use Wikibase\DataModel\Statement\StatementListProvider;
+use Wikibase\Repo\WikibaseRepo;
 
 /**
- * @covers Wikibase\Api\SetQualifier
+ * @covers Wikibase\Repo\Api\SetQualifier
  *
  * @group API
  * @group Database
@@ -36,7 +37,7 @@ use UsageException;
  */
 class SetQualifierTest extends WikibaseApiTestCase {
 
-	public function setUp() {
+	protected function setUp() {
 		parent::setUp();
 
 		static $hasEntities = false;
@@ -59,11 +60,11 @@ class SetQualifierTest extends WikibaseApiTestCase {
 		static $snaks = array();
 
 		if ( !isset( $snaks[$type] ) ) {
-			$prop = Property::newEmpty();
-			$propertyId = $this->makeProperty( $prop, 'string' )->getId();
+			$prop = Property::newFromType( 'string' );
+			$propertyId = $this->makeProperty( $prop )->getId();
 
 			$snaks[$type] = new $type( $propertyId, $data );
-			$this->assertInstanceOf( 'Wikibase\Snak', $snaks[$type] );
+			$this->assertInstanceOf( 'Wikibase\DataModel\Snak\Snak', $snaks[$type] );
 		}
 
 		return $snaks[$type];
@@ -73,19 +74,15 @@ class SetQualifierTest extends WikibaseApiTestCase {
 	 * Creates the given property in the database, if necessary.
 	 *
 	 * @param Property $property
-	 * @param $type
 	 *
 	 * @return Property
 	 */
-	protected function makeProperty( Property $property, $type ) {
+	protected function makeProperty( Property $property ) {
 		$store = WikibaseRepo::getDefaultInstance()->getEntityStore();
-
-		$property->setDataTypeId( $type );
 
 		$store->saveEntity( $property, 'testing', $GLOBALS['wgUser'], EDIT_NEW );
 		return $property;
 	}
-
 
 	protected function getTestItem() {
 		static $item = null;
@@ -93,18 +90,19 @@ class SetQualifierTest extends WikibaseApiTestCase {
 		if ( !$item ) {
 			$store = WikibaseRepo::getDefaultInstance()->getEntityStore();
 
-			$item = Item::newEmpty();
-			$store->saveEntity( $item, '', $GLOBALS['wgUser'], EDIT_NEW );
+			$newItem = new Item();
+			$store->saveEntity( $newItem, '', $GLOBALS['wgUser'], EDIT_NEW );
 
-			$prop = Property::newEmpty();
-			$propId = $this->makeProperty( $prop, 'string' )->getId();
-			$claim = new Statement( new PropertyValueSnak( $propId, new StringValue( '^_^' ) ) );
+			$prop = Property::newFromType( 'string' );
+			$propId = $this->makeProperty( $prop )->getId();
+			$snak = new PropertyValueSnak( $propId, new StringValue( '^_^' ) );
 
-			$guidGenerator = new ClaimGuidGenerator();
-			$claim->setGuid( $guidGenerator->newGuid( $item->getId() ) );
-			$item->addClaim( $claim );
+			$guidGenerator = new GuidGenerator();
+			$guid = $guidGenerator->newGuid( $newItem->getId() );
+			$newItem->getStatements()->addNewStatement( $snak, null, null, $guid );
 
-			$store->saveEntity( $item, '', $GLOBALS['wgUser'], EDIT_UPDATE );
+			$store->saveEntity( $newItem, '', $GLOBALS['wgUser'], EDIT_UPDATE );
+			$item = $newItem;
 		}
 
 		return $item;
@@ -112,9 +110,9 @@ class SetQualifierTest extends WikibaseApiTestCase {
 
 	public function provideAddRequests() {
 		return array(
-			array( 'Wikibase\PropertyNoValueSnak' ),
-			array( 'Wikibase\PropertySomeValueSnak' ),
-			array( 'Wikibase\PropertyValueSnak', new StringValue( 'o_O' ) )
+			array( 'Wikibase\DataModel\Snak\PropertyNoValueSnak' ),
+			array( 'Wikibase\DataModel\Snak\PropertySomeValueSnak' ),
+			array( 'Wikibase\DataModel\Snak\PropertyValueSnak', new StringValue( 'o_O' ) )
 		);
 	}
 
@@ -123,20 +121,22 @@ class SetQualifierTest extends WikibaseApiTestCase {
 	 */
 	public function testAddRequests( $snakType, $data = null ) {
 		$item = $this->getTestItem();
-		$claims = $item->getClaims();
-		$claim = reset( $claims );
+		$statements = $item->getStatements()->toArray();
+		/** @var Statement $statement */
+		$statement = reset( $statements );
+		$guid = $statement->getGuid();
 
 		$snak = $this->getTestSnak( $snakType, $data );
 
-		$this->makeSetQualifierRequest( $claim->getGuid(), null, $snak, $item->getId() );
+		$this->makeSetQualifierRequest( $guid, null, $snak, $item->getId() );
 
 		// now the hash exists, so the same request should fail
 		$this->setExpectedException( 'UsageException' );
-		$this->makeSetQualifierRequest( $claim->getGuid(), null, $snak, $item->getId() );
+		$this->makeSetQualifierRequest( $guid, null, $snak, $item->getId() );
 	}
 
 	public function provideChangeRequests() {
-		return array( array( 'Wikibase\PropertyValueSnak', new StringValue( 'o_O' ) ) );
+		return array( array( 'Wikibase\DataModel\Snak\PropertyValueSnak', new StringValue( 'o_O' ) ) );
 	}
 
 	/**
@@ -144,8 +144,10 @@ class SetQualifierTest extends WikibaseApiTestCase {
 	 */
 	public function testChangeRequests( $snakType, $data = null ) {
 		$item = $this->getTestItem();
-		$claims = $item->getClaims();
-		$claim = reset( $claims );
+		$statements = $item->getStatements()->toArray();
+		/** @var Statement $statement */
+		$statement = reset( $statements );
+		$guid = $statement->getGuid();
 
 		$snak = $this->getTestSnak( $snakType, $data );
 
@@ -153,11 +155,11 @@ class SetQualifierTest extends WikibaseApiTestCase {
 		$hash = $snak->getHash();
 		$newQualifier = new PropertyValueSnak( $snak->getPropertyId(), new StringValue( __METHOD__ . '#' . $counter++ ) );
 
-		$this->makeSetQualifierRequest( $claim->getGuid(), $hash, $newQualifier, $item->getId() );
+		$this->makeSetQualifierRequest( $guid, $hash, $newQualifier, $item->getId() );
 
 		// now the hash changed, so the same request should fail
 		$this->setExpectedException( 'UsageException' );
-		$this->makeSetQualifierRequest( $claim->getGuid(), $hash, $newQualifier, $item->getId() );
+		$this->makeSetQualifierRequest( $guid, $hash, $newQualifier, $item->getId() );
 	}
 
 	protected function makeSetQualifierRequest( $statementGuid, $snakhash, Snak $qualifier, EntityId $entityId ) {
@@ -176,16 +178,16 @@ class SetQualifierTest extends WikibaseApiTestCase {
 
 		$this->makeValidRequest( $params );
 
+		/** @var StatementListProvider $entity */
 		$entity = WikibaseRepo::getDefaultInstance()->getEntityLookup()->getEntity( $entityId );
 
-		$claims = new Claims( $entity->getClaims() );
+		$statements = $entity->getStatements();
 
-		$this->assertTrue( $claims->hasClaimWithGuid( $params['claim'] ) );
+		$statement = $statements->getFirstStatementWithGuid( $params['claim'] );
 
-		$claim = $claims->getClaimWithGuid( $params['claim'] );
-
+		$this->assertNotNull( $statement );
 		$this->assertTrue(
-			$claim->getQualifiers()->hasSnak( $qualifier ),
+			$statement->getQualifiers()->hasSnak( $qualifier ),
 			'The qualifier should exist in the qualifier list after making the request'
 		);
 	}
@@ -203,18 +205,18 @@ class SetQualifierTest extends WikibaseApiTestCase {
 	/**
 	 * @dataProvider invalidRequestProvider
 	 */
-	public function testInvalidRequest( $itemHandle, $claimGuid, $propertyHande, $snakType, $value, $error ) {
+	public function testInvalidRequest( $itemHandle, $guid, $propertyHande, $snakType, $value, $error ) {
 		$itemId = new ItemId( EntityTestHelper::getId( $itemHandle ) );
 		$item = WikibaseRepo::getDefaultInstance()->getEntityLookup()->getEntity( $itemId );
 
 		$propertyId = EntityTestHelper::getId( $propertyHande );
 
-		if ( $claimGuid === null ) {
-			$claims = $item->getClaims();
-
-			/* @var Claim $claim */
-			$claim = reset( $claims );
-			$claimGuid = $claim->getGuid();
+		if ( $guid === null ) {
+			/** @var Item $item */
+			$statements = $item->getStatements()->toArray();
+			/** @var Statement $statement */
+			$statement = reset( $statements );
+			$guid = $statement->getGuid();
 		}
 
 		if ( !is_string( $value ) ) {
@@ -223,7 +225,7 @@ class SetQualifierTest extends WikibaseApiTestCase {
 
 		$params = array(
 			'action' => 'wbsetqualifier',
-			'claim' => $claimGuid,
+			'claim' => $guid,
 			'property' => $propertyId,
 			'snaktype' => $snakType,
 			'value' => $value,
@@ -232,8 +234,8 @@ class SetQualifierTest extends WikibaseApiTestCase {
 		try {
 			$this->doApiRequestWithToken( $params );
 			$this->fail( 'Invalid request did not raise an error' );
-		} catch ( \UsageException $e ) {
-			$this->assertEquals( $error, $e->getCodeString(),  'Invalid claim guid raised correct error' );
+		} catch ( UsageException $ex ) {
+			$this->assertEquals( $error, $ex->getCodeString(), 'Invalid request raised correct error' );
 		}
 	}
 

@@ -1,125 +1,179 @@
 <?php
 
-namespace Wikibase\Test\Api;
+namespace Wikibase\Test\Repo\Api;
 
+use ApiTestCase;
 use DataValues\DataValue;
+use DataValues\QuantityValue;
 use DataValues\StringValue;
 use DataValues\TimeValue;
-use ValueFormatters\TimeFormatter;
 use Wikibase\DataModel\Entity\EntityIdValue;
+use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\ItemId;
 use Wikibase\Lib\SnakFormatter;
+use Wikibase\Lib\Store\StorageException;
+use Wikibase\Repo\WikibaseRepo;
 
 /**
- * @covers Wikibase\Api\FormatSnakValue
+ * @covers Wikibase\Repo\Api\FormatSnakValue
  *
  * @group Wikibase
  * @group WikibaseAPI
  * @group WikibaseRepo
  * @group FormatSnakValueAPI
- *
+ * @group Database
  * @group medium
  *
  * @licence GNU GPL v2+
  * @author Daniel Kinzler
  */
-class FormatSnakValueTest extends \ApiTestCase {
-
-	protected function setUp() {
-		parent::setUp();
-
-		$this->setMwGlobals( array(
-			'wgArticlePath' => '/wiki/$1'
-		) );
-	}
+class FormatSnakValueTest extends ApiTestCase {
 
 	public function provideApiRequest() {
-		$november11 = new TimeValue( '+2013-11-11T01:02:03Z',
-			1 * 60 * 60, 0, 0,
+		$november11 = new TimeValue(
+			'+2013-11-11T01:02:03Z',
+			0, 0, 0,
 			TimeValue::PRECISION_DAY,
-			TimeFormatter::CALENDAR_GREGORIAN );
+			'http://acme.test'
+		);
 
-		$november = new TimeValue( '+00000002013-11-10T00:00:00Z',
-			1 * 60 * 60, 0, 0,
+		$november = new TimeValue(
+			'+2013-11-10T00:00:00Z',
+			0, 0, 0,
 			TimeValue::PRECISION_MONTH,
-			TimeFormatter::CALENDAR_GREGORIAN );
+			'http://acme.test'
+		);
+
+		$wordSeparator = wfMessage( 'word-separator' )->text();
+		$deletedItem = wfMessage( 'wikibase-deletedentity-item' )->inLanguage( 'en' )->text();
 
 		return array(
-			array( new StringValue( 'test' ),
+			array(
+				new StringValue( 'test' ),
 				null,
 				null,
 				null,
-				'/^test$/' ),
-
-			array( $november11,
+				'/^test$/'
+			),
+			array(
+				$november11,
 				null,
 				null,
-				array( TimeFormatter::OPT_LANG => 'en' ),
-				'/^11 November 2013$/' ),
-
-			array( $november,
+				null,
+				'/^11 November 2013$/'
+			),
+			array(
+				$november,
 				null,
 				null,
-				array( TimeFormatter::OPT_LANG => 'en' ),
-				'/^November 2013$/' ),
-
-			/* // TimeFormatter is currently bypassed; This test can only work once we start using it again.
-			array( $november11,
 				null,
-				null,
-				array(
-					TimeFormatter::OPT_LANG => 'en',
-					TimeFormatter::OPT_CALENDARNAMES => array( 'http://acme.org' => 'ACME' ),
-					TimeFormatter::OPT_TIME_ISO_FORMATTER => null
-				),
-				'/^\+2013-11-11T01:02:03Z (ACME)$/' ),
-			*/
-
-			array( new StringValue( 'http://acme.test' ),
+				'/^November 2013$/'
+			),
+			array(
+				new StringValue( 'http://acme.test' ),
 				'string',
 				SnakFormatter::FORMAT_PLAIN,
 				null,
-				'@^http://acme\.test$@' ),
-
-			array( new StringValue( 'http://acme.test' ),
+				'@^http://acme\.test$@'
+			),
+			array(
+				new StringValue( 'http://acme.test' ),
 				'string',
 				SnakFormatter::FORMAT_WIKI,
 				null,
-				'@^http&#58;//acme\.test$@' ),
-
-			array( new StringValue( 'http://acme.test' ),
+				'@^http&#58;//acme\.test$@'
+			),
+			array(
+				new StringValue( 'http://acme.test' ),
 				'url',
 				SnakFormatter::FORMAT_PLAIN,
 				null,
-				'@^http://acme\.test$@' ),
-
-			array( new StringValue( 'http://acme.test' ),
+				'@^http://acme\.test$@'
+			),
+			array(
+				QuantityValue::newFromNumber( '+12.33', '1' ),
+				'quantity',
+				SnakFormatter::FORMAT_PLAIN,
+				array( 'lang' => 'de' ),
+				'@^12,33$@' // german decimal separator
+			),
+			array(
+				new StringValue( 'http://acme.test' ),
 				'url',
 				SnakFormatter::FORMAT_WIKI,
 				null,
-				'@^http://acme\.test$@' ),
-
-			array( new StringValue( 'example.jpg' ),
+				'@^http://acme\.test$@'
+			),
+			array(
+				new StringValue( 'example.jpg' ),
 				'commonsMedia',
 				SnakFormatter::FORMAT_HTML,
 				null,
-				'@commons\.wikimedia\.org\/wiki\/File:Example\.jpg@' ),
-
-			// FIXME: This test uses the production environment, but it should have its own mock data
-			array( new EntityIdValue( new ItemId( 'Q200000' ) ),
+				'@commons\.wikimedia\.org\/wiki\/File:Example\.jpg@'
+			),
+			array(
+				new EntityIdValue( new ItemId( 'Q404' ) ),
 				'wikibase-item',
 				SnakFormatter::FORMAT_HTML,
 				null,
-				'/^<a\b[^>]* href="[^"]*\bQ200000"[^>]*>[^<]*<\/a>.*$/' ),
+				'/^Q404' . $wordSeparator . '<span class="wb-entity-undefinedinfo">\(' . preg_quote( $deletedItem, '/' ) . '\)<\/span>$/'
+			),
+			array(
+				new EntityIdValue( new ItemId( 'Q23' ) ),
+				'wikibase-item',
+				SnakFormatter::FORMAT_HTML,
+				null,
+				'/^<a title="[^"]*Q23" href="[^"]+Q23">George Washington<\/a>$/'
+			),
+			array(
+				new EntityIdValue( new ItemId( 'Q23' ) ),
+				'wikibase-item',
+				SnakFormatter::FORMAT_HTML,
+				array( 'lang' => 'de-ch' ), // fallback
+				'/^<a title="[^"]*Q23" href="[^"]+Q23" lang="en">George Washington<\/a><sup class="wb-language-fallback-indicator">[^<>]+<\/sup>$/'
+			),
 
-			//TODO: test HTML output
+			// @TODO: Test an existing Item id
 		);
+	}
+
+	private function setUpEntities() {
+		global $wgUser;
+
+		static $setup = false;
+
+		if ( $setup ) {
+			return;
+		}
+
+		$setup = true;
+
+		$store = WikibaseRepo::getDefaultInstance()->getStore()->getEntityStore();
+
+		// remove entities we care about
+		$idsToDelete = array( new ItemId( 'Q404' ), new ItemId( 'Q23' ) );
+		foreach ( $idsToDelete as $id ) {
+			try {
+				$store->deleteEntity( $id, 'test', $wgUser );
+			} catch ( StorageException $ex ) {
+				// ignore
+			}
+		}
+
+		// set up Q23
+		$item = new Item();
+		$item->setId( new ItemId( 'Q23' ) );
+		$item->getFingerprint()->setLabel( 'en', 'George Washington' );
+
+		$store->saveEntity( $item, 'testing', $wgUser, EDIT_NEW );
 	}
 
 	/**
 	 * @dataProvider provideApiRequest
 	 */
 	public function testApiRequest( DataValue $value, $dataType, $format, $options, $pattern ) {
+		$this->setUpEntities();
+
 		$params = array(
 			'action' => 'wbformatvalue',
 			'generate' => $format,

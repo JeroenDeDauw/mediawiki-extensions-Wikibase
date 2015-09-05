@@ -1,6 +1,6 @@
 <?php
 
-namespace Wikibase\Test\Api;
+namespace Wikibase\Test\Repo\Api;
 
 use UsageException;
 use Wikibase\Test\PermissionsHelper;
@@ -19,12 +19,12 @@ class PermissionsTestCase extends WikibaseApiTestCase {
 
 	private static $hasSetup;
 
-	public function setUp() {
+	protected function setUp() {
 		global $wgGroupPermissions, $wgUser;
 
 		parent::setUp();
 
-		if( !isset( self::$hasSetup ) ){
+		if ( !isset( self::$hasSetup ) ) {
 			$this->initTestEntities( array( 'Oslo', 'Empty' ) );
 		}
 		self::$hasSetup = true;
@@ -46,7 +46,7 @@ class PermissionsTestCase extends WikibaseApiTestCase {
 		parent::tearDown();
 	}
 
-	protected function doPermissionsTest( $action, $params, $permissions = array(), $expectedError = null ) {
+	protected function doPermissionsTest( $action, array $params, array $permissions = null, $expectedError = null ) {
 		global $wgUser, $wgGroupPermissions;
 
 		$this->setMwGlobals( 'wgUser', clone $wgUser );
@@ -70,4 +70,4 @@ class PermissionsTestCase extends WikibaseApiTestCase {
 		}
 	}
 
-} 
+}

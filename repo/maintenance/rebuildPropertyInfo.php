@@ -1,7 +1,10 @@
 <?php
 
 namespace Wikibase;
+
 use LoggedUpdateMaintenance;
+use Wikibase\Lib\Reporting\ObservableMessageReporter;
+use Wikibase\Repo\WikibaseRepo;
 
 $basePath = getenv( 'MW_INSTALL_PATH' ) !== false ? getenv( 'MW_INSTALL_PATH' ) : __DIR__ . '/../../../..';
 
@@ -30,7 +33,7 @@ class RebuildPropertyInfo extends LoggedUpdateMaintenance {
 	/**
 	 * @see LoggedUpdateMaintenance::doDBUpdates
 	 *
-	 * @return boolean
+	 * @return bool
 	 */
 	public function doDBUpdates() {
 		if ( !defined( 'WB_VERSION' ) ) {
@@ -38,20 +41,23 @@ class RebuildPropertyInfo extends LoggedUpdateMaintenance {
 			exit;
 		}
 
-		$reporter = new \ObservableMessageReporter();
+		$reporter = new ObservableMessageReporter();
 		$reporter->registerReporterCallback(
 			array( $this, 'report' )
 		);
 
 		$table = new PropertyInfoTable( false );
-		$entityLookup = new WikiPageEntityLookup( false );
+		$wikibaseRepo = WikibaseRepo::getDefaultInstance();
+		$entityLookup = $wikibaseRepo->getEntityLookup();
+		$propertyInfoBuilder = $wikibaseRepo->newPropertyInfoBuilder();
+		$useRedirectTargetColumn = $wikibaseRepo->getSettings()->getSetting( 'useRedirectTargetColumn' );
 
-		$builder = new PropertyInfoTableBuilder( $table, $entityLookup );
+		$builder = new PropertyInfoTableBuilder( $table, $entityLookup, $propertyInfoBuilder, $useRedirectTargetColumn );
 		$builder->setReporter( $reporter );
 
-		$builder->setBatchSize( intval( $this->getOption( 'batch-size', 100 ) ) );
+		$builder->setBatchSize( (int)$this->getOption( 'batch-size', 100 ) );
 		$builder->setRebuildAll( $this->getOption( 'rebuild-all', false ) );
-		$builder->setFromId( intval( $this->getOption( 'start-row', 1 ) ) );
+		$builder->setFromId( (int)$this->getOption( 'start-row', 1 ) );
 
 		$n = $builder->rebuildPropertyInfo();
 
@@ -74,7 +80,7 @@ class RebuildPropertyInfo extends LoggedUpdateMaintenance {
 	 *
 	 * @since 0.4
 	 *
-	 * @param $msg
+	 * @param string $msg
 	 */
 	public function report( $msg ) {
 		$this->output( "$msg\n" );
@@ -83,4 +89,4 @@ class RebuildPropertyInfo extends LoggedUpdateMaintenance {
 }
 
 $maintClass = 'Wikibase\RebuildPropertyInfo';
-require_once( RUN_MAINTENANCE_IF_MAIN );
+require_once RUN_MAINTENANCE_IF_MAIN;

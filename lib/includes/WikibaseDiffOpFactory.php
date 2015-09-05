@@ -2,15 +2,20 @@
 
 namespace Wikibase;
 
+use Diff\DiffOp\DiffOp;
+use Diff\DiffOpFactory;
+use Wikibase\DataModel\Services\Diff\EntityDiff;
+
 /**
- * Class for changes that can be represented as a IDiff.
+ * Class for changes that can be represented as a Diff.
  *
  * @since 0.4
  *
  * @licence GNU GPL v2+
  * @author Daniel Kinzler
  */
-class WikibaseDiffOpFactory extends \Diff\DiffOpFactory {
+class WikibaseDiffOpFactory extends DiffOpFactory {
+
 	public function newFromArray( array $diffOp ) {
 		$this->assertHasKey( 'type', $diffOp );
 
@@ -35,9 +40,9 @@ class WikibaseDiffOpFactory extends \Diff\DiffOpFactory {
 	 * @todo: pull this up into DiffOpFactory
 	 *
 	 * @param array $data the input data
-	 * @return \Diff\DiffOp[] The diff ops
+	 * @return DiffOp[] The diff ops
 	 */
-	protected function createOperations( array $data ) {
+	private function createOperations( array $data ) {
 		$operations = array();
 
 		foreach ( $data as $key => $operation ) {
@@ -46,4 +51,5 @@ class WikibaseDiffOpFactory extends \Diff\DiffOpFactory {
 
 		return $operations;
 	}
+
 }

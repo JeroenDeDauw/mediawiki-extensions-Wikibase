@@ -3,13 +3,14 @@
 namespace ValueFormatters\Test;
 
 use DataValues\TimeValue;
+use MediaWikiTestCase;
 use ValueFormatters\FormatterOptions;
-use ValueFormatters\TimeFormatter;
 use ValueFormatters\ValueFormatter;
+use ValueParsers\IsoTimestampParser;
 use ValueParsers\ParserOptions;
 use ValueParsers\ValueParser;
 use Wikibase\Lib\MwTimeIsoFormatter;
-use Wikibase\Lib\Parsers\TimeParser;
+use Wikibase\Lib\Parsers\TimeParserFactory;
 
 /**
  * @covers Wikibase\Lib\MwTimeIsoFormatter
@@ -22,18 +23,9 @@ use Wikibase\Lib\Parsers\TimeParser;
  * @licence GNU GPL v2+
  * @author H. Snater < mediawiki@snater.com >
  * @author Adam Shorland
+ * @author Thiemo Mättig
  */
-class MwTimeIsoFormatterTest extends \MediaWikiTestCase {
-
-	protected function setUp() {
-		parent::setUp();
-		/*
-		 * Temporary wgHooks performance improvement,
-		 * this can be removed once the following is merged:
-		 * https://gerrit.wikimedia.org/r/#/c/125706/1
-		 */
-		$this->stashMwGlobals( 'wgHooks' );
-	}
+class MwTimeIsoFormatterTest extends MediaWikiTestCase {
 
 	/**
 	 * Returns an array of test parameters.
@@ -41,8 +33,10 @@ class MwTimeIsoFormatterTest extends \MediaWikiTestCase {
 	 * @return array
 	 */
 	public function formatProvider() {
+		$gregorian = 'http://www.wikidata.org/entity/Q1985727';
+
 		$tests = array(
-			//+ dates
+			// Positive dates
 			array(
 				'+2013-08-16T00:00:00Z', TimeValue::PRECISION_DAY,
 				'16 August 2013',
@@ -72,22 +66,6 @@ class MwTimeIsoFormatterTest extends \MediaWikiTestCase {
 				'2013',
 			),
 			array(
-				'+00000001995-00-00T00:00:00Z', TimeValue::PRECISION_YEAR,
-				'1995',
-			),
-			array(
-				'+00000001996-01-00T00:00:00Z', TimeValue::PRECISION_YEAR,
-				'1996',
-			),
-			array(
-				'+00000001996-01-00T00:00:00Z', TimeValue::PRECISION_MONTH,
-				'January 1996',
-			),
-			array(
-				'+00000001997-00-01T00:00:00Z', TimeValue::PRECISION_YEAR,
-				'1997',
-			),
-			array(
 				'+00000000013-07-16T00:00:00Z', TimeValue::PRECISION_YEAR,
 				'13',
 			),
@@ -99,81 +77,140 @@ class MwTimeIsoFormatterTest extends \MediaWikiTestCase {
 				'+12342222013-07-16T00:10:00Z', TimeValue::PRECISION_YEAR,
 				'12342222013',
 			),
-			//stepping through precisions
+
+			// Rounding for decades is different from rounding for centuries
 			array(
-				'+12345678912-01-01T01:01:01Z', TimeValue::PRECISION_10a,
+				'+1982-01-01T01:01:01Z', TimeValue::PRECISION_YEAR10,
+				'1980s',
+			),
+			array(
+				'+1988-01-01T01:01:01Z', TimeValue::PRECISION_YEAR10,
+				'1980s',
+			),
+			array(
+				'-1982-01-01T01:01:01Z', TimeValue::PRECISION_YEAR10,
+				'1980s BCE',
+			),
+			array(
+				'-1988-01-01T01:01:01Z', TimeValue::PRECISION_YEAR10,
+				'1980s BCE',
+			),
+
+			array(
+				'+1822-01-01T01:01:01Z', TimeValue::PRECISION_YEAR100,
+				'19. century',
+			),
+			array(
+				'+1822-01-01T01:01:01Z', TimeValue::PRECISION_YEAR100,
+				'19. century',
+			),
+			array(
+				'-1888-01-01T01:01:01Z', TimeValue::PRECISION_YEAR100,
+				'19. century BCE',
+			),
+			array(
+				'-1888-01-01T01:01:01Z', TimeValue::PRECISION_YEAR100,
+				'19. century BCE',
+			),
+
+			array(
+				'+1222-01-01T01:01:01Z', TimeValue::PRECISION_YEAR1K,
+				'2. millennium',
+			),
+			array(
+				'+1888-01-01T01:01:01Z', TimeValue::PRECISION_YEAR1K,
+				'2. millennium',
+			),
+			array(
+				'-1222-01-01T01:01:01Z', TimeValue::PRECISION_YEAR1K,
+				'2. millennium BCE',
+			),
+
+			// So what about the "Millenium Disagreement"?
+			array(
+				'+1600-01-01T01:01:01Z', TimeValue::PRECISION_YEAR100,
+				'16. century',
+			),
+			array(
+				'+2000-01-01T01:01:01Z', TimeValue::PRECISION_YEAR1K,
+				'2. millennium',
+			),
+
+			// Positive dates, stepping through precisions
+			array(
+				'+12345678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR10,
 				'12345678910s',
 			),
 			array(
-				'+12345678919-01-01T01:01:01Z', TimeValue::PRECISION_10a,
-				'12345678920s',
+				'+12345678919-01-01T01:01:01Z', TimeValue::PRECISION_YEAR10,
+				'12345678910s',
 			),
 			array(
-				'+12345678912-01-01T01:01:01Z', TimeValue::PRECISION_100a,
-				'123456789. century',
-			),
-			array(
-				'+12345678992-01-01T01:01:01Z', TimeValue::PRECISION_100a,
+				'+12345678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR100,
 				'123456790. century',
 			),
 			array(
-				'+12345678112-01-01T01:01:01Z', TimeValue::PRECISION_ka,
-				'12345678. millennium',
+				'+12345678992-01-01T01:01:01Z', TimeValue::PRECISION_YEAR100,
+				'123456790. century',
 			),
 			array(
-				'+12345678912-01-01T01:01:01Z', TimeValue::PRECISION_ka,
+				'+12345678112-01-01T01:01:01Z', TimeValue::PRECISION_YEAR1K,
 				'12345679. millennium',
 			),
 			array(
-				'+12345671912-01-01T01:01:01Z', TimeValue::PRECISION_10ka,
-				'in 12345670000 years',
+				'+12345678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR1K,
+				'12345679. millennium',
 			),
 			array(
-				'+12345678912-01-01T01:01:01Z', TimeValue::PRECISION_10ka,
-				'in 12345680000 years',
+				'+12345671912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR10K,
+				'12345670000 years CE',
 			),
 			array(
-				'+12345618912-01-01T01:01:01Z', TimeValue::PRECISION_100ka,
-				'in 12345600000 years',
+				'+12345678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR10K,
+				'12345680000 years CE',
 			),
 			array(
-				'+12345678912-01-01T01:01:01Z', TimeValue::PRECISION_100ka,
-				'in 12345700000 years',
+				'+12345618912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR100K,
+				'12345600000 years CE',
 			),
 			array(
-				'+12345178912-01-01T01:01:01Z', TimeValue::PRECISION_Ma,
-				'in 12345 million years',
+				'+12345678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR100K,
+				'12345700000 years CE',
 			),
 			array(
-				'+12345678912-01-01T01:01:01Z', TimeValue::PRECISION_Ma,
-				'in 12346 million years',
+				'+12345178912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR1M,
+				'12345 million years CE',
 			),
 			array(
-				'+12341678912-01-01T01:01:01Z', TimeValue::PRECISION_10Ma,
-				'in 12340 million years',
+				'+12345678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR1M,
+				'12346 million years CE',
 			),
 			array(
-				'+12345678912-01-01T01:01:01Z', TimeValue::PRECISION_10Ma,
-				'in 12350 million years',
+				'+12341678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR10M,
+				'12340 million years CE',
 			),
 			array(
-				'+12345678912-01-01T01:01:01Z', TimeValue::PRECISION_100Ma,
-				'in 12300 million years',
+				'+12345678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR10M,
+				'12350 million years CE',
 			),
 			array(
-				'+12375678912-01-01T01:01:01Z', TimeValue::PRECISION_100Ma,
-				'in 12400 million years',
+				'+12345678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR100M,
+				'12300 million years CE',
 			),
 			array(
-				'+12345678912-01-01T01:01:01Z', TimeValue::PRECISION_Ga,
-				'in 12 billion years',
+				'+12375678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR100M,
+				'12400 million years CE',
 			),
 			array(
-				'+12545678912-01-01T01:01:01Z', TimeValue::PRECISION_Ga,
-				'in 13 billion years',
+				'+12345678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR1G,
+				'12 billion years CE',
+			),
+			array(
+				'+12545678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR1G,
+				'13 billion years CE',
 			),
 
-			//- dates
+			// Negative dates
 			array(
 				'-2013-08-16T00:00:00Z', TimeValue::PRECISION_DAY,
 				'16 August 2013 BCE',
@@ -214,94 +251,260 @@ class MwTimeIsoFormatterTest extends \MediaWikiTestCase {
 				'-12342222013-07-16T00:10:00Z', TimeValue::PRECISION_YEAR,
 				'12342222013 BCE',
 			),
-			//stepping through precisions
+
+			// Negative dates, stepping through precisions
 			array(
-				'-12345678912-01-01T01:01:01Z', TimeValue::PRECISION_10a,
+				'-12345678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR10,
 				'12345678910s BCE',
 			),
 			array(
-				'-12345678919-01-01T01:01:01Z', TimeValue::PRECISION_10a,
-				'12345678920s BCE',
+				'-12345678919-01-01T01:01:01Z', TimeValue::PRECISION_YEAR10,
+				'12345678910s BCE',
 			),
 			array(
-				'-12345678912-01-01T01:01:01Z', TimeValue::PRECISION_100a,
-				'123456789. century BCE',
-			),
-			array(
-				'-12345678992-01-01T01:01:01Z', TimeValue::PRECISION_100a,
+				'-12345678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR100,
 				'123456790. century BCE',
 			),
 			array(
-				'-12345678112-01-01T01:01:01Z', TimeValue::PRECISION_ka,
-				'12345678. millennium BCE',
+				'-12345678992-01-01T01:01:01Z', TimeValue::PRECISION_YEAR100,
+				'123456790. century BCE',
 			),
 			array(
-				'-12345678912-01-01T01:01:01Z', TimeValue::PRECISION_ka,
+				'-12345678112-01-01T01:01:01Z', TimeValue::PRECISION_YEAR1K,
 				'12345679. millennium BCE',
 			),
 			array(
-				'-12345671912-01-01T01:01:01Z', TimeValue::PRECISION_10ka,
-				'12345670000 years ago',
+				'-12345678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR1K,
+				'12345679. millennium BCE',
 			),
 			array(
-				'-12345678912-01-01T01:01:01Z', TimeValue::PRECISION_10ka,
-				'12345680000 years ago',
+				'-12345671912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR10K,
+				'12345670000 years BCE',
 			),
 			array(
-				'-12345618912-01-01T01:01:01Z', TimeValue::PRECISION_100ka,
-				'12345600000 years ago',
+				'-12345678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR10K,
+				'12345680000 years BCE',
 			),
 			array(
-				'-12345678912-01-01T01:01:01Z', TimeValue::PRECISION_100ka,
-				'12345700000 years ago',
+				'-12345618912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR100K,
+				'12345600000 years BCE',
 			),
 			array(
-				'-12345178912-01-01T01:01:01Z', TimeValue::PRECISION_Ma,
-				'12345 million years ago',
+				'-12345678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR100K,
+				'12345700000 years BCE',
 			),
 			array(
-				'-12345678912-01-01T01:01:01Z', TimeValue::PRECISION_Ma,
-				'12346 million years ago',
+				'-12345178912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR1M,
+				'12345 million years BCE',
 			),
 			array(
-				'-12341678912-01-01T01:01:01Z', TimeValue::PRECISION_10Ma,
-				'12340 million years ago',
+				'-12345678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR1M,
+				'12346 million years BCE',
 			),
 			array(
-				'-12345678912-01-01T01:01:01Z', TimeValue::PRECISION_10Ma,
-				'12350 million years ago',
+				'-12341678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR10M,
+				'12340 million years BCE',
 			),
 			array(
-				'-12345678912-01-01T01:01:01Z', TimeValue::PRECISION_100Ma,
-				'12300 million years ago',
+				'-12345678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR10M,
+				'12350 million years BCE',
 			),
 			array(
-				'-12375678912-01-01T01:01:01Z', TimeValue::PRECISION_100Ma,
-				'12400 million years ago',
+				'-12345678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR100M,
+				'12300 million years BCE',
 			),
 			array(
-				'-12345678912-01-01T01:01:01Z', TimeValue::PRECISION_Ga,
-				'12 billion years ago',
+				'-12375678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR100M,
+				'12400 million years BCE',
 			),
 			array(
-				'-12545678912-01-01T01:01:01Z', TimeValue::PRECISION_Ga,
-				'13 billion years ago',
+				'-12345678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR1G,
+				'12 billion years BCE',
+			),
+			array(
+				'-12545678912-01-01T01:01:01Z', TimeValue::PRECISION_YEAR1G,
+				'13 billion years BCE',
 			),
 
-			// Stuff we dont want to format so must return it :<
+			// Some languages default to genitive month names
 			array(
-				'-00000000000-01-01T01:01:01Z', TimeValue::PRECISION_Ga,
+				'+2013-08-16T00:00:00Z', TimeValue::PRECISION_DAY,
+				// Nominative is "Augustus", genitive is "Augusti".
+				'16 Augusti 2013',
+				true,
+				'la'
+			),
+
+			// Preserve punctuation as given in MessagesXx.php but skip suffixes and words
+			array(
+				'+2013-08-16T00:00:00Z', TimeValue::PRECISION_DAY,
+				'16 Avgust, 2013',
+				true,
+				'kaa'
 			),
 			array(
-				'-0-01-01T01:01:01Z', TimeValue::PRECISION_Ga,
+				'+2013-08-16T00:00:00Z', TimeValue::PRECISION_DAY,
+				'16 agosto 2013',
+				true,
+				'pt'
+			),
+			array(
+				'+2013-08-16T00:00:00Z', TimeValue::PRECISION_DAY,
+				'16 8月 2013',
+				true,
+				'yue'
+			),
+
+			// Valid values with day, month and/or year zero
+			array(
+				'+00000001995-00-00T00:00:00Z', TimeValue::PRECISION_YEAR,
+				'1995',
+			),
+			array(
+				'+00000001996-01-00T00:00:00Z', TimeValue::PRECISION_YEAR,
+				'1996',
+			),
+			array(
+				'+00000001996-01-00T00:00:00Z', TimeValue::PRECISION_MONTH,
+				'January 1996',
+			),
+			array(
+				'+00000001997-00-01T00:00:00Z', TimeValue::PRECISION_YEAR,
+				'1997',
+			),
+			array(
+				'+0-00-00T00:00:42Z', TimeValue::PRECISION_YEAR,
+				'0',
+			),
+
+			// centuries and millenia start with 1, so we can format "low" years just fine
+			array(
+				'+100-00-00T00:00:06Z', TimeValue::PRECISION_YEAR1K,
+				'1. millennium'
+			),
+			array(
+				'-100-00-00T00:00:06Z', TimeValue::PRECISION_YEAR1K,
+				'1. millennium BCE'
+			),
+			array(
+				'+10-00-00T00:00:07Z', TimeValue::PRECISION_YEAR100,
+				'1. century'
+			),
+
+			// Integer overflows should not happen
+			array(
+				'+2147483648-00-00T00:00:00Z', TimeValue::PRECISION_YEAR,
+				'2147483648',
+			),
+			array(
+				'+9999999999999999-00-00T00:00:00Z', TimeValue::PRECISION_YEAR,
+				'9999999999999999',
+			),
+
+			// Precision to low, falling back to year
+			array(
+				'-1-00-00T00:00:00Z', TimeValue::PRECISION_YEAR1G,
+				'1 BCE',
+			),
+			array(
+				'-1-00-00T00:00:00Z', TimeValue::PRECISION_YEAR100M,
+				'1 BCE',
+			),
+			array(
+				'-1-00-00T00:00:00Z', TimeValue::PRECISION_YEAR10M,
+				'1 BCE',
+			),
+			array(
+				'-1-00-00T00:00:00Z', TimeValue::PRECISION_YEAR1M,
+				'1 BCE',
+			),
+			array(
+				'-1-00-00T00:00:00Z', TimeValue::PRECISION_YEAR100K,
+				'1 BCE',
+			),
+			array(
+				'-1-00-00T00:00:00Z', TimeValue::PRECISION_YEAR10K,
+				'1 BCE',
+			),
+			array(
+				'-1-00-00T00:00:00Z', TimeValue::PRECISION_YEAR1K,
+				'1. millennium BCE',
+			),
+			array(
+				'-1-00-00T00:00:00Z', TimeValue::PRECISION_YEAR100,
+				'1. century BCE',
+			),
+			array(
+				'-1-00-00T00:00:00Z', TimeValue::PRECISION_YEAR10,
+				'1 BCE',
+			),
+
+			// Better than the raw ISO string
+			array(
+				'-00000000000-01-01T01:01:01Z', TimeValue::PRECISION_YEAR1G,
+				'0',
+			),
+			array(
+				'-0-01-01T01:01:01Z', TimeValue::PRECISION_YEAR1G,
+				'0',
+			),
+			array(
+				'+100000000-00-00T00:00:00Z', TimeValue::PRECISION_YEAR1G,
+				'100000000',
+			),
+			array(
+				'+10000000-00-00T00:00:01Z', TimeValue::PRECISION_YEAR100M,
+				'10000000',
+			),
+			array(
+				'+1000000-00-00T00:00:02Z', TimeValue::PRECISION_YEAR10M,
+				'1000000',
+			),
+			array(
+				'+100000-00-00T00:00:03Z', TimeValue::PRECISION_YEAR1M,
+				'100000',
+			),
+			array(
+				'+10000-00-00T00:00:04Z', TimeValue::PRECISION_YEAR100K,
+				'10000',
+			),
+			array(
+				'+1000-00-00T00:00:05Z', TimeValue::PRECISION_YEAR10K,
+				'1000',
+			),
+			array(
+				'+1-00-00T00:00:08Z', TimeValue::PRECISION_YEAR10,
+				'1',
+			),
+			array(
+				'-0-00-00T00:00:42Z', TimeValue::PRECISION_YEAR,
+				'0',
+			),
+
+			// Stuff we do not want to format so must return it :<
+			array(
+				'+2013-07-00T00:00:00Z', TimeValue::PRECISION_DAY,
+			),
+			array(
+				'+10000000000-00-00T00:00:00Z', TimeValue::PRECISION_DAY,
 			),
 		);
 
 		$argLists = array();
 
 		foreach ( $tests as $args ) {
-			$timeValue = new TimeValue( $args[0], 0, 0, 0, $args[1], TimeFormatter::CALENDAR_GREGORIAN );
-			$argLists[] = array( empty( $args[2] ) ? $args[0] : $args[2], $timeValue, !empty( $args[3] ) );
+			$timestamp = $args[0];
+			$precision = $args[1];
+			$expected = isset( $args[2] ) ? $args[2] : $timestamp;
+			$roundtrip = isset( $args[3] );
+			$languageCode = isset( $args[4] ) ? $args[4] : 'en';
+
+			$argLists[] = array(
+				$expected,
+				new TimeValue( $timestamp, 0, 0, 0, $precision, $gregorian ),
+				$roundtrip,
+				$languageCode
+			);
 		}
 
 		// Different languages at year precision
@@ -309,16 +512,18 @@ class MwTimeIsoFormatterTest extends \MediaWikiTestCase {
 			'ar', //replaces all numbers and separators
 			'bo', //replaces only numbers
 			'de', //switches separators
+			'la', //defaults to genitive month names
 			'or', //replaces all numbers and separators
 		);
-		foreach( $languageCodes as $languageCode ) {
+
+		foreach ( $languageCodes as $languageCode ) {
 			$argLists[] = array(
 				'3333',
 				new TimeValue(
 					'+0000000000003333-01-01T00:00:00Z',
 					0, 0, 0,
 					TimeValue::PRECISION_YEAR,
-					TimeFormatter::CALENDAR_GREGORIAN
+					$gregorian
 				),
 				false,
 				$languageCode
@@ -334,30 +539,35 @@ class MwTimeIsoFormatterTest extends \MediaWikiTestCase {
 	 * @param string $expected
 	 * @param TimeValue $timeValue
 	 * @param bool $roundtrip
-	 * @param string $langCode
+	 * @param string $languageCode
 	 */
-	public function testFormat( $expected, TimeValue $timeValue, $roundtrip = false, $langCode = 'en' ) {
+	public function testFormat(
+		$expected,
+		TimeValue $timeValue,
+		$roundtrip = false,
+		$languageCode = 'en'
+	) {
 		$options = new FormatterOptions( array(
-			ValueFormatter::OPT_LANG => $langCode
+			ValueFormatter::OPT_LANG => $languageCode
 		) );
+		$formatter = new MwTimeIsoFormatter( $options );
+		$actual = $formatter->format( $timeValue );
 
-		$isoFormatter = new MwTimeIsoFormatter( $options );
-
-		$formattedTime = $isoFormatter->format( $timeValue );
-		$this->assertEquals( $expected, $formattedTime );
-		if( $roundtrip ) {
-			$this->assertCanRoundTrip( $formattedTime, $timeValue, $langCode );
+		$this->assertEquals( $expected, $actual, 'Testing ' . $timeValue->getTime() . ', precision ' . $timeValue->getPrecision() );
+		if ( $roundtrip ) {
+			$this->assertCanRoundTrip( $actual, $timeValue, $languageCode );
 		}
 	}
 
-	private function assertCanRoundTrip( $formattedTime, TimeValue $timeValue, $langCode ) {
+	private function assertCanRoundTrip( $formattedTime, TimeValue $timeValue, $languageCode ) {
 		$options = new ParserOptions( array(
-			ValueParser::OPT_LANG => $langCode,
-			\ValueParsers\TimeParser::OPT_PRECISION => $timeValue->getPrecision(),
-			\ValueParsers\TimeParser::OPT_CALENDAR => $timeValue->getCalendarModel(),
+			ValueParser::OPT_LANG => $languageCode,
+			IsoTimestampParser::OPT_PRECISION => $timeValue->getPrecision(),
+			IsoTimestampParser::OPT_CALENDAR => $timeValue->getCalendarModel(),
 		) );
 
-		$timeParser = new TimeParser( $options );
+		$factory = new TimeParserFactory( $options );
+		$timeParser = $factory->getTimeParser();
 		$parsedTimeValue = $timeParser->parse( $formattedTime );
 
 		/**

@@ -2,6 +2,7 @@
 
 namespace Wikibase\Tests\Repo;
 
+use stdClass;
 use Wikibase\DispatchStats;
 
 /**
@@ -23,8 +24,8 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 	 *
 	 * @return DispatchStats
 	 */
-	protected function getDispatchStats() {
-		$data = self::getTestData();
+	private function getDispatchStats() {
+		$data = $this->getTestData();
 		$now = $data['now'];
 		$changes = $data['changes'];
 		$states = $data['states'];
@@ -73,7 +74,7 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 		return $stats;
 	}
 
-	protected static function getTestData() {
+	private function getTestData() {
 		return array(
 			'states' => array(
 				array(
@@ -140,7 +141,7 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 						'chd_touched' => '20130303000110',
 						'chd_untouched' => 170,
 						'chd_pending' => 2,
-						'chd_lag' => 120,
+						'chd_lag' => 170,
 					),
 					array(
 						'chd_site' => 'dewiki',
@@ -148,7 +149,7 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 						'chd_touched' => '20130303000220',
 						'chd_untouched' => 100,
 						'chd_pending' => 1,
-						'chd_lag' => 60,
+						'chd_lag' => 100,
 					),
 					array(
 						'chd_site' => 'enwiki',
@@ -156,7 +157,7 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 						'chd_touched' => '20130303000330',
 						'chd_untouched' => 30,
 						'chd_pending' => 0,
-						'chd_lag' => 0,
+						'chd_lag' => 30,
 					),
 				),
 
@@ -174,7 +175,7 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 					'chd_touched' => '20130303000330',
 					'chd_untouched' => 30,
 					'chd_pending' => 0,
-					'chd_lag' => 0,
+					'chd_lag' => 30,
 				),
 				'getStalest' => array(
 					'chd_site' => 'frwiki',
@@ -182,27 +183,27 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 					'chd_touched' => '20130303000110',
 					'chd_untouched' => 170,
 					'chd_pending' => 2,
-					'chd_lag' => 120,
+					'chd_lag' => 170,
 				),
 				'getMedian' => array(
-					'chd_site' => 'dewiki',
-					'chd_seen' => 2,
-					'chd_touched' => '20130303000220',
+					'chd_site' => 'frwiki',
+					'chd_seen' => 1,
+					'chd_touched' => '20130303000110',
 					'chd_untouched' => 100,
 					'chd_pending' => 1,
-					'chd_lag' => 60,
+					'chd_lag' => 170,
 				),
 				'getAverage' => array(
 					'chd_untouched' => 100,
 					'chd_pending' => 1,
-					'chd_lag' => 60,
+					'chd_lag' => 170,
 				),
 			),
 		);
 	}
 
-	public static function provideGetClientStates() {
-		$data = self::getTestData();
+	public function provideGetClientStates() {
+		$data = $this->getTestData();
 
 		return array(
 			array(
@@ -213,8 +214,9 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 
 	/**
 	 * @dataProvider provideGetClientStates
+	 * @param array[] $expected
 	 */
-	public function testGetClientStates( $expected ) {
+	public function testGetClientStates( array $expected ) {
 		$stats = $this->getDispatchStats();
 
 		$states = $stats->getClientStates();
@@ -229,36 +231,37 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 		}
 	}
 
-	protected function assertStateEquals( $expected, $actual ) {
-		$this->assertInternalType( 'array', $expected );
-		$this->assertInternalType( 'object', $actual );
+	/**
+	 * @param array $expected
+	 * @param stdClass $actual
+	 */
+	private function assertStateEquals( array $expected, stdClass $actual ) {
+		$suffix = '';
 
-		if ( isset( $expected['site'] ) ) {
-			$this->assertEquals( $expected['site'], $actual>chd_site, 'site' );
-			$suffix = "/" . $expected['site'];
-		} else {
-			$suffix = '';
+		if ( isset( $expected['chd_site'] ) ) {
+			$this->assertEquals( $expected['chd_site'], $actual->chd_site, 'site' );
+			$suffix .= '/' . $expected['chd_site'];
 		}
 
-		if ( isset( $expected['seen'] ) ) {
-			$this->assertEquals( $expected['seen'], $actual>chd_seen, "seen/$suffix" );
+		if ( isset( $expected['chd_seen'] ) ) {
+			$this->assertEquals( $expected['chd_seen'], $actual->chd_seen, "seen$suffix" );
 		}
 
-		if ( isset( $expected['touched'] ) ) {
-			$this->assertEquals( $expected['touched'], $actual>chd_touched, "touched/$suffix" );
+		if ( isset( $expected['chd_touched'] ) ) {
+			$this->assertEquals( $expected['chd_touched'], $actual->chd_touched, "touched$suffix" );
 		}
 
-		if ( isset( $expected['lag'] ) ) {
-			$this->assertEquals( $expected['lag'], $actual>chd_untouched, "lag/$suffix" );
+		if ( isset( $expected['chd_lag'] ) ) {
+			$this->assertEquals( $expected['chd_lag'], $actual->chd_untouched, "lag$suffix" );
 		}
 
-		if ( isset( $expected['dist'] ) ) {
-			$this->assertEquals( $expected['dist'], $actual>chd_pending, "dist/$suffix" );
+		if ( isset( $expected['chd_dist'] ) ) {
+			$this->assertEquals( $expected['chd_dist'], $actual->chd_pending, "dist$suffix" );
 		}
 	}
 
-	public static function provideGetClientCount() {
-		$data = self::getTestData();
+	public function provideGetClientCount() {
+		$data = $this->getTestData();
 
 		return array(
 			array(
@@ -269,15 +272,16 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 
 	/**
 	 * @dataProvider provideGetClientCount
+	 * @param int $expected
 	 */
 	public function testGetClientCount( $expected ) {
-		$stats = $this->getDispatchStats( );
+		$stats = $this->getDispatchStats();
 
 		$this->assertEquals( $expected, $stats->getClientCount() );
 	}
 
-	public static function provideGetLockedCount() {
-		$data = self::getTestData();
+	public function provideGetLockedCount() {
+		$data = $this->getTestData();
 
 		return array(
 			array(
@@ -288,6 +292,7 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 
 	/**
 	 * @dataProvider provideGetLockedCount
+	 * @param int $expected
 	 */
 	public function testGetLockedCount( $expected ) {
 		$stats = $this->getDispatchStats();
@@ -295,8 +300,8 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 		$this->assertEquals( $expected, $stats->getLockedCount() );
 	}
 
-	public static function provideGetMinChangeId() {
-		$data = self::getTestData();
+	public function provideGetMinChangeId() {
+		$data = $this->getTestData();
 
 		return array(
 			array(
@@ -307,6 +312,7 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 
 	/**
 	 * @dataProvider provideGetMinChangeId
+	 * @param int $expected
 	 */
 	public function testGetMinChangeId( $expected ) {
 		$stats = $this->getDispatchStats();
@@ -314,8 +320,8 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 		$this->assertEquals( $expected, $stats->getMinChangeId() );
 	}
 
-	public static function provideGetMaxChangeId() {
-		$data = self::getTestData();
+	public function provideGetMaxChangeId() {
+		$data = $this->getTestData();
 
 		return array(
 			array(
@@ -326,6 +332,7 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 
 	/**
 	 * @dataProvider provideGetMaxChangeId
+	 * @param int $expected
 	 */
 	public function testGetMaxChangeId( $expected ) {
 		$stats = $this->getDispatchStats();
@@ -333,8 +340,8 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 		$this->assertEquals( $expected, $stats->getMaxChangeId() );
 	}
 
-	public static function provideGetMinChangeTimestamp() {
-		$data = self::getTestData();
+	public function provideGetMinChangeTimestamp() {
+		$data = $this->getTestData();
 
 		return array(
 			array(
@@ -345,6 +352,7 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 
 	/**
 	 * @dataProvider provideGetMinChangeTimestamp
+	 * @param string $expected
 	 */
 	public function testGetMinChangeTimestamp( $expected ) {
 		$stats = $this->getDispatchStats();
@@ -352,8 +360,8 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 		$this->assertEquals( $expected, $stats->getMinChangeTimestamp() );
 	}
 
-	public static function provideGetMaxChangeTimestamp() {
-		$data = self::getTestData();
+	public function provideGetMaxChangeTimestamp() {
+		$data = $this->getTestData();
 
 		return array(
 			array(
@@ -364,6 +372,7 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 
 	/**
 	 * @dataProvider provideGetMaxChangeTimestamp
+	 * @param string $expected
 	 */
 	public function testGetMaxChangeTimestamp( $expected ) {
 		$stats = $this->getDispatchStats();
@@ -371,8 +380,8 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 		$this->assertEquals( $expected, $stats->getMaxChangeTimestamp() );
 	}
 
-	public static function provideGetFreshest() {
-		$data = self::getTestData();
+	public function provideGetFreshest() {
+		$data = $this->getTestData();
 
 		return array(
 			array(
@@ -383,15 +392,16 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 
 	/**
 	 * @dataProvider provideGetFreshest
+	 * @param array $expected
 	 */
-	public function testGetFreshest( $expected ) {
+	public function testGetFreshest( array $expected ) {
 		$stats = $this->getDispatchStats();
 
-		$this->assertStateEquals( $expected, $stats->getFreshest());
+		$this->assertStateEquals( $expected, $stats->getFreshest() );
 	}
 
-	public static function provideGetStalest() {
-		$data = self::getTestData();
+	public function provideGetStalest() {
+		$data = $this->getTestData();
 
 		return array(
 			array(
@@ -402,15 +412,16 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 
 	/**
 	 * @dataProvider provideGetStalest
+	 * @param array $expected
 	 */
-	public function testGetStalest( $expected ) {
+	public function testGetStalest( array $expected ) {
 		$stats = $this->getDispatchStats();
 
-		$this->assertStateEquals( $expected, $stats->getStalest());
+		$this->assertStateEquals( $expected, $stats->getStalest() );
 	}
 
-	public static function provideGetAverage() {
-		$data = self::getTestData();
+	public function provideGetAverage() {
+		$data = $this->getTestData();
 
 		return array(
 			array(
@@ -421,15 +432,16 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 
 	/**
 	 * @dataProvider provideGetAverage
+	 * @param array $expected
 	 */
-	public function testGetAverage( $expected ) {
+	public function testGetAverage( array $expected ) {
 		$stats = $this->getDispatchStats();
 
-		$this->assertStateEquals( $expected, $stats->getStalest());
+		$this->assertStateEquals( $expected, $stats->getStalest() );
 	}
 
-	public static function provideGetMedian() {
-		$data = self::getTestData();
+	public function provideGetMedian() {
+		$data = $this->getTestData();
 
 		return array(
 			array(
@@ -440,10 +452,34 @@ class DispatchStatsTest extends \MediaWikiTestCase {
 
 	/**
 	 * @dataProvider provideGetMedian
+	 * @param array $expected
 	 */
-	public function testGetMedian( $expected ) {
+	public function testGetMedian( array $expected ) {
 		$stats = $this->getDispatchStats();
 
-		$this->assertStateEquals( $expected, $stats->getStalest());
+		$this->assertStateEquals( $expected, $stats->getStalest() );
 	}
+
+	public function testHasStats() {
+		$stats = $this->getDispatchStats();
+
+		$this->assertTrue( $stats->hasStats() );
+
+		// No stats there before load has been called.
+		$unloadedStats = new DispatchStats();
+		$this->assertFalse( $unloadedStats->hasStats() );
+	}
+
+	public function testHasNoStats() {
+		$dbw = wfGetDB( DB_MASTER );
+
+		$dbw->delete( 'wb_changes', '*' );
+		$dbw->delete( 'wb_changes_dispatch', '*' );
+
+		$stats = new DispatchStats();
+		$stats->load( time() );
+
+		$this->assertFalse( $stats->hasStats() ); // Still no stats as the table is empty
+	}
+
 }

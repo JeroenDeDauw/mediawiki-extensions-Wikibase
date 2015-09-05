@@ -1,6 +1,6 @@
 <?php
 
-namespace Wikibase;
+namespace Wikibase\Client\RecentChanges;
 
 use InvalidArgumentException;
 use RecentChange;
@@ -32,8 +32,8 @@ class ExternalChangeFactory {
 	 *
 	 * @param RecentChange $recentChange
 	 *
-	 * @return ExternalChange
 	 * @throws UnexpectedValueException
+	 * @return ExternalChange
 	 */
 	public function newFromRecentChange( RecentChange $recentChange ) {
 		$changeParams = $this->extractChangeData( $recentChange );
@@ -69,8 +69,8 @@ class ExternalChangeFactory {
 	/**
 	 * @param RecentChange $recentChange
 	 *
-	 * @return array
 	 * @throws UnexpectedValueException
+	 * @return array
 	 */
 	private function extractChangeData( RecentChange $recentChange ) {
 		$params = unserialize( $recentChange->getAttribute( 'rc_params' ) );
@@ -90,17 +90,16 @@ class ExternalChangeFactory {
 	 * @param array $changeParams
 	 *
 	 * @throws UnexpectedValueException
-	 *
-	 * @return boolean
+	 * @return bool
 	 */
 	private function validateChangeData( $changeParams ) {
-		if ( ! is_array( $changeParams ) ) {
+		if ( !is_array( $changeParams ) ) {
 			throw new UnexpectedValueException( 'Invalid Wikibase change' );
 		}
 
 		$keys = array( 'type', 'page_id', 'rev_id', 'parent_id', 'object_id' );
 
-		foreach( $keys as $key ) {
+		foreach ( $keys as $key ) {
 			if ( !array_key_exists( $key, $changeParams ) ) {
 				throw new UnexpectedValueException( "$key key missing in change data" );
 			}
@@ -110,24 +109,19 @@ class ExternalChangeFactory {
 	}
 
 	/**
+	 * @see EntityChange::getAction
+	 *
 	 * @param string $type
 	 *
-	 * @return string
 	 * @throws UnexpectedValueException
+	 * @return string
 	 */
 	private function extractChangeType( $type ) {
 		if ( !is_string( $type ) ) {
 			throw new UnexpectedValueException( '$type must be a string.' );
 		}
 
-		$validTypes = array( 'remove', 'restore', 'add', 'update' );
-
-		$parts = explode( '~', $type );
-		$changeType = $parts[1] ?: null;
-
-		if ( !in_array( $changeType, $validTypes ) ) {
-			throw new UnexpectedValueException( 'invalid change type' );
-		}
+		list( , $changeType ) = explode( '~', $type, 2 );
 
 		return $changeType;
 	}
@@ -135,8 +129,8 @@ class ExternalChangeFactory {
 	/**
 	 * @param string $prefixedId
 	 *
-	 * @return ItemId
 	 * @throws UnexpectedValueException
+	 * @return ItemId
 	 */
 	private function extractItemId( $prefixedId ) {
 		try {
@@ -147,7 +141,27 @@ class ExternalChangeFactory {
 	}
 
 	/**
-	 * @fixme refactor comments handling!
+	 * This method transforms the comments field into rc_params into an appropriate
+	 * comment value for ExternalChange.
+	 *
+	 * $comment can be a string or an array with some additional data.
+	 *
+	 * String comments are either 'wikibase-comment-update' (legacy) or have
+	 * comments from the repo, such as '/ wbsetclaim-update:2||1 / [[Property:P213]]: [[Q850]]'.
+	 *
+	 * We don't yet parse repo comments in the client, so for now, we use the
+	 * generic 'wikibase-comment-update' for these.
+	 *
+	 * Comment arrays may contain a message key that provide autocomments for stuff
+	 * like log actions (item deletion) or edits that have no meaningful summary
+	 * to use in the client.
+	 *
+	 *  - 'wikibase-comment-unlinked' (when the sitelink to the given page is removed on the repo)
+	 *  - 'wikibase-comment-add' (when the item is created, with sitelink to the given page)
+	 *  - 'wikibase-comment-remove' (when the item is deleted, the page becomes unconnected)
+	 *  - 'wikibase-comment-restore' (when the item is undeleted and reconnected to the page)
+	 *  - 'wikibase-comment-sitelink-add' (and other sitelink messages, unused)
+	 *  - 'wikibase-comment-update' (legacy, generic, item updated commment)
 	 *
 	 * @param array|string $comment
 	 * @param string $type
@@ -169,9 +183,10 @@ class ExternalChangeFactory {
 			} else {
 				$newComment['key'] = $comment['message'];
 			}
-		} elseif ( is_string( $comment ) ) {
-			$newComment['key'] = $comment;
 		}
+
+		// @todo handle $comment values that are strings or whatever format
+		// that we use to transfer autocomments from repo to client.
 
 		return $newComment;
 	}
@@ -193,7 +208,7 @@ class ExternalChangeFactory {
 		if ( array_key_exists( 'composite-comment', $changeParams ) ) {
 			$comment['key'] = 'wikibase-comment-multi';
 			$comment['numparams'] = $this->countCompositeComments( $changeParams['composite-comment'] );
-		} elseif ( array_key_exists( 'comment', $changeParams  ) ) {
+		} elseif ( array_key_exists( 'comment', $changeParams ) ) {
 			$comment = $this->parseComment( $changeParams['comment'], $changeParams['type'] );
 		}
 
@@ -201,7 +216,7 @@ class ExternalChangeFactory {
 	}
 
 	/**
-	 * normalizes for extra empty comment in rc_params (see bug 45812)
+	 * normalizes for extra empty comment in rc_params (see bug T47812)
 	 * @fixme: can remove at some point in the future
 	 *
 	 * @param array $comments

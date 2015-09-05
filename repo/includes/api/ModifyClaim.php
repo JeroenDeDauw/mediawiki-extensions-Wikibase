@@ -1,12 +1,14 @@
 <?php
 
-namespace Wikibase\Api;
+namespace Wikibase\Repo\Api;
 
 use ApiBase;
 use ApiMain;
-use Wikibase\ChangeOp\ChangeOpFactoryProvider;
-use Wikibase\DataModel\Claim\ClaimGuidParser;
+use Status;
 use Wikibase\DataModel\Entity\Entity;
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Services\Statement\StatementGuidParser;
+use Wikibase\Lib\Store\EntityRevisionLookup;
 use Wikibase\Repo\WikibaseRepo;
 use Wikibase\Summary;
 
@@ -19,21 +21,36 @@ use Wikibase\Summary;
  * @author Tobias Gritschacher < tobias.gritschacher@wikimedia.de >
  * @author Jeroen De Dauw < jeroendedauw@gmail.com >
  */
-abstract class ModifyClaim extends ApiWikibase {
+abstract class ModifyClaim extends ApiBase {
 
 	/**
 	 * @since 0.4
 	 *
-	 * @var ClaimModificationHelper
+	 * @var StatementModificationHelper
 	 */
-	protected $claimModificationHelper;
+	protected $modificationHelper;
 
 	/**
 	 * @since 0.5
 	 *
-	 * @var ClaimGuidParser
+	 * @var StatementGuidParser
 	 */
-	protected $claimGuidParser;
+	protected $guidParser;
+
+	/**
+	 * @var ResultBuilder
+	 */
+	private $resultBuilder;
+
+	/**
+	 * @var EntityLoadingHelper
+	 */
+	private $entityLoadingHelper;
+
+	/**
+	 * @var EntitySavingHelper
+	 */
+	private $entitySavingHelper;
 
 	/**
 	 * @param ApiMain $mainModule
@@ -45,14 +62,44 @@ abstract class ModifyClaim extends ApiWikibase {
 	public function __construct( ApiMain $mainModule, $moduleName, $modulePrefix = '' ) {
 		parent::__construct( $mainModule, $moduleName, $modulePrefix );
 
-		$this->claimModificationHelper = new ClaimModificationHelper(
-			WikibaseRepo::getDefaultInstance()->getSnakConstructionService(),
-			WikibaseRepo::getDefaultInstance()->getEntityIdParser(),
-			WikibaseRepo::getDefaultInstance()->getClaimGuidValidator(),
-			$this->errorReporter
+		$wikibaseRepo = WikibaseRepo::getDefaultInstance();
+		$apiHelperFactory = $wikibaseRepo->getApiHelperFactory( $this->getContext() );
+
+		$this->modificationHelper = new StatementModificationHelper(
+			$wikibaseRepo->getSnakConstructionService(),
+			$wikibaseRepo->getEntityIdParser(),
+			$wikibaseRepo->getStatementGuidValidator(),
+			$apiHelperFactory->getErrorReporter( $this )
 		);
 
-		$this->claimGuidParser = WikibaseRepo::getDefaultInstance()->getClaimGuidParser();
+		$this->guidParser = WikibaseRepo::getDefaultInstance()->getStatementGuidParser();
+		$this->resultBuilder = $apiHelperFactory->getResultBuilder( $this );
+		$this->entityLoadingHelper = $apiHelperFactory->getEntityLoadingHelper( $this );
+		$this->entitySavingHelper = $apiHelperFactory->getEntitySavingHelper( $this );
+	}
+
+	/**
+	 * @see EntitySavingHelper::attemptSaveEntity
+	 */
+	protected function attemptSaveEntity( Entity $entity, $summary, $flags = 0 ) {
+		return $this->entitySavingHelper->attemptSaveEntity( $entity, $summary, $flags );
+	}
+
+	/**
+	 * @return ResultBuilder
+	 */
+	protected function getResultBuilder() {
+		return $this->resultBuilder;
+	}
+
+	/**
+	 * @see EntitySavingHelper::loadEntityRevision
+	 */
+	protected function loadEntityRevision(
+		EntityId $entityId,
+		$revId = EntityRevisionLookup::LATEST_FROM_MASTER
+	) {
+		return $this->entityLoadingHelper->loadEntityRevision( $entityId, $revId );
 	}
 
 	/**
@@ -60,96 +107,32 @@ abstract class ModifyClaim extends ApiWikibase {
 	 *
 	 * @param Entity $entity
 	 * @param Summary $summary
+	 *
+	 * @returns Status
 	 */
 	public function saveChanges( Entity $entity, Summary $summary ) {
-		$status = $this->attemptSaveEntity(
+		return $this->attemptSaveEntity(
 			$entity,
 			$summary,
-			$this->getFlags()
-		);
-
-		//@todo this doesnt belong here!...
-		$this->getResultBuilder()->addRevisionIdFromStatusToResult( $status, 'pageinfo' );
-	}
-
-	/**
-	 * @see ApiBase::isWriteMode
-	 */
-	public function isWriteMode() {
-		return true;
-	}
-
-	/**
-	 * @see ApiBase::getPossibleErrors()
-	 */
-	public function getPossibleErrors() {
-		return array_merge(
-			parent::getPossibleErrors(),
-			array(
-				array( 'code' => 'failed-save', 'info' => $this->msg( 'wikibase-api-failed-save' )->text() ),
-				array( 'code' => 'invalid-guid', 'info' => $this->msg( 'wikibase-api-invalid-guid' )->text() ),
-				array( 'code' => 'no-such-entity', 'info' => $this->msg( 'wikibase-api-no-such-entity' )->text() ),
-				array( 'code' => 'no-such-claim', 'info' => $this->msg( 'wikibase-api-no-such-claim' )->text() ),
-				array( 'code' => 'invalid-snak', 'info' => $this->msg( 'wikibase-api-invalid-snak' )->text() ),
-				array( 'code' => 'invalid-entity-id', 'info' => $this->msg( 'wikibase-api-invalid-entity-id' )->text() ),
-				array( 'code' => 'modification-failed', 'info' => 'The requested change could not be applied (validation error).' ),
-			)
+			EDIT_UPDATE
 		);
 	}
 
 	/**
-	 * @since 0.4
-	 *
-	 * @return integer
+	 * @see ApiBase::getAllowedParams
 	 */
-	protected function getFlags() {
-		$flags = EDIT_UPDATE;
-
-		$params = $this->extractRequestParams();
-		$flags |= ( $this->getUser()->isAllowed( 'bot' ) && $params['bot'] ) ? EDIT_FORCE_BOT : 0;
-
-		return $flags;
-	}
-
-	/**
-	 * @see \ApiBase::getAllowedParams
-	 */
-	public function getAllowedParams() {
+	protected function getAllowedParams() {
 		return array_merge(
 			parent::getAllowedParams(),
 			array(
-				'summary' => array( ApiBase::PARAM_TYPE => 'string' ),
+				'summary' => array(
+					self::PARAM_TYPE => 'string',
+				),
 				'token' => null,
 				'baserevid' => array(
-					ApiBase::PARAM_TYPE => 'integer',
+					self::PARAM_TYPE => 'integer',
 				),
 				'bot' => false,
-			)
-		);
-	}
-
-	/**
-	 * @see ApiBase::getParamDescription()
-	 */
-	public function getParamDescription() {
-		return array_merge(
-			parent::getParamDescription(),
-			array(
-				'summary' => array(
-					'Summary for the edit.',
-					"Will be prepended by an automatically generated comment. The length limit of the
-					autocomment together with the summary is 260 characters. Be aware that everything above that
-					limit will be cut off."
-				),
-				'token' => 'An "edittoken" token previously obtained through the token module (prop=info).',
-				'baserevid' => array(
-					'The numeric identifier for the revision to base the modification on.',
-					"This is used for detecting conflicts during save."
-				),
-				'bot' => array(
-					'Mark this edit as bot',
-					'This URL flag will only be respected if the user belongs to the group "bot".'
-				),
 			)
 		);
 	}

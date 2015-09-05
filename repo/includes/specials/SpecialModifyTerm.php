@@ -11,9 +11,11 @@ use Wikibase\ChangeOp\FingerprintChangeOpFactory;
 use Wikibase\DataModel\Entity\Entity;
 use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\Property;
+use Wikibase\DataModel\Term\Fingerprint;
+use Wikibase\DataModel\Term\FingerprintProvider;
+use Wikibase\Lib\ContentLanguages;
 use Wikibase\Repo\WikibaseRepo;
 use Wikibase\Summary;
-use Wikibase\Utils;
 
 /**
  * Abstract special page for setting a value of a Wikibase entity.
@@ -28,25 +30,26 @@ abstract class SpecialModifyTerm extends SpecialModifyEntity {
 	/**
 	 * The language the value is set in.
 	 *
-	 * @since 0.4
-	 *
 	 * @var string
 	 */
-	protected $language;
+	private $languageCode;
 
 	/**
 	 * The value to set.
 	 *
-	 * @since 0.4
-	 *
 	 * @var string
 	 */
-	protected $value;
+	private $value;
 
 	/**
 	 * @var FingerprintChangeOpFactory
 	 */
 	protected $termChangeOpFactory;
+
+	/**
+	 * @var ContentLanguages
+	 */
+	private $termsLanguages;
 
 	/**
 	 * @since 0.4
@@ -59,6 +62,7 @@ abstract class SpecialModifyTerm extends SpecialModifyEntity {
 
 		$changeOpFactoryProvider = WikibaseRepo::getDefaultInstance()->getChangeOpFactoryProvider();
 		$this->termChangeOpFactory = $changeOpFactoryProvider->getFingerprintChangeOpFactory();
+		$this->termsLanguages = WikibaseRepo::getDefaultInstance()->getTermsLanguages();
 	}
 
 	/**
@@ -75,20 +79,32 @@ abstract class SpecialModifyTerm extends SpecialModifyEntity {
 		$parts = ( $subPage === '' ) ? array() : explode( '/', $subPage, 2 );
 
 		// Language
-		$this->language = $request->getVal( 'language', isset( $parts[1] ) ? $parts[1] : '' );
+		$this->languageCode = $request->getVal( 'language', isset( $parts[1] ) ? $parts[1] : '' );
 
-		if ( $this->language === '' ) {
-			$this->language = null;
+		if ( $this->languageCode === '' ) {
+			$this->languageCode = null;
 		}
 
-		if ( !$this->isValidLanguageCode( $this->language ) && $this->language !== null ) {
-			$this->showErrorHTML( $this->msg( 'wikibase-modifyterm-invalid-langcode', $this->language )->parse() );
-		}
+		$this->checkSubPageLanguage();
 
 		// Value
 		$this->value = $this->getPostedValue();
 		if ( $this->value === null ) {
 			$this->value = $request->getVal( 'value' );
+		}
+	}
+
+	/**
+	 * Check the language given as sup page argument.
+	 */
+	private function checkSubPageLanguage() {
+		if ( $this->languageCode !== null && !$this->termsLanguages->hasLanguage( $this->languageCode ) ) {
+			$errorMessage = $this->msg(
+				'wikibase-wikibaserepopage-invalid-langcode',
+				$this->languageCode
+			)->parse();
+
+			$this->showErrorHTML( $errorMessage );
 		}
 	}
 
@@ -104,26 +120,18 @@ abstract class SpecialModifyTerm extends SpecialModifyEntity {
 			return false;
 		}
 
-		try{
+		try {
 			$this->checkTermChangePermissions( $this->entityRevision->getEntity() );
-		} catch( PermissionsError $e ) {
+		} catch ( PermissionsError $e ) {
 			$this->showErrorHTML( $this->msg( 'permissionserrors' ) . ': ' . $e->permission );
 			return false;
 		}
 
-		// to provide removing after posting the full form
-		if ( $request->getVal( 'remove' ) === null && $this->value === '' ) {
-			$id = $this->entityRevision->getEntity()->getId();
-
-			$this->showErrorHTML(
-			// Messages: wikibase-setlabel-warning-remove, wikibase-setdescription-warning-remove,
-			// wikibase-setaliases-warning-remove
-				$this->msg(
-					'wikibase-' . strtolower( $this->getName() ) . '-warning-remove',
-					$this->getEntityTitle( $id )->getText()
-				)->parse(),
-				'warning'
-			);
+		// If the user just enters an item id and a language, dont remove the term.
+		// The user can remove the term in the second form where it has to be
+		// actually removed. This prevents users from removing terms accidentally.
+		if ( !$request->getCheck( 'remove' ) && $this->value === '' ) {
+			$this->value = null;
 			return false;
 		}
 
@@ -141,7 +149,7 @@ abstract class SpecialModifyTerm extends SpecialModifyEntity {
 	 */
 	protected function modifyEntity( Entity $entity ) {
 		try {
-			$summary = $this->setValue( $entity, $this->language, $this->value );
+			$summary = $this->setValue( $entity, $this->languageCode, $this->value );
 		} catch ( ChangeOpException $e ) {
 			$this->showErrorHTML( $e->getMessage() );
 			return false;
@@ -156,10 +164,10 @@ abstract class SpecialModifyTerm extends SpecialModifyEntity {
 	 * @throws PermissionsError
 	 * @throws InvalidArgumentException
 	 */
-	protected function checkTermChangePermissions( Entity $entity ) {
-		if( $entity instanceof Item ) {
+	private function checkTermChangePermissions( Entity $entity ) {
+		if ( $entity instanceof Item ) {
 			$type = 'item';
-		} else if ( $entity instanceof Property ) {
+		} elseif ( $entity instanceof Property ) {
 			$type = 'property';
 		} else {
 			throw new InvalidArgumentException( 'Unexpected Entity type when checking special page term change permissions' );
@@ -171,19 +179,6 @@ abstract class SpecialModifyTerm extends SpecialModifyEntity {
 	}
 
 	/**
-	 * Checks if the language code is valid.
-	 *
-	 * @since 0.4
-	 *
-	 * @param $languageCode string the language code
-	 *
-	 * @return bool
-	 */
-	private function isValidLanguageCode( $languageCode ) {
-		return $languageCode !== null && Language::isValidBuiltInCode( $languageCode ) && in_array( $languageCode, Utils::getLanguageCodes() );
-	}
-
-	/**
 	 * @see SpecialModifyEntity::getFormElements()
 	 *
 	 * @param Entity $entity
@@ -191,10 +186,12 @@ abstract class SpecialModifyTerm extends SpecialModifyEntity {
 	 * @return string
 	 */
 	protected function getFormElements( Entity $entity = null ) {
-		$this->language = $this->language ? $this->language : $this->getLanguage()->getCode();
-		if ( $this->value === null ) {
-			$this->value = $this->getValue( $entity, $this->language );
+		if ( $this->languageCode === null ) {
+			$this->languageCode = $this->getLanguage()->getCode();
 		}
+
+		$this->setValueIfNull( $entity );
+
 		$valueinput = Html::input(
 			'value',
 			$this->getRequest()->getVal( 'value' ) ? $this->getRequest()->getVal( 'value' ) : $this->value,
@@ -202,14 +199,12 @@ abstract class SpecialModifyTerm extends SpecialModifyEntity {
 			array(
 				'class' => 'wb-input',
 				'id' => 'wb-modifyterm-value',
-				'size' => 50
 			)
-		)
-		. Html::element( 'br' );
+		);
 
-		$languageName = Language::fetchLanguageName( $this->language, $this->getLanguage()->getCode() );
+		$languageName = Language::fetchLanguageName( $this->languageCode, $this->getLanguage()->getCode() );
 
-		if ( $entity !== null && $this->language !== null && $languageName !== '' ) {
+		if ( $entity !== null && $this->languageCode !== null && $languageName !== '' ) {
 			return Html::rawElement(
 				'p',
 				array(),
@@ -221,12 +216,11 @@ abstract class SpecialModifyTerm extends SpecialModifyEntity {
 					$languageName
 				)->parse()
 			)
-			. Html::input( 'language', $this->language, 'hidden' )
+			. Html::input( 'language', $this->languageCode, 'hidden' )
 			. Html::input( 'id', $entity->getId()->getSerialization(), 'hidden' )
 			. Html::input( 'remove', 'remove', 'hidden' )
 			. $valueinput;
-		}
-		else {
+		} else {
 			return Html::rawElement(
 				'p',
 				array(),
@@ -235,6 +229,7 @@ abstract class SpecialModifyTerm extends SpecialModifyEntity {
 				$this->msg( 'wikibase-' . strtolower( $this->getName() ) . '-intro' )->parse()
 			)
 			. parent::getFormElements( $entity )
+			. Html::element( 'br' )
 			. Html::element(
 				'label',
 				array(
@@ -245,7 +240,7 @@ abstract class SpecialModifyTerm extends SpecialModifyEntity {
 			)
 			. Html::input(
 				'language',
-				$this->language,
+				$this->languageCode,
 				'text',
 				array(
 					'class' => 'wb-input',
@@ -263,7 +258,18 @@ abstract class SpecialModifyTerm extends SpecialModifyEntity {
 				// wikibase-setaliases-label
 				$this->msg( 'wikibase-' . strtolower( $this->getName() ) . '-label' )->text()
 			)
-			. $valueinput;
+			. $valueinput
+			. Html::element( 'br' );
+		}
+	}
+
+	private function setValueIfNull( FingerprintProvider $fingerprintProvider = null ) {
+		if ( $this->value === null ) {
+			if ( $fingerprintProvider === null ) {
+				$this->value = '';
+			} else {
+				$this->value = $this->getValue( $fingerprintProvider->getFingerprint(), $this->languageCode );
+			}
 		}
 	}
 
@@ -281,12 +287,12 @@ abstract class SpecialModifyTerm extends SpecialModifyEntity {
 	 *
 	 * @since 0.5
 	 *
-	 * @param Entity|null $entity
-	 * @param string $language
+	 * @param Fingerprint $fingerprint
+	 * @param string $languageCode
 	 *
 	 * @return string
 	 */
-	abstract protected function getValue( $entity, $language );
+	abstract protected function getValue( Fingerprint $fingerprint, $languageCode );
 
 	/**
 	 * Setting the value of the entity name by the given language
@@ -294,11 +300,11 @@ abstract class SpecialModifyTerm extends SpecialModifyEntity {
 	 * @since 0.5
 	 *
 	 * @param Entity|null $entity
-	 * @param string $language
+	 * @param string $languageCode
 	 * @param string $value
 	 *
 	 * @return Summary
 	 */
-	abstract protected function setValue( $entity, $language, $value );
+	abstract protected function setValue( $entity, $languageCode, $value );
 
 }

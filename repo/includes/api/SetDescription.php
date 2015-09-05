@@ -1,11 +1,11 @@
 <?php
 
-namespace Wikibase\Api;
+namespace Wikibase\Repo\Api;
 
 use ApiMain;
+use Wikibase\ChangeOp\ChangeOpDescription;
 use Wikibase\ChangeOp\FingerprintChangeOpFactory;
 use Wikibase\DataModel\Entity\Entity;
-use Wikibase\ChangeOp\ChangeOpDescription;
 use Wikibase\Repo\WikibaseRepo;
 
 /**
@@ -24,7 +24,7 @@ class SetDescription extends ModifyTerm {
 	/**
 	 * @var FingerprintChangeOpFactory
 	 */
-	protected $termChangeOpFactory;
+	private $termChangeOpFactory;
 
 	/**
 	 * @param ApiMain $mainModule
@@ -39,32 +39,32 @@ class SetDescription extends ModifyTerm {
 	}
 
 	/**
-	 * @see \Wikibase\Api\ModifyEntity::modifyEntity()
+	 * @see ModifyEntity::modifyEntity
 	 */
 	protected function modifyEntity( Entity &$entity, array $params, $baseRevId ) {
-		wfProfileIn( __METHOD__ );
 		$summary = $this->createSummary( $params );
 		$language = $params['language'];
 
 		$changeOp = $this->getChangeOp( $params );
 		$this->applyChangeOp( $changeOp, $entity, $summary );
 
-		$descriptions = array( $language => ( $entity->getDescription( $language ) !== false ) ? $entity->getDescription( $language ) : "" );
+		$resultBuilder = $this->getResultBuilder();
+		if ( $entity->getFingerprint()->hasDescription( $language ) ) {
+			$termList = $entity->getFingerprint()->getDescriptions()->getWithLanguages( array( $language ) );
+			$resultBuilder->addDescriptions( $termList, 'entity' );
+		} else {
+			$resultBuilder->addRemovedDescription( $language, 'entity' );
+		}
 
-		$this->getResultBuilder()->addDescriptions( $descriptions, 'entity' );
-
-		wfProfileOut( __METHOD__ );
 		return $summary;
 	}
 
 	/**
-	 * @since 0.4
-	 *
 	 * @param array $params
+	 *
 	 * @return ChangeOpDescription
 	 */
-	protected function getChangeOp( array $params ) {
-		wfProfileIn( __METHOD__ );
+	private function getChangeOp( array $params ) {
 		$description = "";
 		$language = $params['language'];
 
@@ -78,41 +78,36 @@ class SetDescription extends ModifyTerm {
 			$op = $this->termChangeOpFactory->newSetDescriptionOp( $language, $description );
 		}
 
-		wfProfileOut( __METHOD__ );
 		return $op;
 	}
 
 	/**
-	 * @see \ApiBase::getParamDescription()
+	 * @see ApiBase::needsToken
+	 *
+	 * @return string
 	 */
-	public function getParamDescription() {
-		return array_merge(
-			parent::getParamDescription(),
-			array(
-				'language' => 'Language of the description',
-				'value' => 'The value to set for the description',
-			)
-		);
+	public function needsToken() {
+		return 'csrf';
 	}
 
 	/**
-	 * @see \ApiBase::getDescription()
+	 * @see ApiBase::isWriteMode()
+	 *
+	 * @return bool Always true.
 	 */
-	public function getDescription() {
-		return array(
-			'API module to set a description for a single Wikibase entity.'
-		);
+	public function isWriteMode() {
+		return true;
 	}
 
 	/**
-	 * @see \ApiBase::getExamples()
+	 * @see ApiBase::getExamplesMessages
 	 */
-	protected function getExamples() {
+	protected function getExamplesMessages() {
 		return array(
-			'api.php?action=wbsetdescription&id=Q42&language=en&value=An%20encyclopedia%20that%20everyone%20can%20edit'
-				=> 'Set the string "An encyclopedia that everyone can edit" for page with id "Q42" as a description in English language',
-			'api.php?action=wbsetdescription&site=enwiki&title=Wikipedia&language=en&value=An%20encyclopedia%20that%20everyone%20can%20edit'
-				=> 'Set the string "An encyclopedia that everyone can edit" as a description in English language for page with a sitelink to enwiki:Wikipedia',
+			'action=wbsetdescription&id=Q42&language=en&value=An%20encyclopedia%20that%20everyone%20can%20edit'
+				=> 'apihelp-wbsetdescription-example-1',
+			'action=wbsetdescription&site=enwiki&title=Wikipedia&language=en&value=An%20encyclopedia%20that%20everyone%20can%20edit'
+				=> 'apihelp-wbsetdescription-example-2',
 		);
 	}
 

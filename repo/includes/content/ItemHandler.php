@@ -1,10 +1,21 @@
 <?php
 
-namespace Wikibase;
+namespace Wikibase\Repo\Content;
 
+use DataUpdate;
 use Title;
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\ItemId;
-use Wikibase\Repo\WikibaseRepo;
+use Wikibase\DataModel\Entity\EntityIdParser;
+use Wikibase\EntityContent;
+use Wikibase\Lib\Store\EntityContentDataCodec;
+use Wikibase\Lib\Store\SiteLinkStore;
+use Wikibase\Repo\Store\EntityPerPage;
+use Wikibase\Repo\Validators\EntityConstraintProvider;
+use Wikibase\Repo\Validators\ValidatorErrorLocalizer;
+use Wikibase\TermIndex;
+use Wikibase\Updates\DataUpdateAdapter;
 
 /**
  * Content handler for Wikibase items.
@@ -15,6 +26,45 @@ use Wikibase\Repo\WikibaseRepo;
  * @author Daniel Kinzler
  */
 class ItemHandler extends EntityHandler {
+
+	/**
+	 * @var SiteLinkStore
+	 */
+	private $siteLinkStore;
+
+	/**
+	 * @param EntityPerPage $entityPerPage
+	 * @param TermIndex $termIndex
+	 * @param EntityContentDataCodec $contentCodec
+	 * @param EntityConstraintProvider $constraintProvider
+	 * @param ValidatorErrorLocalizer $errorLocalizer
+	 * @param EntityIdParser $entityIdParser
+	 * @param SiteLinkStore $siteLinkStore
+	 * @param callable|null $legacyExportFormatDetector
+	 */
+	public function __construct(
+		EntityPerPage $entityPerPage,
+		TermIndex $termIndex,
+		EntityContentDataCodec $contentCodec,
+		EntityConstraintProvider $constraintProvider,
+		ValidatorErrorLocalizer $errorLocalizer,
+		EntityIdParser $entityIdParser,
+		SiteLinkStore $siteLinkStore,
+		$legacyExportFormatDetector = null
+	) {
+		parent::__construct(
+			CONTENT_MODEL_WIKIBASE_ITEM,
+			$entityPerPage,
+			$termIndex,
+			$contentCodec,
+			$constraintProvider,
+			$errorLocalizer,
+			$entityIdParser,
+			$legacyExportFormatDetector
+		);
+
+		$this->siteLinkStore = $siteLinkStore;
+	}
 
 	/**
 	 * @see EntityHandler::getContentClass
@@ -28,13 +78,6 @@ class ItemHandler extends EntityHandler {
 	}
 
 	/**
-	 * @param PreSaveValidator[] $preSaveValidators
-	 */
-	public function __construct( $preSaveValidators ) {
-		parent::__construct( CONTENT_MODEL_WIKIBASE_ITEM, $preSaveValidators );
-	}
-
-	/**
 	 * @return array
 	 */
 	public function getActionOverrides() {
@@ -44,28 +87,6 @@ class ItemHandler extends EntityHandler {
 			'edit' => '\Wikibase\EditItemAction',
 			'submit' => '\Wikibase\SubmitItemAction',
 		);
-	}
-
-	/**
-	 * @param string $blob
-	 * @param null|string $format
-	 *
-	 * @return ItemContent
-	 */
-	public function unserializeContent( $blob, $format = null ) {
-		$entity = EntityFactory::singleton()->newFromBlob( Item::ENTITY_TYPE, $blob, $format );
-		return ItemContent::newFromItem( $entity );
-	}
-
-	/**
-	 * @see ContentHandler::getDiffEngineClass
-	 *
-	 * @since 0.1
-	 *
-	 * @return string
-	 */
-	protected function getDiffEngineClass() {
-		return '\Wikibase\ItemContentDiffView';
 	}
 
 	/**
@@ -86,4 +107,86 @@ class ItemHandler extends EntityHandler {
 	public function getEntityType() {
 		return Item::ENTITY_TYPE;
 	}
+
+	/**
+	 * Returns deletion updates for the given EntityContent.
+	 *
+	 * @see EntityHandler::getEntityDeletionUpdates
+	 *
+	 * @since 0.5
+	 *
+	 * @param EntityContent $content
+	 * @param Title $title
+	 *
+	 * @return DataUpdate[]
+	 */
+	public function getEntityDeletionUpdates( EntityContent $content, Title $title ) {
+		$updates = array();
+
+		$updates[] = new DataUpdateAdapter(
+			array( $this->siteLinkStore, 'deleteLinksOfItem' ),
+			$content->getEntityId()
+		);
+
+		return array_merge(
+			parent::getEntityDeletionUpdates( $content, $title ),
+			$updates
+		);
+	}
+
+	/**
+	 * Returns modification updates for the given EntityContent.
+	 *
+	 * @see EntityHandler::getEntityModificationUpdates
+	 *
+	 * @since 0.5
+	 *
+	 * @param EntityContent $content
+	 * @param Title $title
+	 *
+	 * @return DataUpdate[]
+	 */
+	public function getEntityModificationUpdates( EntityContent $content, Title $title ) {
+		$updates = array();
+
+		if ( $content->isRedirect() ) {
+			$updates[] = new DataUpdateAdapter(
+				array( $this->siteLinkStore, 'deleteLinksOfItem' ),
+				$content->getEntityId()
+			);
+		} else {
+			$updates[] = new DataUpdateAdapter(
+				array( $this->siteLinkStore, 'saveLinksOfItem' ),
+				$content->getEntity()
+			);
+		}
+
+		return array_merge(
+			$updates,
+			parent::getEntityModificationUpdates( $content, $title )
+		);
+	}
+
+	/**
+	 * @see EntityHandler::makeEmptyEntity()
+	 *
+	 * @since 0.5
+	 *
+	 * @return EntityContent
+	 */
+	public function makeEmptyEntity() {
+		return new Item();
+	}
+
+	/**
+	 * @see EntityContent::makeEntityId
+	 *
+	 * @param string $id
+	 *
+	 * @return EntityId
+	 */
+	public function makeEntityId( $id ) {
+		return new ItemId( $id );
+	}
+
 }

@@ -1,16 +1,11 @@
 <?php
 
-namespace Wikibase\Test\Api;
-
-use Wikibase\Lib\Serializers\EntitySerializer;
-use Wikibase\Lib\Serializers\SerializationOptions;
-use Wikibase\Lib\Serializers\SerializerFactory;
+namespace Wikibase\Test\Repo\Api;
 
 /**
- * @covers Wikibase\Api\GetEntities
+ * @covers Wikibase\Repo\Api\GetEntities
  *
- * Test cases are generated using the data provided in the various static arrays below
- * Adding one extra element to any of the arrays (except format) will generate 4 new tests
+ * Test cases are generated using the data provided in the various static arrays below.
  *
  * @licence GNU GPL v2+
  * @author Adam Shorland
@@ -32,7 +27,7 @@ class GetEntitiesTest extends WikibaseApiTestCase {
 	public function setup() {
 		parent::setup();
 
-		if( !isset( self::$hasSetup ) ){
+		if ( !isset( self::$hasSetup ) ) {
 			$this->initTestEntities( self::$usedHandles );
 		}
 		self::$hasSetup = true;
@@ -119,58 +114,44 @@ class GetEntitiesTest extends WikibaseApiTestCase {
 	);
 
 	/**
-	 * Possible sorts, will cause extra assertions
-	 */
-	protected static $goodSorts = array(
-		array( 'sort' => 'sitelinks', 'dir' => 'descending' ),
-		array( 'sort' => 'sitelinks', 'dir' => 'ascending' )
-	);
-
-	/**
 	 * These are all available formats for the API. we need to make sure they all work
 	 * Each format is only tested against the first set of good parameters, from then on json is always used
 	 */
 	protected static $goodFormats = array(
 		'json',
 		'php',
-		'wddx',
 		'xml',
 		'yaml',
 		'txt',
 		'dbg',
-		'dump'
 	);
 
 	/**
 	 * This method builds an array of test cases using the data provided in the static arrays above
 	 * @return array
 	 */
-	public static function provideData() {
+	public function provideData() {
 		$testCases = array();
 
-		// Generate test cases based on the static information provided in arrays above
-		foreach ( self::$goodItems as $itemData ) {
-			foreach ( self::$goodProps  as $propData ) {
-				foreach ( self::$goodLangs as $langData ) {
-					foreach ( self::$goodSorts as $sortData ) {
-						$testCase['p'] = $itemData['p'];
-						$testCase['e'] = $itemData['e'];
-						$testCase['p']['props'] = $propData;
-						$testCase['p']['languages'] = $langData;
-						$testCase['p'] = array_merge( $testCase['p'], $sortData );
-						$testCases[] = $testCase;
-						if( in_array( 'claims', explode( '|', $propData ) ) ){
-							$testCase['p']['ungroupedlist'] = true;
-							$testCases[] = $testCase;
-						}
-					}
-				}
+		// Test cases for props filter
+		foreach ( self::$goodProps  as $propData ) {
+			foreach ( self::$goodItems as $testCase ) {
+				$testCase['p']['props'] = $propData;
+				$testCases[] = $testCase;
 			}
 		}
 
-		// We only want to test each format once so don't include this in the main generation loop
+		// Test cases for languages
+		foreach ( self::$goodLangs as $langData ) {
+			foreach ( self::$goodItems as $testCase ) {
+				$testCase['p']['languages'] = $langData;
+				$testCases[] = $testCase;
+			}
+		}
+
+		// Test cases for different formats (for one item)
 		foreach ( self::$goodFormats as $formatData ) {
-			$testCase = $testCases[0];
+			$testCase = reset( self::$goodItems );
 			$testCase['p']['format'] = $formatData;
 			$testCases[] = $testCase;
 		}
@@ -182,7 +163,7 @@ class GetEntitiesTest extends WikibaseApiTestCase {
 	 * This method tests all valid API requests
 	 * @dataProvider provideData
 	 */
-	public function testGetEntities( $params, $expected ) {
+	public function testGetEntities( array $params, array $expected ) {
 		// -- setup any further data -----------------------------------------------
 		$params['ids'] = implode( '|', $this->getIdsFromHandlesAndIds( $params ) );
 		$params = $this->removeHandles( $params );
@@ -222,7 +203,7 @@ class GetEntitiesTest extends WikibaseApiTestCase {
 		}
 	}
 
-	private function getIdsFromHandlesAndIds( $params ) {
+	private function getIdsFromHandlesAndIds( array $params ) {
 		if ( array_key_exists( 'ids', $params ) ) {
 			$ids = explode( '|', $params['ids'] );
 		} else {
@@ -240,14 +221,14 @@ class GetEntitiesTest extends WikibaseApiTestCase {
 		return $ids;
 	}
 
-	private function removeHandles( $params ) {
+	private function removeHandles( array $params ) {
 		if ( array_key_exists( 'handles', $params ) ) {
 			unset( $params['handles'] );
 		}
 		return $params;
 	}
 
-	private function calculateExpectedData( $expected, $params ) {
+	private function calculateExpectedData( array $expected, array $params ) {
 		//expect the props in params or the default props of the api
 		if ( array_key_exists( 'props', $params ) ) {
 			$expected['props'] = explode( '|', $params['props'] );
@@ -256,7 +237,7 @@ class GetEntitiesTest extends WikibaseApiTestCase {
 		}
 
 		//implied props
-		if ( in_array( 'sitelinks/urls' , $expected['props'] ) ) {
+		if ( in_array( 'sitelinks/urls', $expected['props'] ) ) {
 			$expected['props'][] = 'sitelinks';
 		}
 
@@ -272,17 +253,10 @@ class GetEntitiesTest extends WikibaseApiTestCase {
 		} else {
 			$expected['dir'] = 'ascending';
 		}
-
-		//expect snaks to be grouped by property or not
-		if( !isset( $params['ungroupedlist'] ) || !$params['ungroupedlist'] ) {
-			$expected['groupedbyproperty'] = true;
-		} else {
-			$expected['groupedbyproperty'] = false;
-		}
 		return $expected;
 	}
 
-	private function assertEntityResult( $entity, $expected ) {
+	private function assertEntityResult( array $entity, array $expected ) {
 		//Assert individual props of each entity (if we want them, make sure they are there)
 		if ( in_array( 'info', $expected['props'] ) ) {
 			$this->assertEntityPropsInfo( $entity );
@@ -301,23 +275,11 @@ class GetEntitiesTest extends WikibaseApiTestCase {
 		}
 
 		//Assert the whole entity is as expected (claims, sitelinks, aliases, descriptions, labels)
-		$expectedEntityOutput = EntityTestHelper::getEntityOutput (
+		$expectedEntityOutput = EntityTestHelper::getEntityOutput(
 			EntityTestHelper::getHandle( $entity['id'] ),
 			$expected['props'],
 			$expected['languages']
 		);
-		if( !$expected['groupedbyproperty'] ) {
-			$options = new SerializationOptions();
-			$options->setOption( SerializationOptions::OPT_GROUP_BY_PROPERTIES, array() );
-			$factory = new SerializerFactory();
-			/** @var EntitySerializer $serializer */
-			$serializer = $factory->newSerializerForEntity( $entity['type'], $options );
-			$expectedEntityOutput = $serializer->getSerialized(
-				$serializer->newFromSerialization(
-					$expectedEntityOutput
-				)
-			);
-		}
 		$this->assertEntityEquals(
 			$expectedEntityOutput,
 			$entity,
@@ -328,7 +290,7 @@ class GetEntitiesTest extends WikibaseApiTestCase {
 	/**
 	 * @param array $entity
 	 */
-	private function assertEntityPropsInfo( $entity ) {
+	private function assertEntityPropsInfo( array $entity ) {
 		$this->assertArrayHasKey( 'pageid', $entity, 'An entity is missing the pageid value' );
 		$this->assertInternalType( 'integer', $entity['pageid'] );
 		$this->assertGreaterThan( 0, $entity['pageid'] );
@@ -359,29 +321,29 @@ class GetEntitiesTest extends WikibaseApiTestCase {
 	/**
 	 * @param array $entity
 	 */
-	private function assertEntityPropsSitelinksUrls( $entity ) {
-		foreach ( $entity['sitelinks'] as $sitelink ) {
-			$this->assertArrayHasKey( 'url', $sitelink );
-			$this->assertNotEmpty( $sitelink['url'] );
+	private function assertEntityPropsSitelinksUrls( array $entity ) {
+		foreach ( $entity['sitelinks'] as $siteLink ) {
+			$this->assertArrayHasKey( 'url', $siteLink );
+			$this->assertNotEmpty( $siteLink['url'] );
 		}
 	}
 
 	/**
 	 * @param array $entity
 	 */
-	private function assertEntityPropsSitelinksBadges( $entity ) {
-		foreach ( $entity['sitelinks'] as $sitelink ) {
-			$this->assertArrayHasKey( 'badges', $sitelink );
-			$this->assertInternalType( 'array', $sitelink['badges'] );
+	private function assertEntityPropsSitelinksBadges( array $entity ) {
+		foreach ( $entity['sitelinks'] as $siteLink ) {
+			$this->assertArrayHasKey( 'badges', $siteLink );
+			$this->assertInternalType( 'array', $siteLink['badges'] );
 
-			foreach ( $sitelink['badges'] as $badge ) {
+			foreach ( $siteLink['badges'] as $badge ) {
 				$this->assertStringStartsWith( 'Q', $badge );
 				$this->assertGreaterThan( 1, strlen( $badge ) );
 			}
 		}
 	}
 
-	private function assertEntitySitelinkSorting( $entity, $expected ) {
+	private function assertEntitySitelinkSorting( array $entity, array $expected ) {
 		$last = '';
 		if ( $expected['dir'] == 'descending' ) {
 			$last = 'zzzzzzzz';
@@ -405,7 +367,7 @@ class GetEntitiesTest extends WikibaseApiTestCase {
 		}
 	}
 
-	private function assertNormalization( $result, $params ) {
+	private function assertNormalization( array $result, array $params ) {
 		$this->assertArrayHasKey( 'normalized', $result );
 		$this->assertEquals(
 			$params['titles'],
@@ -418,11 +380,11 @@ class GetEntitiesTest extends WikibaseApiTestCase {
 		);
 	}
 
-	public static function provideExceptionData() {
-		//todo more exception checks should be added once Bug:53038 is resolved
+	public function provideExceptionData() {
+		// TODO: More exception checks should be added once bug T55038 is resolved.
 		return array(
 			array( //0 no params
-				'p' => array( ),
+				'p' => array(),
 				'e' => array( 'exception' => array( 'type' => 'UsageException', 'code' => 'param-missing' ) ) ),
 			array( //1 bad id
 				'p' => array( 'ids' => 'ABCD' ),
@@ -457,7 +419,7 @@ class GetEntitiesTest extends WikibaseApiTestCase {
 	/**
 	 * @dataProvider provideExceptionData
 	 */
-	public function testGetEntitiesExceptions( $params, $expected ) {
+	public function testGetEntitiesExceptions( array $params, array $expected ) {
 		// -- set any defaults ------------------------------------
 		$params['action'] = 'wbgetentities';
 		if ( array_key_exists( 'handles', $params ) ) {
@@ -473,13 +435,14 @@ class GetEntitiesTest extends WikibaseApiTestCase {
 
 	public function provideLanguageFallback() {
 		return array(
-			array(
+			'Guangzhou Fallback' => array(
 				'Guangzhou',
 				array( 'de-formal', 'en', 'fr', 'yue', 'zh-cn', 'zh-hk' ),
 				array(
 					'de-formal' => array(
 						'language' => 'de',
 						'value' => 'Guangzhou',
+						'for-language' => 'de-formal',
 					),
 					'yue' => array(
 						'language' => 'yue',
@@ -499,6 +462,7 @@ class GetEntitiesTest extends WikibaseApiTestCase {
 					'de-formal' => array(
 						'language' => 'en',
 						'value' => 'Capital of Guangdong.',
+						'for-language' => 'de-formal',
 					),
 					'en' => array(
 						'language' => 'en',
@@ -507,10 +471,12 @@ class GetEntitiesTest extends WikibaseApiTestCase {
 					'fr' => array(
 						'language' => 'en',
 						'value' => 'Capital of Guangdong.',
+						'for-language' => 'fr',
 					),
 					'yue' => array(
 						'language' => 'en',
 						'value' => 'Capital of Guangdong.',
+						'for-language' => 'yue',
 					),
 					'zh-cn' => array(
 						'language' => 'zh-cn',
@@ -521,34 +487,118 @@ class GetEntitiesTest extends WikibaseApiTestCase {
 						'language' => 'zh-hk',
 						'value' => '廣東的省會。',
 					),
-
 				),
+			),
+			'Oslo Fallback' => array(
+				'Oslo',
+				array( 'sli', 'de-formal', 'kn', 'nb' ),
+				array(
+					'sli' => array(
+						'language' => 'de',
+						'value' => 'Oslo',
+						'for-language' => 'sli',
+					),
+					'de-formal' => array(
+						'language' => 'de',
+						'value' => 'Oslo',
+						'for-language' => 'de-formal',
+					),
+					'kn' => array(
+						'language' => 'en',
+						'value' => 'Oslo',
+						'for-language' => 'kn',
+					),
+					'nb' => array(
+						'language' => 'nb',
+						'value' => 'Oslo',
+					),
+				),
+				array(
+					'sli' => array(
+						'language' => 'de',
+						'value' => 'Hauptstadt der Norwegen.',
+						'for-language' => 'sli',
+					),
+					'de-formal' => array(
+						'language' => 'de',
+						'value' => 'Hauptstadt der Norwegen.',
+						'for-language' => 'de-formal',
+					),
+					'kn' => array(
+						'language' => 'en',
+						'value' => 'Capital city in Norway.',
+						'for-language' => 'kn',
+					),
+					'nb' => array(
+						'language' => 'nb',
+						'value' => 'Hovedsted i Norge.',
+					),
+				),
+			),
+			'Oslo Fallback - Labels Only' => array(
+				'Oslo',
+				array( 'sli', 'de-formal', 'kn', 'nb' ),
+				array(
+					'sli' => array(
+						'language' => 'de',
+						'value' => 'Oslo',
+						'for-language' => 'sli',
+					),
+					'de-formal' => array(
+						'language' => 'de',
+						'value' => 'Oslo',
+						'for-language' => 'de-formal',
+					),
+					'kn' => array(
+						'language' => 'en',
+						'value' => 'Oslo',
+						'for-language' => 'kn',
+					),
+					'nb' => array(
+						'language' => 'nb',
+						'value' => 'Oslo',
+					),
+				),
+				null,
+				array( 'labels' )
 			),
 		);
 	}
 
 	/**
 	 * @dataProvider provideLanguageFallback
-	 * @todo factor this into the main test method
 	 */
-	public function testLanguageFallback( $handle, $languages, $expectedLabels, $expectedDescriptions ) {
+	public function testLanguageFallback(
+		$handle,
+		array $languages,
+		array $expectedLabels = null,
+		array $expectedDescriptions = null,
+		array $props = array()
+	) {
 		$id = EntityTestHelper::getId( $handle );
 
-		list( $res,, ) = $this->doApiRequest(
-			array(
-				'action' => 'wbgetentities',
-				'languages' => join( '|', $languages ),
-				'languagefallback' => '',
-				'format' => 'json', // make sure IDs are used as keys
-				'ids' => $id,
-			)
+		$params = array(
+			'action' => 'wbgetentities',
+			'languages' => join( '|', $languages ),
+			'languagefallback' => '',
+			'ids' => $id,
 		);
 
-		$this->assertEquals( $expectedLabels, $res['entities'][$id]['labels'] );
-		$this->assertEquals( $expectedDescriptions, $res['entities'][$id]['descriptions'] );
+		if ( !empty( $props ) ) {
+			$params['props'] = implode( '|', $props );
+		}
+
+		list( $res,, ) = $this->doApiRequest( $params );
+
+		if ( $expectedLabels !== null ) {
+			$this->assertEquals( $expectedLabels, $res['entities'][$id]['labels'] );
+		}
+		if ( $expectedDescriptions !== null ) {
+			$this->assertEquals( $expectedDescriptions, $res['entities'][$id]['descriptions'] );
+		}
 	}
 
-	public function testSitelinkFilter () {
+	public function testSiteLinkFilter() {
 		$id = EntityTestHelper::getId( 'Oslo' );
 
 		list( $res,, ) = $this->doApiRequest(
@@ -560,7 +610,7 @@ class GetEntitiesTest extends WikibaseApiTestCase {
 			)
 		);
 
-		$expectedSitelinks = array(
+		$expectedSiteLinks = array(
 			'dewiki' => array(
 				'site' => 'dewiki',
 				'title' => 'Oslo',
@@ -572,6 +622,7 @@ class GetEntitiesTest extends WikibaseApiTestCase {
 				'badges' => array(),
 			),
 		);
-		$this->assertEquals( $expectedSitelinks, $res['entities'][$id]['sitelinks'] );
+		$this->assertEquals( $expectedSiteLinks, $res['entities'][$id]['sitelinks'] );
 	}
+
 }

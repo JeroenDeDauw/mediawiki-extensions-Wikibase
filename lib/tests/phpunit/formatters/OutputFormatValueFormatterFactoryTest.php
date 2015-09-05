@@ -7,7 +7,7 @@ use ValueFormatters\StringFormatter;
 use Wikibase\Lib\OutputFormatValueFormatterFactory;
 
 /**
- * @covers OutputFormatValueFormatterFactory
+ * @covers Wikibase\Lib\OutputFormatValueFormatterFactory
  *
  * @group ValueFormatters
  * @group DataValueExtensions
@@ -54,7 +54,6 @@ class OutputFormatValueFormatterFactoryTest extends \PHPUnit_Framework_TestCase 
 
 	/**
 	 * @dataProvider getValueFormatterProvider
-	 * @covers OutputFormatValueFormatterFactory::getValueFormatter
 	 */
 	public function testGetValueFormatter( $builders, $format ) {
 		$factory = new OutputFormatValueFormatterFactory( $builders );
@@ -64,10 +63,14 @@ class OutputFormatValueFormatterFactoryTest extends \PHPUnit_Framework_TestCase 
 	}
 
 	public function getValueFormatterProvider() {
-		$this_ = $this;
+		$self = $this;
 		$builders = array(
-			'foo' => function () use ( $this_ ) { return $this_->makeMockValueFormatter( 'FOO' ); },
-			'bar' => function () use ( $this_ ) { return $this_->makeMockValueFormatter( 'BAR' ); },
+			'foo' => function() use ( $self ) {
+				return $self->makeMockValueFormatter( 'FOO' );
+			},
+			'bar' => function() use ( $self ) {
+				return $self->makeMockValueFormatter( 'BAR' );
+			},
 		);
 
 		return array(

@@ -5,13 +5,12 @@ namespace Wikibase\Test;
 use DataValues\StringValue;
 use InvalidArgumentException;
 use Wikibase\ChangeOp\ChangeOpReferenceRemove;
-use Wikibase\DataModel\Claim\Claims;
-use Wikibase\DataModel\Claim\Statement;
-use Wikibase\DataModel\Entity\Entity;
+use Wikibase\DataModel\Entity\Item;
+use Wikibase\DataModel\Entity\ItemId;
 use Wikibase\DataModel\Reference;
 use Wikibase\DataModel\Snak\PropertyValueSnak;
 use Wikibase\DataModel\Snak\SnakList;
-use Wikibase\ItemContent;
+use Wikibase\DataModel\Statement\Statement;
 
 /**
  * @covers Wikibase\ChangeOp\ChangeOpReferenceRemove
@@ -37,76 +36,69 @@ class ChangeOpReferenceRemoveTest extends \PHPUnit_Framework_TestCase {
 	 * @dataProvider invalidConstructorProvider
 	 * @expectedException InvalidArgumentException
 	 */
-	public function testInvalidConstruct( $claimGuid, $referenceHash ) {
-		new ChangeOpReferenceRemove( $claimGuid, $referenceHash );
+	public function testInvalidConstruct( $guid, $referenceHash ) {
+		new ChangeOpReferenceRemove( $guid, $referenceHash );
 	}
 
 	public function changeOpRemoveProvider() {
 		$snak = new PropertyValueSnak( 2754236, new StringValue( 'test' ) );
 		$args = array();
 
-		$item = $this->provideNewItemWithClaim( 'q345', $snak );
-		$claims = $item->getClaims();
-		/** @var Statement $claim */
-		$claim = reset( $claims );
-		$claimGuid = $claim->getGuid();
+		$item = $this->newItemWithClaim( 'q345', $snak );
+		$statements = $item->getStatements()->toArray();
+		/** @var Statement $statement */
+		$statement = reset( $statements );
+		$guid = $statement->getGuid();
 		$snaks = new SnakList();
 		$snaks[] = new PropertyValueSnak( 78462378, new StringValue( 'newQualifier' ) );
 		$newReference = new Reference( $snaks );
-		$references = $claim->getReferences();
-		$references->addReference( $newReference );
-		$claim->setReferences( $references );
-		$item->setClaims( new Claims( $claims ) );
+		$statement->getReferences()->addReference( $newReference );
 		$referenceHash = $newReference->getHash();
-		$changeOp = new ChangeOpReferenceRemove( $claimGuid, $referenceHash );
-		$args[ 'Removing a single reference' ] = array ( $item, $changeOp, $referenceHash );
+		$changeOp = new ChangeOpReferenceRemove( $guid, $referenceHash );
+		$args[ 'Removing a single reference' ] = array( $item, $changeOp, $referenceHash );
 
-		$item = $this->provideNewItemWithClaim( 'q346', $snak );
-		$claims = $item->getClaims();
-		/** @var Statement $claim */
-		$claim = reset( $claims );
-		$claimGuid = $claim->getGuid();
+		$item = $this->newItemWithClaim( 'q346', $snak );
+		$statements = $item->getStatements()->toArray();
+		/** @var Statement $statement */
+		$statement = reset( $statements );
+		$guid = $statement->getGuid();
 		$snaks = new SnakList();
 		$snaks[] = new PropertyValueSnak( 78462378, new StringValue( 'newQualifier' ) );
 		$newReference = new Reference( $snaks );
-		$references = $claim->getReferences();
+		$references = $statement->getReferences();
 		$references->addReference( $newReference );
 		$references->addReference( $newReference );
-		$claim->setReferences( $references );
-		$item->setClaims( new Claims( $claims ) );
 		$referenceHash = $newReference->getHash();
-		$changeOp = new ChangeOpReferenceRemove( $claimGuid, $referenceHash );
-		$args[ 'Removing references that have the same hash' ] = array ( $item, $changeOp, $referenceHash );
+		$changeOp = new ChangeOpReferenceRemove( $guid, $referenceHash );
+		$args[ 'Removing references that have the same hash' ] = array( $item, $changeOp, $referenceHash );
 
 		return $args;
 	}
 
 	/**
 	 * @dataProvider changeOpRemoveProvider
-	 *
-	 * @param Entity $item
-	 * @param ChangeOpReferenceRemove $changeOp
-	 * @param string $referenceHash
 	 */
-	public function testApplyRemoveReference( $item, $changeOp, $referenceHash ) {
+	public function testApplyRemoveReference( Item $item, ChangeOpReferenceRemove $changeOp, $referenceHash ) {
 		$this->assertTrue( $changeOp->apply( $item ), "Applying the ChangeOp did not return true" );
-		$claims = $item->getClaims();
-		$this->assertCount( 1, $claims, 'More than one claim returned on item...' );
-		/** @var Statement $claim */
-		$claim = reset( $claims );
-		$references = $claim->getReferences();
+		$statements = $item->getStatements()->toArray();
+		$this->assertCount( 1, $statements, 'More than one claim returned on item...' );
+		/** @var Statement $statement */
+		$statement = reset( $statements );
+		$references = $statement->getReferences();
 		$this->assertFalse( $references->hasReferenceHash( $referenceHash ), "Reference still exists" );
 	}
 
-	protected function provideNewItemWithClaim( $itemId, $snak ) {
-		$entity = ItemContent::newFromArray( array( 'entity' => $itemId ) )->getEntity();
-		$claim = $entity->newClaim( $snak );
-		$claim->setGuid( $entity->getId()->getPrefixedId() . '$D8494TYA-25E4-4334-AG03-A3290BCT9CQP' );
-		$claims = new Claims();
-		$claims->addClaim( $claim );
-		$entity->setClaims( $claims );
+	private function newItemWithClaim( $itemIdString, $snak ) {
+		$item = new Item( new ItemId( $itemIdString ) );
 
-		return $entity;
+		$item->getStatements()->addNewStatement(
+			$snak,
+			null,
+			null,
+			$item->getId()->getSerialization() . '$D8494TYA-25E4-4334-AG03-A3290BCT9CQP'
+		);
+
+		return $item;
 	}
 
 }

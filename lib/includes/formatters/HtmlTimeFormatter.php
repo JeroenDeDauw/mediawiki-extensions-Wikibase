@@ -4,10 +4,7 @@ namespace Wikibase\Lib;
 
 use DataValues\TimeValue;
 use InvalidArgumentException;
-use Language;
-use Message;
 use ValueFormatters\FormatterOptions;
-use ValueFormatters\TimeFormatter;
 use ValueFormatters\ValueFormatter;
 use ValueFormatters\ValueFormatterBase;
 
@@ -16,98 +13,128 @@ use ValueFormatters\ValueFormatterBase;
  *
  * @license GNU GPL v2+
  * @author Adrian Lang < adrian.lang@wikimedia.de >
+ * @author Thiemo Mättig
+ * @author Daniel Kinzler
  */
 class HtmlTimeFormatter extends ValueFormatterBase {
 
-	/**
-	 * @var Language
-	 */
-	private $language;
+	private static $calendarKeys = array(
+		TimeValue::CALENDAR_GREGORIAN => 'valueview-expert-timevalue-calendar-gregorian',
+		TimeValue::CALENDAR_JULIAN => 'valueview-expert-timevalue-calendar-julian',
+	);
 
 	/**
 	 * @var ValueFormatter
 	 */
 	private $dateTimeFormatter;
 
-	public function __construct( FormatterOptions $options, ValueFormatter $dateTimeFormatter ) {
+	/**
+	 * @param FormatterOptions|null $options
+	 * @param ValueFormatter $dateTimeFormatter
+	 */
+	public function __construct( FormatterOptions $options = null, ValueFormatter $dateTimeFormatter ) {
+		parent::__construct( $options );
+
 		$this->dateTimeFormatter = $dateTimeFormatter;
-
-		$this->options = $options;
-
-		$this->options->defaultOption( ValueFormatter::OPT_LANG, 'en' );
-
-		$this->language = Language::factory(
-			$this->options->getOption( ValueFormatter::OPT_LANG )
-		);
 	}
 
 	/**
-	 * Format a time data value
+	 * @see ValueFormatter::format
 	 *
 	 * @since 0.5
 	 *
-	 * @param TimeValue $value The time to format
+	 * @param TimeValue $value
 	 *
-	 * @return string
 	 * @throws InvalidArgumentException
+	 * @return string HTML
 	 */
 	public function format( $value ) {
 		if ( !( $value instanceof TimeValue ) ) {
 			throw new InvalidArgumentException( 'Data value type mismatch. Expected a TimeValue.' );
 		}
 
-		$dateTime = $this->dateTimeFormatter->format( $value );
-		$calendarName = $this->formatOptionalCalendarName( $value );
-		return $dateTime . ( $calendarName ? " <sup class=\"wb-calendar-name\">$calendarName</sup>" : '' );
+		$formatted = $this->dateTimeFormatter->format( $value );
+
+		if ( $this->calendarNameNeeded( $value ) ) {
+			$formatted .= '<sup class="wb-calendar-name">'
+				. $this->formatCalendarName( $value->getCalendarModel() )
+				. '</sup>';
+		}
+
+		return $formatted;
 	}
 
 	/**
-	 * Display the calendar being used if the date lies within a time frame when
-	 * multiple calendars have been in use or if the time value features a calendar that
-	 * is uncommon for the specified time.
+	 * @param TimeValue $value
+	 *
+	 * @return bool
 	 */
-	private function formatOptionalCalendarName( TimeValue $value ) {
-		return $this->calendarNameNeeded( $value ) ? $this->formatCalendarName( $value ) : '';
-	}
-
 	private function calendarNameNeeded( TimeValue $value ) {
-		preg_match( '/^[+-](\d+)-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/',
-			$value->getTime(), $matches );
-		$year = intval( $matches[1] );
-		$calendar = $this->getCalendarKey( $value->getCalendarModel() );
+		// Loose check if the timestamp string is ISO-ish and starts with a year.
+		if ( !preg_match( '/^[-+]?\d+\b/', $value->getTime(), $matches ) ) {
+			return true;
+		}
 
-		return $value->getPrecision() > 10
-			&& (
-				$year > 1581 && $year < 1930
-				|| $year <= 1581 && $calendar === 'gregorian'
-				|| $year >= 1930 && $calendar === 'julian'
-			);
-	}
+		// NOTE: PHP limits overly large values to PHP_INT_MAX. No overflow or wrap-around occurs.
+		$year = (int)$matches[0];
+		$guessedCalendar = $this->getDefaultCalendar( $year );
 
-	private function formatCalendarName( TimeValue $value ) {
-		$calendarKey = $this->getCalendarKey( $value->getCalendarModel() );
-		return $this->getMessage( 'valueview-expert-timevalue-calendar-' . $calendarKey );
+		// Always show the calendar if it's different from the "guessed" default.
+		if ( $value->getCalendarModel() !== $guessedCalendar ) {
+			return true;
+		}
+
+		// If precision is year or less precise, don't show the calendar.
+		if ( $value->getPrecision() <= TimeValue::PRECISION_YEAR ) {
+			return false;
+		}
+
+		// If the date is inside the "critical" range where Julian and Gregorian were used
+		// in parallel, always show the calendar. Gregorian was made "official" in October 1582 but
+		// may already be used earlier. Julian continued to be official until the 1920s in Russia
+		// and Greece, see https://en.wikipedia.org/wiki/Julian_calendar.
+		if ( $year > 1580 && $year < 1930 ) {
+			return true;
+		}
+
+		// Otherwise, the calendar is "unsurprising", so don't show it.
+		return false;
 	}
 
 	/**
-	 * @param string $uri
-	 * @return string
+	 * This guesses the most likely calendar model based on the given TimeValue,
+	 * ignoring the calendar given in the TimeValue. This should always implement the
+	 * exact same heuristic as IsoTimestampParser::getCalendarModel().
+	 *
+	 * @see IsoTimestampParser::getCalendarModel()
+	 *
+	 * @param int $year
+	 *
+	 * @return string Calendar URI
 	 */
-	private function getCalendarKey( $uri ) {
-		$calendars = array(
-		TimeFormatter::CALENDAR_GREGORIAN => 'gregorian',
-			TimeFormatter::CALENDAR_JULIAN => 'julian',
-		);
-		return $calendars[ $uri ];
+	private function getDefaultCalendar( $year ) {
+		// The Gregorian calendar was introduced in October 1582,
+		// so we'll default to Julian for all years before 1583.
+		return $year <= 1582 ? TimeValue::CALENDAR_JULIAN : TimeValue::CALENDAR_GREGORIAN;
 	}
 
 	/**
-	 * @param string $key
-	 * @return string
+	 * @param string $calendarModel
+	 *
+	 * @return string HTML
 	 */
-	private function getMessage( $key ) {
-		$message = new Message( $key );
-		$message->inLanguage( $this->language );
-		return $message->text();
+	private function formatCalendarName( $calendarModel ) {
+		if ( array_key_exists( $calendarModel, self::$calendarKeys ) ) {
+			$key = self::$calendarKeys[$calendarModel];
+			$lang = $this->getOption( ValueFormatter::OPT_LANG );
+			$msg = wfMessage( $key )->inLanguage( $lang );
+
+			if ( $msg->exists() ) {
+				return htmlspecialchars( $msg->text() );
+			}
+		}
+
+		return htmlspecialchars( $calendarModel );
 	}
+
 }

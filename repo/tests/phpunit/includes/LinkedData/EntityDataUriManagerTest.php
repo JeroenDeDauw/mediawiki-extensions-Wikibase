@@ -3,13 +3,13 @@
 namespace Wikibase\Test;
 
 use Title;
-use Wikibase\DataModel\Entity\BasicEntityIdParser;
 use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Entity\BasicEntityIdParser;
 use Wikibase\DataModel\Entity\EntityIdParser;
-use Wikibase\LinkedData\EntityDataUriManager;
+use Wikibase\Repo\LinkedData\EntityDataUriManager;
 
 /**
- * @covers Wikibase\LinkedData\EntityUriManager
+ * @covers Wikibase\Repo\LinkedData\EntityDataUriManager
  *
  * @group Database
  * ^--- just because Title is a mess
@@ -26,16 +26,16 @@ class EntityDataUriManagerTest extends \MediaWikiTestCase {
 	/**
 	 * @var EntityIdParser
 	 */
-	protected $idParser;
+	private $idParser;
 
-	public function setUp() {
+	protected function setUp() {
 		parent::setUp();
 
 		$this->idParser = new BasicEntityIdParser();
 	}
 
 	protected function makeUriManager() {
-		$titleLookup = $this->getMock( 'Wikibase\EntityTitleLookup' );
+		$titleLookup = $this->getMock( 'Wikibase\Lib\Store\EntityTitleLookup' );
 		$titleLookup->expects( $this->any() )
 			->method( 'getTitleForId' )
 			->will( $this->returnCallback( function( EntityId $id ) {
@@ -58,7 +58,7 @@ class EntityDataUriManagerTest extends \MediaWikiTestCase {
 		return $uriManager;
 	}
 
-	public static function provideGetExtension() {
+	public function provideGetExtension() {
 		return array(
 			array( 'text', 'txt' ),
 			array( 'rdfxml', 'rdf' ),
@@ -77,7 +77,7 @@ class EntityDataUriManagerTest extends \MediaWikiTestCase {
 		$this->assertEquals( $expected, $actual );
 	}
 
-	public static function provideGetFormatName() {
+	public function provideGetFormatName() {
 		return array(
 			array( 'txt', 'text' ),
 			array( 'text', 'text' ),
@@ -97,7 +97,7 @@ class EntityDataUriManagerTest extends \MediaWikiTestCase {
 		$this->assertEquals( $expected, $actual );
 	}
 
-	public static function provideParseDocName() {
+	public function provideParseDocName() {
 		return array(
 			array( '', array( '', '' ) ),
 			array( 'foo', array( 'foo', '' ) ),
@@ -115,7 +115,7 @@ class EntityDataUriManagerTest extends \MediaWikiTestCase {
 		$this->assertEquals( $expected, $actual );
 	}
 
-	public static function provideGetDocName() {
+	public function provideGetDocName() {
 		return array(
 			array( 'Q12', '', 'Q12' ),
 			array( 'q12', null, 'Q12' ),
@@ -135,7 +135,7 @@ class EntityDataUriManagerTest extends \MediaWikiTestCase {
 		$this->assertEquals( $expected, $actual );
 	}
 
-	public static function provideGetDocTitle() {
+	public function provideGetDocTitle() {
 		$title = Title::newFromText( "Special:EntityDataUriManagerTest" );
 		$base = $title->getPrefixedText();
 
@@ -158,7 +158,7 @@ class EntityDataUriManagerTest extends \MediaWikiTestCase {
 		$this->assertEquals( $expected, $actual->getPrefixedText() );
 	}
 
-	public static function provideGetDocUrl() {
+	public function provideGetDocUrl() {
 		return array(
 			array( 'Q12', '', 0, '!Q12$!' ),
 			array( 'q12', null, 0, '!Q12$!' ),
@@ -180,9 +180,9 @@ class EntityDataUriManagerTest extends \MediaWikiTestCase {
 		$this->assertRegExp( $expectedExp, $actual );
 	}
 
-	public static function provideGetCacheableUrls() {
+	public function provideGetCacheableUrls() {
 		$title = Title::newFromText( "Special:EntityDataUriManagerTest" );
-		$base = $title->getFullURL();
+		$base = $title->getInternalURL();
 
 		return array(
 			array( 'Q12', array(
@@ -203,4 +203,5 @@ class EntityDataUriManagerTest extends \MediaWikiTestCase {
 		$actual = $uriManager->getCacheableUrls( $id );
 		$this->assertEquals( $expected, $actual );
 	}
+
 }

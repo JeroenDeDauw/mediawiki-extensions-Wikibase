@@ -1,9 +1,9 @@
 <?php
 
-namespace Wikibase\Test\Api;
+namespace Wikibase\Test\Repo\Api;
 
 /**
- * @covers Wikibase\Api\SetAliases
+ * @covers Wikibase\Repo\Api\SetAliases
  *
  * @group Database
  * @group medium
@@ -22,17 +22,17 @@ class SetAliasesTest extends ModifyTermTestCase {
 
 	private static $hasSetup;
 
-	public function setUp() {
+	protected function setUp() {
 		self::$testAction = 'wbsetaliases';
 		parent::setUp();
 
-		if( !isset( self::$hasSetup ) ){
+		if ( !isset( self::$hasSetup ) ) {
 			$this->initTestEntities( array( 'Empty' ) );
 		}
 		self::$hasSetup = true;
 	}
 
-	public static function provideData() {
+	public function provideData() {
 		return array(
 			// p => params, e => expected
 
@@ -75,7 +75,7 @@ class SetAliasesTest extends ModifyTermTestCase {
 				'e' => array( 'value' => array( 'en' => array( 'ohi' ) ) ) ),
 			array( //12
 				'p' => array( 'language' => 'en', 'remove' => 'ohi' ),
-				'e' => array(  ) ),
+				'e' => array() ),
 			array( //13
 				'p' => array( 'language' => 'en', 'set' => "  Foo\nBar  " ),
 				'e' => array( 'value' => array( 'en' => array( 'Foo Bar' ) ) ) ),
@@ -85,94 +85,136 @@ class SetAliasesTest extends ModifyTermTestCase {
 	/**
 	 * @dataProvider provideData
 	 */
-	public function testSetAliases( $params, $expected ){
+	public function testSetAliases( $params, $expected ) {
 		// -- set any defaults ------------------------------------
 		$params['action'] = self::$testAction;
-		if( !array_key_exists( 'id', $params ) ){
+		if ( !array_key_exists( 'id', $params ) ) {
 			$params['id'] = EntityTestHelper::getId( 'Empty' );
 		}
-		if( !array_key_exists( 'value', $expected ) ){
+		if ( !array_key_exists( 'value', $expected ) ) {
 			$expected['value'] = array();
 		}
 
 		// -- do the request --------------------------------------------------
-		list( $result,, ) = $this->doApiRequestWithToken( $params );
+		list( $result, , ) = $this->doApiRequestWithToken( $params );
 
 		// -- check the result ------------------------------------------------
 		$this->assertArrayHasKey( 'success', $result, "Missing 'success' marker in response." );
 		$this->assertResultHasEntityType( $result );
 		$this->assertArrayHasKey( 'entity', $result, "Missing 'entity' section in response." );
 
-		if( array_key_exists( $params['language'], $expected['value'] ) ){
-			$resAliases = self::flattenArray( $result['entity']['aliases'], 'language', 'value', true );
+		if ( array_key_exists( $params['language'], $expected['value'] ) ) {
+			$resAliases = $this->flattenArray( $result['entity']['aliases'], 'language', 'value', true );
 			$this->assertArrayHasKey( $params['language'], $resAliases );
 			$this->assertArrayEquals( $expected['value'][$params['language']], $resAliases[ $params['language'] ] );
 		}
 
 		// -- check any warnings ----------------------------------------------
-		if( array_key_exists( 'warning', $expected ) ){
+		if ( array_key_exists( 'warning', $expected ) ) {
 			$this->assertArrayHasKey( 'warnings', $result, "Missing 'warnings' section in response." );
-			$this->assertEquals( $expected['warning'], $result['warnings']['messages']['0']['name']);
+			$this->assertEquals( $expected['warning'], $result['warnings']['messages']['0']['name'] );
 			$this->assertArrayHasKey( 'html', $result['warnings']['messages'] );
 		}
 
 		// -- check item in database -------------------------------------------
 		$dbEntity = $this->loadEntity( EntityTestHelper::getId( 'Empty' ) );
-		if( count( $expected['value'] ) ){
-			$this->assertArrayHasKey( 'aliases', $dbEntity );
-			$dbAliases = self::flattenArray( $dbEntity['aliases'], 'language', 'value', true );
-			foreach( $expected['value'] as $valueLanguage => $value ){
-				$this->assertArrayEquals( $value, $dbAliases[ $valueLanguage ] );
-			}
-		} else {
-			$this->assertArrayNotHasKey( 'aliases', $dbEntity );
+		$this->assertArrayHasKey( 'aliases', $dbEntity );
+		$dbAliases = $this->flattenArray( $dbEntity['aliases'], 'language', 'value', true );
+		foreach ( $expected['value'] as $valueLanguage => $value ) {
+			$this->assertArrayEquals( $value, $dbAliases[ $valueLanguage ] );
 		}
 
 		// -- check the edit summary --------------------------------------------
-		if( empty( $expected['edit-no-change'] ) ){
+		if ( empty( $expected['edit-no-change'] ) ) {
 			$this->assertRevisionSummary( array( self::$testAction, $params['language'] ), $result['entity']['lastrevid'] );
-			if( array_key_exists( 'summary', $params) ){
-				$this->assertRevisionSummary( "/{$params['summary']}/" , $result['entity']['lastrevid'] );
+			if ( array_key_exists( 'summary', $params ) ) {
+				$this->assertRevisionSummary( '/' . $params['summary']. '/', $result['entity']['lastrevid'] );
 			}
 		}
 	}
 
-	public static function provideExceptionData() {
+	public function provideExceptionData() {
 		return array(
 			// p => params, e => expected
 
 			// -- Test Exceptions -----------------------------
 			array( //0
 				'p' => array( 'language' => 'xx', 'add' => 'Foo' ),
-				'e' => array( 'exception' => array( 'type' => 'UsageException', 'code' => 'unknown_language' ) ) ),
+				'e' => array( 'exception' => array(
+					'type' => 'UsageException',
+					'code' => 'unknown_language'
+				) )
+			),
 			array( //1
 				'p' => array( 'language' => 'nl', 'set' => TermTestHelper::makeOverlyLongString() ),
-				'e' => array( 'exception' => array( 'type' => 'UsageException', 'code' => 'modification-failed' ) ) ),
+				'e' => array( 'exception' => array(
+					'type' => 'UsageException',
+					'code' => 'modification-failed'
+				) )
+			),
 			array( //2
 				'p' => array( 'language' => 'pt', 'remove' => 'normalValue' ),
-				'e' => array( 'exception' => array( 'type' => 'UsageException', 'code' => 'badtoken', 'message' => 'loss of session data' ) ) ),
+				'e' => array( 'exception' => array(
+					'type' => 'UsageException',
+					'code' => 'notoken',
+					'message' => 'The token parameter must be set'
+				) )
+			),
 			array( //3
-				'p' => array( 'id' => 'noANid', 'language' => 'fr', 'add' => 'normalValue' ),
-				'e' => array( 'exception' => array( 'type' => 'UsageException', 'code' => 'no-such-entity-id', 'message' => 'is not valid' ) ) ),
+				'p' => array( 'language' => 'pt', 'value' => 'normalValue', 'token' => '88888888888888888888888888888888+\\' ),
+				'e' => array( 'exception' => array(
+					'type' => 'UsageException',
+					'code' => 'badtoken',
+					'message' => 'Invalid token'
+				) )
+			),
 			array( //4
-				'p' => array( 'site' => 'qwerty', 'language' => 'pl', 'set' => 'normalValue' ),
-				'e' => array( 'exception' => array( 'type' => 'UsageException', 'code' => 'unknown_site', 'message' => "Unrecognized value for parameter 'site'" ) ) ),
+				'p' => array( 'id' => 'noANid', 'language' => 'fr', 'add' => 'normalValue' ),
+				'e' => array( 'exception' => array(
+					'type' => 'UsageException',
+					'code' => 'no-such-entity-id',
+					'message' => 'Could not find such an entity id'
+				) )
+			),
 			array( //5
-				'p' => array( 'site' => 'enwiki', 'title' => 'GhskiDYiu2nUd', 'language' => 'en', 'remove' => 'normalValue' ),
-				'e' => array( 'exception' => array( 'type' => 'UsageException', 'code' => 'no-such-entity-link', 'message' => 'No entity found matching site link' ) ) ),
+				'p' => array( 'site' => 'qwerty', 'language' => 'pl', 'set' => 'normalValue' ),
+				'e' => array( 'exception' => array(
+					'type' => 'UsageException',
+					'code' => 'unknown_site',
+					'message' => "Unrecognized value for parameter 'site'"
+				) )
+			),
 			array( //6
-				'p' => array( 'title' => 'Blub', 'language' => 'en', 'add' => 'normalValue' ),
-				'e' => array( 'exception' => array( 'type' => 'UsageException', 'code' => 'param-illegal', 'message' => 'Either provide the item "id" or pairs' ) ) ),
+				'p' => array( 'site' => 'enwiki', 'title' => 'GhskiDYiu2nUd', 'language' => 'en', 'remove' => 'normalValue' ),
+				'e' => array( 'exception' => array(
+					'type' => 'UsageException',
+					'code' => 'no-such-entity-link',
+					'message' => 'No entity found matching site link'
+				) )
+			),
 			array( //7
+				'p' => array( 'title' => 'Blub', 'language' => 'en', 'add' => 'normalValue' ),
+				'e' => array( 'exception' => array(
+					'type' => 'UsageException',
+					'code' => 'param-illegal',
+					'message' => 'Either provide the item "id" or pairs'
+				) )
+			),
+			array( //8
 				'p' => array( 'site' => 'enwiki', 'language' => 'en', 'set' => 'normalValue' ),
-				'e' => array( 'exception' => array( 'type' => 'UsageException', 'code' => 'param-illegal' ) ) ),
+				'e' => array( 'exception' => array(
+					'type' => 'UsageException',
+					'code' => 'param-illegal'
+				) )
+			),
 		);
 	}
 
 	/**
 	 * @dataProvider provideExceptionData
 	 */
-	public function testSetLabelExceptions( $params, $expected ){
+	public function testSetAliasesExceptions( $params, $expected ) {
 		self::doTestSetTermExceptions( $params, $expected );
 	}
+
 }

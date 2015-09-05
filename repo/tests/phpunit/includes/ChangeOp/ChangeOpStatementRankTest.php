@@ -3,13 +3,13 @@
 namespace Wikibase\Test;
 
 use DataValues\StringValue;
-use Wikibase\ChangeOp\ChangeOpStatementRank;
-use Wikibase\DataModel\Claim\Claims;
-use Wikibase\DataModel\Entity\Entity;
-use Wikibase\DataModel\Snak\PropertyValueSnak;
-use Wikibase\ItemContent;
-use Wikibase\Lib\ClaimGuidGenerator;
 use InvalidArgumentException;
+use Wikibase\ChangeOp\ChangeOpStatementRank;
+use Wikibase\DataModel\Entity\Item;
+use Wikibase\DataModel\Entity\ItemId;
+use Wikibase\DataModel\Services\Statement\GuidGenerator;
+use Wikibase\DataModel\Snak\PropertyValueSnak;
+use Wikibase\DataModel\Statement\Statement;
 
 /**
  * @covers Wikibase\ChangeOp\ChangeOpStatementRank
@@ -24,14 +24,15 @@ use InvalidArgumentException;
 class ChangeOpStatementRankTest extends \PHPUnit_Framework_TestCase {
 
 	public function invalidArgumentProvider() {
-		$item = ItemContent::newFromArray( array( 'entity' => 'q42' ) )->getEntity();
-		$guidGenerator = new ClaimGuidGenerator();
-		$validClaimGuid = $guidGenerator->newGuid( $item->getId() );
+		$item = new Item( new ItemId( 'Q42' ) );
+
+		$guidGenerator = new GuidGenerator();
+		$validGuid = $guidGenerator->newGuid( $item->getId() );
 		$validRank = 1;
 
 		$args = array();
 		$args[] = array( 123, $validRank );
-		$args[] = array( $validClaimGuid, ':-)' );
+		$args[] = array( $validGuid, ':-)' );
 
 		return $args;
 	}
@@ -41,50 +42,51 @@ class ChangeOpStatementRankTest extends \PHPUnit_Framework_TestCase {
 	 *
 	 * @expectedException InvalidArgumentException
 	 */
-	public function testInvalidConstruct( $claimGuid, $rank ) {
-		new ChangeOpStatementRank( $claimGuid, $rank );
+	public function testInvalidConstruct( $guid, $rank ) {
+		new ChangeOpStatementRank( $guid, $rank );
 	}
 
 	public function changeOpProvider() {
 		$snak = new PropertyValueSnak( 2754236, new StringValue( 'test' ) );
 		$args = array();
 
-		$item = $this->provideNewItemWithClaim( 'q123', $snak );
-		$claims = $item->getClaims();
-		$claim = reset( $claims );
-		$claimGuid = $claim->getGuid();
+		$item = $this->newItemWithClaim( 'q123', $snak );
+		$statements = $item->getStatements()->toArray();
+		/** @var Statement $statement */
+		$statement = reset( $statements );
+		$guid = $statement->getGuid();
 		$rank = 1;
 
-		$changeOp = new ChangeOpStatementRank( $claimGuid, $rank );
+		$changeOp = new ChangeOpStatementRank( $guid, $rank );
 
-		$args[] = array ( $item, $changeOp, $rank );
+		$args[] = array( $item, $changeOp, $rank );
 
 		return $args;
 	}
 
 	/**
 	 * @dataProvider changeOpProvider
-	 *
-	 * @param Entity $item
-	 * @param ChangeOpStatementRank $changeOp
-	 * @param $expectedRank
 	 */
-	public function testApplyStatementRank( $item, $changeOp, $expectedRank ) {
+	public function testApplyStatementRank( Item $item, ChangeOpStatementRank $changeOp, $expectedRank ) {
 		$this->assertTrue( $changeOp->apply( $item ), "Applying the ChangeOp did not return true" );
-		$claims = $item->getClaims();
-		$claim = reset( $claims );
-		$rank = $claim->getRank();
+		$statements = $item->getStatements()->toArray();
+		/** @var Statement $statement */
+		$statement = reset( $statements );
+		$rank = $statement->getRank();
 		$this->assertEquals( $rank, $expectedRank, "No reference with expected hash" );
 	}
 
-	protected function provideNewItemWithClaim( $itemId, $snak ) {
-		$entity = ItemContent::newFromArray( array( 'entity' => $itemId ) )->getEntity();
-		$claim = $entity->newClaim( $snak );
-		$claim->setGuid( $entity->getId()->getPrefixedId() . '$D8499CDA-25E4-4334-AG03-A3290BCD9CQP' );
-		$claims = new Claims();
-		$claims->addClaim( $claim );
-		$entity->setClaims( $claims );
+	private function newItemWithClaim( $itemIdString, $mainSnak ) {
+		$item = new Item( new ItemId( $itemIdString ) );
 
-		return $entity;
+		$item->getStatements()->addNewStatement(
+			$mainSnak,
+			null,
+			null,
+			$itemIdString . '$D8499CDA-25E4-4334-AG03-A3290BCD9CQP'
+		);
+
+		return $item;
 	}
+
 }

@@ -1,7 +1,27 @@
 <?php
 
-$basePath = getenv( 'MW_INSTALL_PATH' ) !== false ? getenv( 'MW_INSTALL_PATH' ) : __DIR__ . '/../../../..';
+namespace Wikibase;
+
+use Http;
+use Maintenance;
+use MWException;
+use SiteSQLStore;
+use Wikibase\Lib\Sites\SiteMatrixParser;
+use Wikibase\Lib\Sites\SitesBuilder;
+
+$basePath = getenv( 'MW_INSTALL_PATH' ) !== false
+	? getenv( 'MW_INSTALL_PATH' )
+	: __DIR__ . '/../../../..';
+
 require_once $basePath . '/maintenance/Maintenance.php';
+
+if ( !class_exists( 'SitesBuilder' ) ) {
+	require_once __DIR__ . '/../includes/sites/SitesBuilder.php';
+}
+
+if ( !class_exists( 'SiteMatrixParser' ) ) {
+	require_once __DIR__ . '/../includes/sites/SiteMatrixParser.php';
+}
 
 /**
  * Maintenance script for populating the Sites table from another wiki that runs the
@@ -17,9 +37,12 @@ require_once $basePath . '/maintenance/Maintenance.php';
 class PopulateSitesTable extends Maintenance {
 
 	public function __construct() {
+		parent::__construct();
+
 		$this->mDescription = 'Populate the sites table from another wiki that runs the SiteMatrix extension';
 
 		$this->addOption( 'strip-protocols', "Strip http/https from URLs to make them protocol relative." );
+		$this->addOption( 'force-protocol', "Force a specific protocol for all URLs (like http/https).", false, true );
 		$this->addOption( 'load-from', "Full URL to the API of the wiki to fetch the site info from. "
 				. "Default is https://meta.wikimedia.org/w/api.php", false, true );
 		$this->addOption( 'script-path', 'Script path to use for wikis in the site matrix. '
@@ -32,18 +55,28 @@ class PopulateSitesTable extends Maintenance {
 				. ' and populate interwiki ids for sites in that group.', false, true );
 		$this->addOption( 'no-expand-group', 'Do not expand site group codes in site matrix. '
 				. ' By default, "wiki" is expanded to "wikipedia".' );
-
-		parent::__construct();
 	}
 
 	public function execute() {
-		$stripProtocols = $this->getOption( 'strip-protocols', false );
+		$stripProtocols = (bool)$this->getOption( 'strip-protocols', false );
+		$forceProtocol = $this->getOption( 'force-protocol', null );
 		$url = $this->getOption( 'load-from', 'https://meta.wikimedia.org/w/api.php' );
 		$scriptPath = $this->getOption( 'script-path', '/w/$1' );
 		$articlePath = $this->getOption( 'article-path', '/wiki/$1' );
 		$expandGroup = !$this->getOption( 'no-expand-group', false );
 		$siteGroup = $this->getOption( 'site-group' );
 		$wikiId = $this->getOption( 'wiki' );
+
+		if ( $stripProtocols && is_string( $forceProtocol ) ) {
+			$this->error( "You can't use both strip-protocols and force-protocol", 1 );
+		}
+
+		$protocol = true;
+		if ( $stripProtocols ) {
+			$protocol = false;
+		} elseif ( is_string( $forceProtocol ) ) {
+			$protocol = $forceProtocol;
+		}
 
 		// @todo make it configurable, such as from a config file.
 		$validGroups = array( 'wikipedia', 'wikivoyage', 'wikiquote', 'wiktionary',
@@ -53,7 +86,7 @@ class PopulateSitesTable extends Maintenance {
 			$json = $this->getSiteMatrixData( $url );
 
 			$siteMatrixParser = new SiteMatrixParser( $scriptPath, $articlePath,
-				$stripProtocols, $expandGroup );
+				$protocol, $expandGroup );
 
 			$sites = $siteMatrixParser->sitesFromJson( $json );
 
@@ -78,8 +111,7 @@ class PopulateSitesTable extends Maintenance {
 	protected function getSiteMatrixData( $url ) {
 		$url .= '?action=sitematrix&format=json';
 
-		//NOTE: the raiseException option needs change Iad3995a6 to be merged, otherwise it is ignored.
-		$json = Http::get( $url, 'default', array( 'raiseException' => true ) );
+		$json = Http::get( $url );
 
 		if ( !$json ) {
 			throw new MWException( "Got no data from $url\n" );
@@ -87,7 +119,8 @@ class PopulateSitesTable extends Maintenance {
 
 		return $json;
 	}
+
 }
 
-$maintClass = 'PopulateSitesTable';
-require_once ( RUN_MAINTENANCE_IF_MAIN );
+$maintClass = 'Wikibase\PopulateSitesTable';
+require_once RUN_MAINTENANCE_IF_MAIN;

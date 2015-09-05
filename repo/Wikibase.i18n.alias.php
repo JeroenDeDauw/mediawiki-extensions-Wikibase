@@ -19,13 +19,17 @@ $specialPageAliases['en'] = array(
 	'NewItem' => array( 'NewItem', 'CreateItem' ),
 	'NewProperty' => array( 'NewProperty', 'CreateProperty' ),
 	'ItemByTitle' => array( 'ItemByTitle' ),
+	'GoToLinkedPage' => array( 'GoToLinkedPage' ),
 	'ItemDisambiguation' => array( 'ItemDisambiguation' ),
 	'ListDatatypes' => array( 'ListDatatypes' ),
+	'ListProperties' => array( 'ListProperties' ),
 	'SetLabel' => array( 'SetLabel' ),
 	'SetDescription' => array( 'SetDescription' ),
 	'SetAliases' => array( 'SetAliases' ),
+	'SetLabelDescriptionAliases' => array( 'SetLabelDescriptionAliases' ),
 	'SetSiteLink' => array( 'SetSiteLink' ),
-	'MergeItems' => array( 'MergeItems' ),
+	'MergeItems' => array( 'MergeItems', 'MergeItem' ),
+	'RedirectEntity' => array( 'RedirectEntity', 'EntityRedirect', 'ItemRedirect', 'RedirectItem' ),
 	'EntitiesWithoutLabel' => array( 'EntitiesWithoutLabel' ),
 	'EntitiesWithoutDescription' => array( 'EntitiesWithoutDescription' ),
 	'ItemsWithoutSitelinks' => array( 'ItemsWithoutSitelinks' ),
@@ -39,12 +43,16 @@ $specialPageAliases['ar'] = array(
 	'NewItem' => array( 'إنشاء_مدخلة' ),
 	'NewProperty' => array( 'خاصية_جديدة' ),
 	'ItemByTitle' => array( 'المدخلات_بالعنوان' ),
+	'GoToLinkedPage' => array( 'الذهاب_للصفحة_الموصولة' ),
 	'ItemDisambiguation' => array( 'المدخلات_بالعلامة' ),
 	'ListDatatypes' => array( 'عرض_أنواع_البيانات' ),
 	'SetLabel' => array( 'ضبط_العلامة' ),
 	'SetDescription' => array( 'ضبط_الوصف' ),
 	'SetAliases' => array( 'ضبط_الكنى' ),
+	'SetLabelDescriptionAliases' => array( 'ضبط_كنى_وصف_العلامات' ),
 	'SetSiteLink' => array( 'ضبط_وصلة_الموقع' ),
+	'MergeItems' => array( 'دمج_المدخلات' ),
+	'RedirectEntity' => array( 'كينونة_تحويل', 'مدخلة_تحويل' ),
 	'EntitiesWithoutLabel' => array( 'الكيانات_بدون_علامة' ),
 	'EntitiesWithoutDescription' => array( 'الكيانات_بدون_وصف' ),
 	'ItemsWithoutSitelinks' => array( 'المدخلات_بدون_وصلات_موقع' ),
@@ -56,7 +64,7 @@ $specialPageAliases['arc'] = array(
 	'NewProperty' => array( 'ܕܝܠܝܘ̈ܬܐ_ܚܕ̈ܬܬܐ' ),
 );
 
-/** Egyptian Spoken Arabic (مصرى) */
+/** Egyptian Arabic (مصرى) */
 $specialPageAliases['arz'] = array(
 	'DispatchStats' => array( 'احصاءات_الوصول' ),
 	'EntityData' => array( 'بيانات_الكيانات' ),
@@ -109,27 +117,29 @@ $specialPageAliases['de'] = array(
 	'NewItem' => array( 'Neues_Datenelement_erstellen' ),
 	'NewProperty' => array( 'Neues_Attribut_erstellen' ),
 	'ItemByTitle' => array( 'Datenelement_nach_Name' ),
+	'GoToLinkedPage' => array( 'Gehe_zur_verlinkten_Seite' ),
 	'ItemDisambiguation' => array( 'Begriffsklärung_zu_Datenelement' ),
 	'ListDatatypes' => array( 'Datentypen_auflisten' ),
 	'SetLabel' => array( 'Bezeichnung_festlegen' ),
 	'SetDescription' => array( 'Beschreibung_festlegen' ),
 	'SetAliases' => array( 'Aliasse_festlegen' ),
+	'SetLabelDescriptionAliases' => array( 'Bezeichnung_Beschreibung_oder_Aliasse_festlegen' ),
 	'SetSiteLink' => array( 'Websitelink_festlegen' ),
 	'MergeItems' => array( 'Objekte_zusammenführen' ),
 	'EntitiesWithoutLabel' => array( 'Objekte_ohne_Bezeichnung' ),
 	'EntitiesWithoutDescription' => array( 'Objekte_ohne_Beschreibung' ),
 	'ItemsWithoutSitelinks' => array( 'Objekte_ohne_Websitelinks' ),
-	'MyLanguageFallbackChain' => array( 'Meine_Sprachfallbackkette' ),
+	'MyLanguageFallbackChain' => array( 'Meine_Alternativsprachenabfolge' ),
 );
 
 /** Zazaki (Zazaki) */
 $specialPageAliases['diq'] = array(
-	'NewItem' => array( 'LeteVırazé' ),
-	'NewProperty' => array( 'XısusiyetéNewey' ),
-	'ItemByTitle' => array( 'SernuşteyéLeti' ),
-	'ItemDisambiguation' => array( 'EtiketéLeti' ),
-	'ListDatatypes' => array( 'ListeyaBabetandeMelumati' ),
-	'SetLabel' => array( 'SazéEtiketan' ),
+	'NewItem' => array( 'LeteVırazên' ),
+	'NewProperty' => array( 'XısusiyetêNeweyi' ),
+	'ItemByTitle' => array( 'SernuşteyêLeteyi' ),
+	'ItemDisambiguation' => array( 'EtiketêLeteyi' ),
+	'ListDatatypes' => array( 'ListaBabetanêMelumati' ),
+	'SetLabel' => array( 'SazêEtiketan' ),
 );
 
 /** Esperanto (Esperanto) */
@@ -153,18 +163,23 @@ $specialPageAliases['es'] = array(
 	'SetSiteLink' => array( 'DefinirEnlaceSitio' ),
 	'MergeItems' => array( 'CombinarElementos' ),
 	'EntitiesWithoutLabel' => array( 'EntidadesSinEtiqueta' ),
+	'EntitiesWithoutDescription' => array( 'EntidadesSinDescripción' ),
+	'ItemsWithoutSitelinks' => array( 'ElementosSinEnlaces' ),
 );
 
 /** Finnish (suomi) */
 $specialPageAliases['fi'] = array(
-	'NewItem' => array( 'Luo_kohde' ),
+	'NewItem' => array( 'Uusi_kohde' ),
 	'NewProperty' => array( 'Uusi_ominaisuus' ),
 	'ItemByTitle' => array( 'Hae_kohdetta_otsikolla' ),
 	'ItemDisambiguation' => array( 'Kohteet_samalla_nimellä' ),
 	'SetLabel' => array( 'Aseta_nimi' ),
 	'SetDescription' => array( 'Aseta_kuvaus' ),
 	'SetAliases' => array( 'Aseta_aliakset' ),
+	'SetSiteLink' => array( 'Aseta_sivustolinkki' ),
+	'MergeItems' => array( 'Yhdistä_kohteita' ),
 	'EntitiesWithoutLabel' => array( 'Aiheet_ilman_nimeä' ),
+	'EntitiesWithoutDescription' => array( 'Aiheet_ilman_kuvausta' ),
 	'ItemsWithoutSitelinks' => array( 'Kohteet_ilman_sivustolinkkejä' ),
 );
 
@@ -223,12 +238,14 @@ $specialPageAliases['ko'] = array(
 	'NewItem' => array( '새항목', '항목만들기' ),
 	'NewProperty' => array( '새속성', '속성만들기' ),
 	'ItemByTitle' => array( '제목별항목' ),
+	'GoToLinkedPage' => array( '링크된문서로가기', '링크된문서로이동' ),
 	'ItemDisambiguation' => array( '레이블별항목', '라벨별항목' ),
 	'ListDatatypes' => array( '데이터유형목록' ),
 	'SetLabel' => array( '레이블설정' ),
 	'SetDescription' => array( '설명설정' ),
 	'SetAliases' => array( '별칭설정' ),
 	'SetSiteLink' => array( '사이트링크설정' ),
+	'MergeItems' => array( '항목병합' ),
 	'EntitiesWithoutLabel' => array( '레이블없는개체' ),
 	'EntitiesWithoutDescription' => array( '설명없는개체' ),
 	'ItemsWithoutSitelinks' => array( '사이트링크없는개체' ),
@@ -253,6 +270,21 @@ $specialPageAliases['lb'] = array(
 	'MyLanguageFallbackChain' => array( 'Meng_Ersatzsproochketten' ),
 );
 
+/** Northern Luri (لۊری شومالی) */
+$specialPageAliases['lrc'] = array(
+	'ListDatatypes' => array( 'میزوٙنکاری_جوٙر_دادە_یا' ),
+	'SetLabel' => array( 'میزوٙنکاری_ریتئراز' ),
+	'SetDescription' => array( 'میزوٙنکاری_توضی' ),
+	'SetAliases' => array( 'میزوٙنکاری_ھوم_قأطاریا' ),
+	'SetLabelDescriptionAliases' => array( 'میزوٙنکاری_نیائن_ریتئراز_توضی_سی_ھوم_قأطاریا' ),
+	'SetSiteLink' => array( 'میزوٙنکاری_ھوم_پئیڤأند_دیارگھ' ),
+	'MergeItems' => array( 'سأریأک_سازی_چیا' ),
+	'EntitiesWithoutLabel' => array( 'چیایی_کە_ریتئراز_نارئن' ),
+	'EntitiesWithoutDescription' => array( 'چیایی_کە_توضی_نارئن' ),
+	'ItemsWithoutSitelinks' => array( 'چیایی_کئ_ھوم_پئیڤأند_دیارگە_نارئن' ),
+	'MyLanguageFallbackChain' => array( 'زأنجیرە_دئماکاری_زوٙن_مئ' ),
+);
+
 /** Macedonian (македонски) */
 $specialPageAliases['mk'] = array(
 	'DispatchStats' => array( 'СтатистикиСпроведување' ),
@@ -260,13 +292,16 @@ $specialPageAliases['mk'] = array(
 	'NewItem' => array( 'СоздајПредмет' ),
 	'NewProperty' => array( 'НовоСвојство' ),
 	'ItemByTitle' => array( 'ПредметПоНаслов' ),
+	'GoToLinkedPage' => array( 'ОдиНаСврзанаСтраница' ),
 	'ItemDisambiguation' => array( 'ПојаснувањеНаПредмет' ),
 	'ListDatatypes' => array( 'СписокПодаточниТипови' ),
-	'SetLabel' => array( 'ЗадајЕтикета' ),
+	'SetLabel' => array( 'ЗадајНатпис' ),
 	'SetDescription' => array( 'ЗадајОпис' ),
 	'SetAliases' => array( 'ЗадајАлијаси' ),
+	'SetLabelDescriptionAliases' => array( 'ЗадајАлијасиОписНатпис' ),
 	'SetSiteLink' => array( 'ЗадајВикиврска' ),
-	'EntitiesWithoutLabel' => array( 'ЕдинициБезЕтикета' ),
+	'MergeItems' => array( 'СпојПредмети' ),
+	'EntitiesWithoutLabel' => array( 'ЕдинициБезНатпис' ),
 	'EntitiesWithoutDescription' => array( 'ЕдинициБезОпис' ),
 	'ItemsWithoutSitelinks' => array( 'ПредметиБезВикиврски' ),
 	'MyLanguageFallbackChain' => array( 'МојЛанецНаРезервниЈазици' ),
@@ -291,6 +326,12 @@ $specialPageAliases['nl'] = array(
 	'ItemsWithoutSitelinks' => array( 'ItemsZonderSitekoppelingen' ),
 );
 
+/** Polish (polski) */
+$specialPageAliases['pl'] = array(
+	'EntitiesWithoutLabel' => array( 'Encje_bez_etykiety' ),
+	'EntitiesWithoutDescription' => array( 'Encje_bez_opisu' ),
+);
+
 /** Sicilian (sicilianu) */
 $specialPageAliases['scn'] = array(
 	'EntityData' => array( 'DatiEntità' ),
@@ -303,6 +344,25 @@ $specialPageAliases['scn'] = array(
 	'EntitiesWithoutLabel' => array( 'EntitàSenzaEtichetta' ),
 );
 
+/** Swedish (svenska) */
+$specialPageAliases['sv'] = array(
+	'EntityData' => array( 'Objektdata' ),
+	'NewItem' => array( 'Nytt_objekt', 'Skapa_objekt' ),
+	'NewProperty' => array( 'Ny_egenskap', 'Skapa_egenskap' ),
+	'ItemByTitle' => array( 'Objekt_efter_titel' ),
+	'ItemDisambiguation' => array( 'Objektsärskiljning' ),
+	'ListDatatypes' => array( 'Lista_datatyper' ),
+	'SetLabel' => array( 'Ange_etikett' ),
+	'SetDescription' => array( 'Ange_beskrivning' ),
+	'SetAliases' => array( 'Ange_alias' ),
+	'SetSiteLink' => array( 'Ange_webbplatslänk' ),
+	'MergeItems' => array( 'Slå_ihop_objekt' ),
+	'EntitiesWithoutLabel' => array( 'Objekt_utan_etikett' ),
+	'EntitiesWithoutDescription' => array( 'Objekt_utan_beskrivning' ),
+	'ItemsWithoutSitelinks' => array( 'Objekt_utan_webbplatslänk' ),
+	'MyLanguageFallbackChain' => array( 'Min_språkåterfallskedja' ),
+);
+
 /** Vietnamese (Tiếng Việt) */
 $specialPageAliases['vi'] = array(
 	'DispatchStats' => array( 'Thống_kê_truyền_bá' ),
@@ -310,6 +370,7 @@ $specialPageAliases['vi'] = array(
 	'NewItem' => array( 'Tạo_khoản_mục' ),
 	'NewProperty' => array( 'Thuộc_tính_mới' ),
 	'ItemByTitle' => array( 'Khoản_mục_theo_tên' ),
+	'GoToLinkedPage' => array( 'Đi_đến_trang_liên_kết' ),
 	'ItemDisambiguation' => array( 'Định_hướng_khoản_mục' ),
 	'ListDatatypes' => array( 'Danh_sách_kiểu_dữ_liệu' ),
 	'SetLabel' => array( 'Đặt_nhãn' ),
@@ -318,7 +379,7 @@ $specialPageAliases['vi'] = array(
 	'SetSiteLink' => array( 'Đặt_liên_kết_dịch_vụ' ),
 	'MergeItems' => array( 'Hợp_nhất_khoản_mục', 'Gộp_khoản_mục' ),
 	'EntitiesWithoutLabel' => array( 'Thực_thể_không_nhãn' ),
-	'EntitiesWithoutDescription' => array( 'Thực_thể_không_miêu_tả' ),
+	'EntitiesWithoutDescription' => array( 'Thực_thể_không_miêu_tả', 'Thực_thể_không_mô_tả' ),
 	'ItemsWithoutSitelinks' => array( 'Khoản_mục_không_có_liên_kết_dịch_vụ', 'Khoản_mục_không_có_liên_kết_site' ),
 	'MyLanguageFallbackChain' => array( 'Chuỗi_ngôn_ngữ_thay_thế_của_tôi' ),
 );
@@ -330,11 +391,13 @@ $specialPageAliases['zh-hans'] = array(
 	'NewItem' => array( '创建项' ),
 	'NewProperty' => array( '新属性' ),
 	'ItemByTitle' => array( '项按标题' ),
+	'GoToLinkedPage' => array( '前往已链接页面' ),
 	'ItemDisambiguation' => array( '项消歧义' ),
 	'ListDatatypes' => array( '数据类型列表' ),
 	'SetLabel' => array( '设置标签' ),
 	'SetDescription' => array( '设置说明' ),
 	'SetAliases' => array( '设置别名' ),
+	'SetLabelDescriptionAliases' => array( '设置标签说明和别名' ),
 	'SetSiteLink' => array( '设置网站链接' ),
 	'MergeItems' => array( '合并项' ),
 	'EntitiesWithoutLabel' => array( '无标签实体' ),
@@ -345,20 +408,28 @@ $specialPageAliases['zh-hans'] = array(
 
 /** Traditional Chinese (中文（繁體）‎) */
 $specialPageAliases['zh-hant'] = array(
-	'DispatchStats' => array( '派遣統計' ),
-	'EntityData' => array( '實體數據' ),
-	'NewItem' => array( '創建項目' ),
-	'NewProperty' => array( '新建屬性' ),
-	'ItemByTitle' => array( '按標題搜索項目' ),
+	'DispatchStats' => array( '發佈統計' ),
+	'EntityData' => array( '實體資料' ),
+	'NewItem' => array( '建立項目' ),
+	'NewProperty' => array( '新增屬性', '添加屬性' ),
+	'ItemByTitle' => array( '依標題搜尋項目' ),
+	'GoToLinkedPage' => array( '前往已連結頁面' ),
 	'ItemDisambiguation' => array( '項目消歧義' ),
-	'ListDatatypes' => array( '列出數據類型' ),
-	'SetLabel' => array( '設置標籤' ),
-	'SetDescription' => array( '設置描述' ),
-	'SetAliases' => array( '設置別名' ),
-	'SetSiteLink' => array( '設定站點連接' ),
-	'MergeItems' => array( '合併項' ),
-	'EntitiesWithoutLabel' => array( '沒有標籤的實體' ),
+	'ListDatatypes' => array( '資料型態清單' ),
+	'SetLabel' => array( '設定標籤' ),
+	'SetDescription' => array( '設定描述' ),
+	'SetAliases' => array( '設定別名' ),
+	'SetLabelDescriptionAliases' => array( '設定標籤說明和別名' ),
+	'SetSiteLink' => array( '設定網站連結' ),
+	'MergeItems' => array( '合併項目' ),
+	'EntitiesWithoutLabel' => array( '無標籤實體' ),
 	'EntitiesWithoutDescription' => array( '無類型實體' ),
-	'ItemsWithoutSitelinks' => array( '沒有條目連結的項目' ),
+	'ItemsWithoutSitelinks' => array( '無網站連結項目' ),
 	'MyLanguageFallbackChain' => array( '我的備用語言鏈' ),
+);
+
+/** Chinese (Taiwan) (中文（台灣）‎) */
+$specialPageAliases['zh-tw'] = array(
+	'NewItem' => array( '建立項目' ),
+	'NewProperty' => array( '新增屬性' ),
 );

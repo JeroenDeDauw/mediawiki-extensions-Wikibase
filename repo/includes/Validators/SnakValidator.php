@@ -1,21 +1,22 @@
 <?php
 
-namespace Wikibase\Validators;
+namespace Wikibase\Repo\Validators;
 
 use DataTypes\DataTypeFactory;
-use DataValues\UnDeserializableValue;
 use DataValues\DataValue;
+use DataValues\UnDeserializableValue;
+use InvalidArgumentException;
 use ValueValidators\Error;
 use ValueValidators\Result;
 use ValueValidators\ValueValidator;
-use Wikibase\Claim;
-use Wikibase\Lib\PropertyDataTypeLookup;
-use Wikibase\Lib\PropertyNotFoundException;
-use Wikibase\PropertyValueSnak;
-use Wikibase\Reference;
-use Wikibase\References;
-use Wikibase\Snak;
-use Wikibase\Statement;
+use Wikibase\DataModel\Reference;
+use Wikibase\DataModel\ReferenceList;
+use Wikibase\DataModel\Services\Lookup\PropertyDataTypeLookup;
+use Wikibase\DataModel\Services\Lookup\PropertyDataTypeLookupException;
+use Wikibase\DataModel\Snak\PropertyValueSnak;
+use Wikibase\DataModel\Snak\Snak;
+use Wikibase\DataModel\Statement\Statement;
+use Wikibase\Repo\DataTypeValidatorFactory;
 
 /**
  * Class SnakValidator for validating Snaks.
@@ -30,19 +31,26 @@ class SnakValidator implements ValueValidator {
 	/**
 	 * @var DataTypeFactory
 	 */
-	protected $dataTypeFactory;
+	private $dataTypeFactory;
 
 	/**
 	 * @var PropertyDataTypeLookup
 	 */
-	protected $propertyDataTypeLookup;
+	private $propertyDataTypeLookup;
+
+	/**
+	 * @var DataTypeValidatorFactory
+	 */
+	private $validatorFactory;
 
 	public function __construct(
 		PropertyDataTypeLookup $propertyDataTypeLookup,
-		DataTypeFactory $dataTypeFactory ) {
-
-		$this->propertyDataTypeLookup = $propertyDataTypeLookup;
+		DataTypeFactory $dataTypeFactory,
+		DataTypeValidatorFactory $validatorFactory
+	) {
 		$this->dataTypeFactory = $dataTypeFactory;
+		$this->propertyDataTypeLookup = $propertyDataTypeLookup;
+		$this->validatorFactory = $validatorFactory;
 	}
 
 	/**
@@ -51,19 +59,19 @@ class SnakValidator implements ValueValidator {
 	 * the main snak, the qualifiers, and all snaks of all references,
 	 * in case the claim is a Statement.
 	 *
-	 * @param \Wikibase\Claim $claim The value to validate
+	 * @param Statement $statement The value to validate
 	 *
-	 * @return \ValueValidators\Result
+	 * @return Result
 	 */
-	public function validateClaimSnaks( Claim $claim ) {
-		$snak = $claim->getMainSnak();
+	public function validateClaimSnaks( Statement $statement ) {
+		$snak = $statement->getMainSnak();
 		$result = $this->validate( $snak );
 
 		if ( !$result->isValid() ) {
 			return $result;
 		}
 
-		foreach ( $claim->getQualifiers() as $snak ) {
+		foreach ( $statement->getQualifiers() as $snak ) {
 			$result = $this->validate( $snak );
 
 			if ( !$result->isValid() ) {
@@ -71,12 +79,10 @@ class SnakValidator implements ValueValidator {
 			}
 		}
 
-		if ( $claim instanceof Statement ) {
-			$result = $this->validateReferences( $claim->getReferences() );
+		$result = $this->validateReferences( $statement->getReferences() );
 
-			if ( !$result->isValid() ) {
-				return $result;
-			}
+		if ( !$result->isValid() ) {
+			return $result;
 		}
 
 		return Result::newSuccess();
@@ -86,13 +92,13 @@ class SnakValidator implements ValueValidator {
 	 * Validate a list of references.
 	 * This is done by validating all snaks in all of the references.
 	 *
-	 * @param References $references
-	 * @return \ValueValidators\Result
+	 * @param ReferenceList $references
+	 *
+	 * @return Result
 	 */
-	public function validateReferences( References $references ) {
-		/* @var Reference $ref */
-		foreach ( $references as $ref ) {
-			$result = $this->validateReference( $ref );
+	public function validateReferences( ReferenceList $references ) {
+		foreach ( $references as $reference ) {
+			$result = $this->validateReference( $reference );
 
 			if ( !$result->isValid() ) {
 				return $result;
@@ -107,7 +113,8 @@ class SnakValidator implements ValueValidator {
 	 * This is done by validating all snaks in all of the references.
 	 *
 	 * @param Reference $reference
-	 * @return \ValueValidators\Result
+	 *
+	 * @return Result
 	 */
 	public function validateReference( Reference $reference ) {
 		foreach ( $reference->getSnaks() as $snak ) {
@@ -131,10 +138,14 @@ class SnakValidator implements ValueValidator {
 	 *
 	 * @param Snak $snak The value to validate
 	 *
-	 * @return \ValueValidators\Result
-	 * @throws \InvalidArgumentException
+	 * @throws InvalidArgumentException
+	 * @return Result
 	 */
 	public function validate( $snak ) {
+		if ( !( $snak instanceof Snak ) ) {
+			throw new InvalidArgumentException( 'Snak expected' );
+		}
+
 		// XXX: instead of an instanceof check, we could have multiple validators
 		//      with a canValidate() method, to determine which validator to use
 		//      for a given snak.
@@ -150,7 +161,7 @@ class SnakValidator implements ValueValidator {
 			} else {
 				$result = Result::newSuccess();
 			}
-		} catch ( PropertyNotFoundException $ex ) {
+		} catch ( PropertyDataTypeLookupException $ex ) {
 			$result = Result::newError( array(
 				Error::newError( "Property $propertyId not found!", null, 'no-such-property', array( $propertyId ) )
 			) );
@@ -168,24 +179,32 @@ class SnakValidator implements ValueValidator {
 	 * @return Result
 	 */
 	public function validateDataValue( DataValue $dataValue, $dataTypeId ) {
-		$dataType = $this->dataTypeFactory->getType( $dataTypeId );
+		$dataValueType = $this->dataTypeFactory->getType( $dataTypeId )->getDataValueType();
 
 		if ( $dataValue instanceof UnDeserializableValue ) {
 			$result = Result::newError( array(
-				Error::newError( "Bad snak value: " . $dataValue->getReason(), null, 'bad-value', array( $dataValue->getReason() ) )
+				Error::newError(
+					'Bad snak value: ' . $dataValue->getReason(),
+					null,
+					'bad-value',
+					array( $dataValue->getReason() )
+				),
 			) );
-		} elseif ( $dataType->getDataValueType() != $dataValue->getType() ) {
+		} elseif ( $dataValueType != $dataValue->getType() ) {
 			$result = Result::newError( array(
-					Error::newError( "Bad value type: " . $dataValue->getType() . ", expected " . $dataType->getDataValueType(),
-						null, 'bad-value-type', array( $dataValue->getType(), $dataType->getDataValueType() ) )
+				Error::newError(
+					'Bad value type: ' . $dataValue->getType() . ', expected ' . $dataValueType,
+					null,
+					'bad-value-type',
+					array( $dataValue->getType(), $dataValueType )
+				),
 			) );
 		} else {
 			$result = Result::newSuccess();
 		}
 
-		//XXX: Perhaps DataType should have a validate() method (even implement ValueValidator)
-		//     At least, DataType should expose only one validator, which would be a CompositeValidator
-		foreach ( $dataType->getValidators() as $validator ) {
+		//XXX: DataTypeValidatorFactory should expose only one validator, which would be a CompositeValidator
+		foreach ( $this->validatorFactory->getValidators( $dataTypeId ) as $validator ) {
 			$subResult = $validator->validate( $dataValue );
 
 			//XXX: Some validators should be fatal and cause us to abort the loop.

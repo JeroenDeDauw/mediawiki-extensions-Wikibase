@@ -4,7 +4,14 @@ namespace Wikibase;
 
 use MWException;
 use RecentChange;
+use Revision;
+use RuntimeException;
 use User;
+use Wikibase\Client\WikibaseClient;
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Entity\BasicEntityIdParser;
+use Wikibase\DataModel\Statement\Statement;
+use Wikibase\Repo\WikibaseRepo;
 
 /**
  * Represents a change for an entity; to be extended by various change subtypes
@@ -24,19 +31,14 @@ class EntityChange extends DiffChange {
 	const RESTORE = 'restore';
 
 	/**
-	 * @var EntityId $entityId
+	 * @var EntityId|null
 	 */
 	private $entityId = null;
 
 	/**
-	 * @var string $comment
-	 */
-	protected $comment;
-
-	/**
 	 * @see ORMRow::setField
 	 *
-	 * Overwritten to force lower case object_id
+	 * @todo FIXME use uppecase ID, like everywhere else!
 	 *
 	 * @param string $name
 	 * @param mixed $value
@@ -53,39 +55,6 @@ class EntityChange extends DiffChange {
 	}
 
 	/**
-	 * @since 0.3
-	 *
-	 * @deprecated: as of version 0.4, no code calls setEntity(), so getEntity() will always return null.
-	 *
-	 * @return Entity|null
-	 */
-	public function getEntity() {
-		$info = $this->hasField( 'info' ) ? $this->getField( 'info' ) : array();
-		if ( !array_key_exists( 'entity', $info ) ) {
-			return null;
-		} else {
-			return $info['entity'];
-		}
-	}
-
-	/**
-	 * @since 0.3
-	 *
-	 * @note: as of version 0.4, no code calls setEntity(), so getEntity() will always return null.
-	 * This is kept in the expectation that we may want to construct EntityChange objects
-	 * from an atom feed or the like, where full entity data would be included and useful.
-	 *
-	 * @param Entity $entity
-	 */
-	public function setEntity( Entity $entity ) {
-		$info = $this->hasField( 'info' ) ? $this->getField( 'info' ) : array();
-		$info['entity'] = $entity;
-		$this->setField( 'info', $info );
-	}
-
-	/**
-	 * @since 0.3
-	 *
 	 * @return string
 	 */
 	public function getType() {
@@ -93,48 +62,31 @@ class EntityChange extends DiffChange {
 	}
 
 	/**
-	 * @since 0.3
-	 *
-	 * @return string
-	 */
-	public function getEntityType() {
-		$id = $this->getEntityId();
-		return $id->getEntityType();
-	}
-
-	/**
-	 * @since 0.3
-	 *
 	 * @return EntityId
 	 */
 	public function getEntityId() {
 		if ( !$this->entityId && $this->hasField( 'object_id' ) ) {
-			$id = $this->getObjectId();
-			$this->entityId = EntityId::newFromPrefixedId( $id );
+			// FIXME: this should be an injected EntityIdParser
+			$idParser = new BasicEntityIdParser();
+			$this->entityId = $idParser->parse( $this->getObjectId() );
 		}
 
 		return $this->entityId;
 	}
 
 	/**
-	 *
-	 *
-	 * @since 0.3
-	 *
 	 * @return string
 	 */
 	public function getAction() {
-		list(, $action ) = explode( '~', $this->getType(), 2 );
+		list( , $action ) = explode( '~', $this->getType(), 2 );
 
 		return $action;
 	}
 
 	/**
-	 * @since 0.3
-	 *
 	 * @param string $cache set to 'cache' to cache the unserialized diff.
 	 *
-	 * @return array|bool
+	 * @return array false if no meta data could be found in the info array
 	 */
 	public function getMetadata( $cache = 'no' ) {
 		$info = $this->getInfo( $cache );
@@ -143,190 +95,147 @@ class EntityChange extends DiffChange {
 			return $info['metadata'];
 		}
 
-		return false;
+		return array();
 	}
 
 	/**
-	 * @since 0.3
+	 * Sets metadata fields. Unknown fields are ignored. New metadata is merged into
+	 * the current metadata array.
 	 *
 	 * @param array $metadata
-	 *
-	 * @return bool
 	 */
 	public function setMetadata( array $metadata ) {
 		$validKeys = array(
-			'comment',
 			'page_id',
 			'bot',
 			'rev_id',
 			'parent_id',
 			'user_text',
+			'comment'
 		);
 
-		if ( is_array( $metadata ) ) {
-			foreach ( array_keys( $metadata ) as $key ) {
-				if ( !in_array( $key, $validKeys ) ) {
-					unset( $metadata[$key] );
-				}
-			}
+		// strip extra fields from metadata
+		$metadata = array_intersect_key( $metadata, array_flip( $validKeys ) );
 
+		// merge new metadata into current metadata
+		$metadata = array_merge( $this->getMetadata(), $metadata );
+
+		// make sure the comment field is set
+		if ( !isset( $metadata['comment'] ) ) {
 			$metadata['comment'] = $this->getComment();
-
-			$info = $this->hasField( 'info' ) ? $this->getField( 'info' ) : array();
-			$info['metadata'] = $metadata;
-			$this->setField( 'info', $info );
-
-			return true;
 		}
 
-		return false;
+		$info = $this->hasField( 'info' ) ? $this->getField( 'info' ) : array();
+		$info['metadata'] = $metadata;
+		$this->setField( 'info', $info );
 	}
 
 	/**
-	 * @since 0.3
-	 *
-	 * @param string
-	 *
-	 * @return string
-	 */
-	public function setComment( $comment = null ) {
-		if ( $comment !== null ) {
-			$this->comment = $comment;
-		} else {
-			// Messages: wikibase-comment-add, wikibase-comment-remove, wikibase-comment-linked,
-			// wikibase-comment-unlink, wikibase-comment-restore, wikibase-comment-update
-			$this->comment = 'wikibase-comment-' . $this->getAction();
-		}
-	}
-
-	/**
-	 * @since 0.3
-	 *
 	 * @return string
 	 */
 	public function getComment() {
-		if ( $this->comment === null ) {
-			$this->setComment();
+		$metadata = $this->getMetadata();
+
+		// TODO: get rid of this awkward fallback and messages. Comments and messages
+		// should come from the revision, not be invented here.
+		if ( !isset( $metadata['comment'] ) ) {
+			// Messages: wikibase-comment-add, wikibase-comment-remove, wikibase-comment-linked,
+			// wikibase-comment-unlink, wikibase-comment-restore, wikibase-comment-update
+			$metadata['comment'] = 'wikibase-comment-' . $this->getAction();
 		}
-		return $this->comment;
+
+		return $metadata['comment'];
 	}
 
 	/**
-	 * @since 0.1
+	 * @see ChangeRow::postConstruct
 	 */
 	protected function postConstruct() {
-
+		// This implementation should not set the type field.
 	}
 
 	/**
-	 * @since 0.3
-	 *
 	 * @param RecentChange $rc
+	 *
+	 * @todo rename to setRecentChangeInfo
 	 */
 	public function setMetadataFromRC( RecentChange $rc ) {
+		$this->setFields( array(
+			'revision_id' => $rc->getAttribute( 'rc_this_oldid' ),
+			'user_id' => $rc->getAttribute( 'rc_user' ),
+			'time' => $rc->getAttribute( 'rc_timestamp' ),
+		) );
+
 		$this->setMetadata( array(
 			'user_text' => $rc->getAttribute( 'rc_user_text' ),
 			'bot' => $rc->getAttribute( 'rc_bot' ),
 			'page_id' => $rc->getAttribute( 'rc_cur_id' ),
 			'rev_id' => $rc->getAttribute( 'rc_this_oldid' ),
 			'parent_id' => $rc->getAttribute( 'rc_last_oldid' ),
-			'comment' => '',
+			'comment' => $rc->getAttribute( 'rc_comment' ),
 		) );
 	}
 
 	/**
-	 * @since 0.3
-	 *
 	 * @param User $user
+	 *
+	 * @todo rename to setUserInfo
 	 */
 	public function setMetadataFromUser( User $user ) {
+		$this->setFields( array(
+			'user_id' => $user->getId(),
+		) );
+
+		// TODO: init page_id etc in getMetadata, not here!
+		$metadata = array_merge( array(
+				'page_id' => 0,
+				'rev_id' => 0,
+				'parent_id' => 0,
+			),
+			$this->getMetadata()
+		);
+
+		$metadata['user_text'] = $user->getName();
+
+		$this->setMetadata( $metadata );
+	}
+
+	/**
+	 * @since 0.5
+	 *
+	 * @param Revision $revision
+	 */
+	public function setRevisionInfo( Revision $revision ) {
+		$this->setFields( array(
+			'revision_id' => $revision->getId(),
+			'user_id' => $revision->getUser(),
+			'time' => $revision->getTimestamp(),
+		) );
+
+		if ( !$this->hasField( 'object_id' ) ) {
+			/* @var EntityContent $content */
+			$content = $revision->getContent(); // potentially expensive!
+			$entityId = $content->getEntityId();
+
+			$this->setFields( array(
+				'object_id' => $entityId->getSerialization(),
+			) );
+		}
+
 		$this->setMetadata( array(
-			'user_text' => $user->getName(),
-			'page_id' => 0,
-			'rev_id' => 0,
-			'parent_id' => 0,
-			'comment' => '',
+			'user_text' => $revision->getUserText(),
+			'page_id' => $revision->getPage(),
+			'parent_id' => $revision->getParentId(),
+			'comment' => $revision->getComment(),
+			'rev_id' => $revision->getId(),
 		) );
 	}
 
 	/**
-	 * @since 0.3
-	 *
-	 * @param string $action The action name
-	 * @param EntityId $entityId
-	 * @param array $fields additional fields to set
-	 *
-	 * @return EntityChange
+	 * @param string $timestamp Timestamp in TS_MW format
 	 */
-	protected static function newForEntity( $action, EntityId $entityId, array $fields = null ) {
-		//FIXME: use factory based on $entity->getType()
-		if ( $entityId->getEntityType() === Item::ENTITY_TYPE ) {
-			$class = '\Wikibase\ItemChange';
-		} else {
-			$class = '\Wikibase\EntityChange';
-		}
-
-		/** @var EntityChange $instance  */
-		$instance = new $class(
-			ChangesTable::singleton(),
-			$fields,
-			true
-		);
-
-		if ( !$instance->hasField( 'object_id' ) ) {
-			$instance->setField( 'object_id', $entityId->getPrefixedId() );
-		}
-
-		if ( !$instance->hasField( 'info' ) ) {
-			$info = array();
-			$instance->setField( 'info', $info );
-		}
-
-		// determines which class will be used when loading teh change from the database
-		// @todo get rid of ugly cruft
-		$type = 'wikibase-' . $entityId->getEntityType() . '~' . $action;
-		$instance->setField( 'type', $type );
-
-		return $instance;
-	}
-
-	/**
-	 * @since 0.1
-	 *
-	 * @param string      $action The action name
-	 * @param Entity|null $oldEntity
-	 * @param Entity|null $newEntity
-	 * @param array|null  $fields additional fields to set
-	 *
-	 * @return EntityChange
-	 * @throws MWException
-	 */
-	public static function newFromUpdate( $action, Entity $oldEntity = null, Entity $newEntity = null, array $fields = null ) {
-		if ( $oldEntity === null && $newEntity === null ) {
-			throw new MWException( 'Either $oldEntity or $newEntity must be give.' );
-		}
-
-		if ( $oldEntity === null ) {
-			$oldEntity = EntityFactory::singleton()->newEmpty( $newEntity->getType() );
-			$theEntity = $newEntity;
-		} elseif ( $newEntity === null ) {
-			$newEntity = EntityFactory::singleton()->newEmpty( $oldEntity->getType() );
-			$theEntity = $oldEntity;
-		} elseif ( $oldEntity->getType() !== $newEntity->getType() ) {
-			throw new MWException( 'Entity type mismatch' );
-		} else {
-			$theEntity = $newEntity;
-		}
-
-		/**
-		 * @var EntityChange $instance
-		 */
-		$diff = $oldEntity->getDiff( $newEntity );
-		$instance = self::newForEntity( $action, $theEntity->getId(), $fields );
-		$instance->setDiff( $diff );
-		$instance->setEntity( $theEntity );
-
-		return $instance;
+	public function setTimestamp( $timestamp ) {
+		$this->setField( 'time', $timestamp );
 	}
 
 	/**
@@ -337,8 +246,8 @@ class EntityChange extends DiffChange {
 	 * @return string
 	 */
 	public function __toString() {
-		$s = get_class( $this );
-		$s .= ": ";
+		$string = get_class( $this );
+		$string .= ': ';
 
 		$fields = $this->getFields();
 		$info = $this->hasField( 'info' ) ? $this->getField( 'info' ) : array();
@@ -352,22 +261,22 @@ class EntityChange extends DiffChange {
 			$fields = array_merge( $fields, $meta );
 		}
 
-		foreach ( $fields as $k => $v ) {
-			if ( is_array( $v ) || is_object( $v ) ) {
-				unset( $fields[$k] );
+		foreach ( $fields as $key => $value ) {
+			if ( is_array( $value ) || is_object( $value ) ) {
+				unset( $fields[$key] );
 			}
 		}
 
 		ksort( $fields );
 
-		$s .= preg_replace( '/\s+/s', ' ', var_export( $fields, true ) );
-		return $s;
+		$string .= preg_replace( '/\s+/s', ' ', var_export( $fields, true ) );
+		return $string;
 	}
 
 	/**
 	 * @see DiffChange::arrayalizeObjects
 	 *
-	 * Overwritten to handle Claim objects.
+	 * Overwritten to handle Statement objects.
 	 *
 	 * @since 0.4
 	 *
@@ -377,20 +286,44 @@ class EntityChange extends DiffChange {
 	public function arrayalizeObjects( $data ) {
 		$data = parent::arrayalizeObjects( $data );
 
-		if ( $data instanceof Claim ) {
-			$a = $data->toArray();
-			$a['_claimclass_'] = get_class( $data );
+		if ( $data instanceof Statement ) {
+			$array = $this->getStatementSerializer()->serialize( $data );
+			$array['_claimclass_'] = get_class( $data );
 
-			return $a;
+			return $array;
 		}
 
 		return $data;
 	}
 
+	private function getStatementSerializer() {
+		// FIXME: the change row system needs to be reworked to either allow for sane injection
+		// or to avoid this kind of configuration dependent tasks.
+		if ( defined( 'WB_VERSION' ) ) {
+			return WikibaseRepo::getDefaultInstance()->getInternalStatementSerializer();
+		} elseif ( defined( 'WBC_VERSION' ) ) {
+			throw new RuntimeException( 'Cannot serialize statements on the client' );
+		} else {
+			throw new RuntimeException( 'Need either client or repo loaded' );
+		}
+	}
+
+	private function getStatementDeserializer() {
+		// FIXME: the change row system needs to be reworked to either allow for sane injection
+		// or to avoid this kind of configuration dependent tasks.
+		if ( defined( 'WB_VERSION' ) ) {
+			return WikibaseRepo::getDefaultInstance()->getInternalStatementDeserializer();
+		} elseif ( defined( 'WBC_VERSION' ) ) {
+			return WikibaseClient::getDefaultInstance()->getInternalStatementDeserializer();
+		} else {
+			throw new RuntimeException( 'Need either client or repo loaded' );
+		}
+	}
+
 	/**
 	 * @see DiffChange::objectifyArrays
 	 *
-	 * Overwritten to handle Claim objects.
+	 * Overwritten to handle Statement objects.
 	 *
 	 * @since 0.4
 	 *
@@ -403,33 +336,16 @@ class EntityChange extends DiffChange {
 		if ( is_array( $data ) && isset( $data['_claimclass_'] ) ) {
 			$class = $data['_claimclass_'];
 
-			if ( $class === 'Wikibase\Claim' || $class === 'Wikibase\DataModel\Claim\Claim'
-				|| is_subclass_of( $class, 'Wikibase\Claim' ) ) {
+			if ( $class === 'Wikibase\DataModel\Statement\Statement'
+				|| is_subclass_of( $class, 'Wikibase\DataModel\Statement\Statement' )
+			) {
 				unset( $data['_claimclass_'] );
 
-				$claim = call_user_func( array( $class, 'newFromArray' ), $data );
-				return $claim;
+				return $this->getStatementDeserializer()->deserialize( $data );
 			}
 		}
 
 		return $data;
 	}
 
-	/**
-	 * @see ChangeRow::serializeInfo()
-	 *
-	 * Overwritten to use the array representation of the diff.
-	 *
-	 * @since 0.4
-	 * @param array $info
-	 * @return string
-	 */
-	public function serializeInfo( array $info ) {
-		if ( isset( $info['entity'] ) ) {
-			// never serialize full entity data in a change, it's huge.
-			unset( $info['entity'] );
-		}
-
-		return parent::serializeInfo( $info );
-	}
 }

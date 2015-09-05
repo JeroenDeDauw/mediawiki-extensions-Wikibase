@@ -2,7 +2,8 @@
 
 namespace Wikibase;
 
-use Diff\Diff;
+use Diff\DiffOp\Diff\Diff;
+use Diff\DiffOp\DiffOp;
 
 /**
  * Class for changes that can be represented as a Diff.
@@ -42,7 +43,7 @@ class DiffChange extends ChangeRow {
 	 */
 	public function hasDiff() {
 		$info = $this->getField( 'info' );
-		return !empty( $info ) && isset( $info['diff'] );
+		return isset( $info['diff'] );
 	}
 
 	/**
@@ -65,6 +66,9 @@ class DiffChange extends ChangeRow {
 	 * @return DiffChange
 	 */
 	public static function newFromDiff( Diff $diff, array $fields = null ) {
+		/**
+		 * @var self $instance
+		 */
 		$instance = new static(
 			ChangesTable::singleton(),
 			$fields,
@@ -106,12 +110,10 @@ class DiffChange extends ChangeRow {
 	 * @return string
 	 */
 	public function serializeInfo( array $info ) {
-		if ( isset( $info['diff'] ) && $info['diff'] instanceof \Diff\DiffOp ) {
-			if ( Settings::get( "changesAsJson" ) === true  ) {
-				/* @var \Diff\DiffOp $op */
-				$op = $info['diff'];
-				$info['diff'] = $op->toArray( array( $this, 'arrayalizeObjects' ) );
-			}
+		if ( isset( $info['diff'] ) && $info['diff'] instanceof DiffOp ) {
+			/* @var \Diff\DiffOp $op */
+			$op = $info['diff'];
+			$info['diff'] = $op->toArray( array( $this, 'arrayalizeObjects' ) );
 		}
 
 		return parent::serializeInfo( $info );
@@ -171,4 +173,5 @@ class DiffChange extends ChangeRow {
 	public function objectifyArrays( array $data ) {
 		return $data; // noop
 	}
+
 }

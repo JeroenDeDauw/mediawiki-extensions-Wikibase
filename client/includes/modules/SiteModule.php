@@ -2,9 +2,9 @@
 
 namespace Wikibase;
 
-use ResourceLoaderModule;
-use ResourceLoaderContext;
 use MediaWikiSite;
+use ResourceLoaderContext;
+use ResourceLoaderModule;
 use Wikibase\Client\WikibaseClient;
 
 /**
@@ -46,4 +46,5 @@ class SiteModule extends ResourceLoaderModule {
 
 		return 'mediaWiki.config.set( "wbCurrentSite", ' . \FormatJson::encode( $currentSite ) . ' );';
 	}
+
 }

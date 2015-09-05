@@ -1,7 +1,10 @@
 <?php
+
 namespace Wikibase\Lib;
+
 use InvalidArgumentException;
-use Wikibase\Snak;
+use ValueFormatters\FormattingException;
+use Wikibase\DataModel\Snak\Snak;
 
 /**
  * DispatchingSnakFormatter will format a snak by delegating the formatting to an appropriate
@@ -76,7 +79,7 @@ class DispatchingSnakFormatter implements SnakFormatter {
 	}
 
 	/**
-	 * @param $type
+	 * @param string $type
 	 *
 	 * @return null|SnakFormatter
 	 */
@@ -116,4 +119,5 @@ class DispatchingSnakFormatter implements SnakFormatter {
 	public function canFormatSnak( Snak $snak ) {
 		return array_key_exists( $snak->getType(), $this->formatters );
 	}
+
 }

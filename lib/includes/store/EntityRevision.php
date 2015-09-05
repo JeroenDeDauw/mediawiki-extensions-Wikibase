@@ -2,6 +2,9 @@
 
 namespace Wikibase;
 
+use InvalidArgumentException;
+use Wikibase\DataModel\Entity\EntityDocument;
+
 /**
  * Represents a revision of a Wikibase entity.
  *
@@ -13,64 +16,64 @@ namespace Wikibase;
 class EntityRevision {
 
 	/**
-	 * @since 0.4
-	 * @var array
+	 * @var EntityDocument
 	 */
-	protected $entity;
+	private $entity;
 
 	/**
 	 * @var int
 	 */
-	protected $revision;
+	private $revisionId;
 
 	/**
 	 * @var string
 	 */
-	protected $timestamp;
+	private $mwTimestamp;
 
 	/**
-	 * @param Entity $entity
-	 * @param int $revision (use 0 for none)
-	 * @param string $timestamp in mediawiki format (use '' for none)
+	 * @param EntityDocument $entity
+	 * @param int $revisionId Revision ID or 0 for none
+	 * @param string $mwTimestamp in MediaWiki format or an empty string for none
 	 *
-	 * @throws \InvalidArgumentException
+	 * @throws InvalidArgumentException
 	 */
-	public function __construct( Entity $entity, $revision = 0, $timestamp = '' ) {
-		if ( !is_int( $revision ) ) {
-			throw new \InvalidArgumentException( '$revision must be an integer' );
+	public function __construct( EntityDocument $entity, $revisionId = 0, $mwTimestamp = '' ) {
+		if ( !is_int( $revisionId ) || $revisionId < 0 ) {
+			throw new InvalidArgumentException( 'Revision ID must be a non-negative integer.' );
 		}
 
-		if ( $revision < 0 ) {
-			throw new \InvalidArgumentException( '$revision must not be negative' );
-		}
-
-		if ( $timestamp !== '' && !preg_match( '/^\d{14}$/', $timestamp ) ) {
-			throw new \InvalidArgumentException( '$timestamp must be a string of 14 digits (or empty)' );
+		if ( $mwTimestamp !== '' && !preg_match( '/^\d{14}$/', $mwTimestamp ) ) {
+			throw new InvalidArgumentException( 'Timestamp must be a string of 14 digits or empty.' );
 		}
 
 		$this->entity = $entity;
-		$this->revision = $revision;
-		$this->timestamp = $timestamp;
+		$this->revisionId = $revisionId;
+		$this->mwTimestamp = $mwTimestamp;
 	}
 
 	/**
-	 * @return Entity
+	 * @return EntityDocument
 	 */
 	public function getEntity() {
 		return $this->entity;
 	}
 
 	/**
+	 * @see Revision::getId
+	 *
 	 * @return int
 	 */
-	public function getRevision() {
-		return $this->revision;
+	public function getRevisionId() {
+		return $this->revisionId;
 	}
 
 	/**
-	 * @return string
+	 * @see Revision::getTimestamp
+	 *
+	 * @return string in MediaWiki format or an empty string
 	 */
 	public function getTimestamp() {
-		return $this->timestamp;
+		return $this->mwTimestamp;
 	}
+
 }

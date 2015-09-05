@@ -1,0 +1,42 @@
+{
+	// https://github.com/jscs-dev/node-jscs/blob/master/presets/wikimedia.json
+	"preset": "wikimedia",
+
+	// ----
+	// Rules from wikimedia preset we don't yet? follow
+
+	"validateIndentation": null,
+	"requireMultipleVarDecl": null,
+	"disallowDanglingUnderscores": null,
+	"requireSpacesInsideBrackets": null,
+	"requireVarDeclFirst": null,
+	"jsDoc": {
+		// what we don't yet follow is commented out
+		//"checkAnnotations": "jsduck5",
+		//"checkParamNames": true,
+		"requireParamTypes": true,
+		"checkRedundantParams": true,
+		//"checkReturnTypes": true,
+		"checkRedundantReturns": true,
+		//"requireReturnTypes": true,
+		//"checkTypes": "capitalizedNativeCase",
+		"checkRedundantAccess": true
+		//"requireNewlineAfterDescription": true
+	},
+
+	// ----
+	// Own rules
+
+	"disallowSpaceAfterKeywords": [
+		"catch",
+		"for",
+//		"if",
+		"switch",
+		"while"
+	],
+	"requireSpaceAfterKeywords": [
+		"else"
+	],
+
+	"excludeFiles": [ "node_modules/**", "vendor/**", "extensions/**" ]
+}

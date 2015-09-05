@@ -2,7 +2,8 @@
 
 namespace Wikibase;
 
-use Diff\Diff;
+use Diff\DiffOp\Diff\Diff;
+use Wikibase\DataModel\Services\Diff\ItemDiff;
 
 /**
  * @since 0.3
@@ -36,4 +37,5 @@ class ItemChange extends EntityChange {
 			return $diff->getSiteLinkDiff();
 		}
 	}
+
 }

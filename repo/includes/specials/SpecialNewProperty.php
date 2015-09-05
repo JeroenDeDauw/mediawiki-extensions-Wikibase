@@ -2,7 +2,7 @@
 
 namespace Wikibase\Repo\Specials;
 
-use Html;
+use InvalidArgumentException;
 use Status;
 use Wikibase\DataModel\Entity\Entity;
 use Wikibase\DataModel\Entity\Property;
@@ -26,8 +26,6 @@ class SpecialNewProperty extends SpecialNewEntity {
 	protected $dataType = null;
 
 	/**
-	 * Constructor.
-	 *
 	 * @since 0.2
 	 */
 	public function __construct() {
@@ -35,12 +33,15 @@ class SpecialNewProperty extends SpecialNewEntity {
 	}
 
 	/**
-	 * @see SpecialNewEntity::prepareArguments()
+	 * @see SpecialNewEntity::prepareArguments
 	 */
 	protected function prepareArguments() {
 		parent::prepareArguments();
-		$this->dataType = $this->getRequest()->getVal( 'datatype', isset( $this->parts[2] ) ? $this->parts[2] : '' );
-		return true;
+
+		$this->dataType = $this->getRequest()->getVal(
+			'datatype',
+			isset( $this->parts[2] ) ? $this->parts[2] : ''
+		);
 	}
 
 	/**
@@ -55,27 +56,28 @@ class SpecialNewProperty extends SpecialNewEntity {
 	 * @see SpecialNewEntity::createEntity
 	 */
 	protected function createEntity() {
-		return Property::newEmpty();
+		return Property::newFromType( 'string' );
 	}
 
 	/**
-	 * @see SpecialNewEntity::modifyEntity()
+	 * @see SpecialNewEntity::modifyEntity
 	 *
 	 * @param Entity $property
 	 *
+	 * @throws InvalidArgumentException
 	 * @return Status
 	 */
 	protected function modifyEntity( Entity &$property ) {
-		/**
-		 * @var Property $property
-		 */
 		$status = parent::modifyEntity( $property );
 
 		if ( $this->dataType !== '' ) {
+			if ( !( $property instanceof Property ) ) {
+				throw new InvalidArgumentException( 'Unexpected entity type' );
+			}
+
 			if ( $this->dataTypeExists() ) {
 				$property->setDataTypeId( $this->dataType );
-			}
-			else {
+			} else {
 				$status->fatal( 'wikibase-newproperty-invalid-datatype' );
 			}
 		}
@@ -96,17 +98,17 @@ class SpecialNewProperty extends SpecialNewEntity {
 
 		$selector = new DataTypeSelector( $dataTypeFactory->getTypes(), $this->getLanguage()->getCode() );
 
-		return parent::additionalFormElements()
-			. Html::element(
-				'label',
-				array(
-					'for' => 'wb-newproperty-datatype',
-					'class' => 'wb-label'
-				),
-				$this->msg( 'wikibase-newproperty-datatype' )->text()
-			)
-			. $selector->getHtml( 'wb-newproperty-datatype' )
-			. Html::element( 'br' );
+		$formDescriptor = parent::additionalFormElements();
+		$formDescriptor['datatype'] = array(
+			'name' => 'datatype',
+			'type' => 'select',
+			'options' => array_flip( $selector->getOptionsArray() ),
+			'id' => 'wb-newproperty-datatype',
+			'cssclass' => 'wb-select',
+			'label-message' => 'wikibase-newproperty-datatype'
+		);
+
+		return $formDescriptor;
 	}
 
 	/**

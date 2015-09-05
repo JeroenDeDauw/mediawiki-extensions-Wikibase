@@ -3,11 +3,11 @@
 namespace Wikibase\Test;
 
 use HashBagOStuff;
+use Wikibase\DataModel\Entity\Item;
+use Wikibase\DataModel\Entity\Property;
 use Wikibase\DataModel\Entity\PropertyId;
-use Wikibase\Item;
-use Wikibase\Property;
 use Wikibase\PropertyLabelResolver;
-use Wikibase\Term;
+use Wikibase\TermIndexEntry;
 use Wikibase\TermPropertyLabelResolver;
 
 /**
@@ -24,7 +24,7 @@ class TermPropertyLabelResolverTest extends \MediaWikiTestCase {
 
 	/**
 	 * @param string $lang
-	 * @param Term[] $terms
+	 * @param TermIndexEntry[] $terms
 	 *
 	 * @return PropertyLabelResolver
 	 */
@@ -58,28 +58,28 @@ class TermPropertyLabelResolverTest extends \MediaWikiTestCase {
 	public function provideGetPropertyIdsForLabels() {
 		$terms = array(
 			// de
-			new Term( array(
+			new TermIndexEntry( array(
 				'termType' => 'label',
 				'termLanguage' => 'de',
 				'entityId' => 1,
 				'entityType' => Property::ENTITY_TYPE,
 				'termText' => 'Eins',
 			) ),
-			new Term( array(
+			new TermIndexEntry( array(
 				'termType' => 'label',
 				'termLanguage' => 'de',
 				'entityId' => 2,
 				'entityType' => Property::ENTITY_TYPE,
 				'termText' => 'Zwei',
 			) ),
-			new Term( array(
+			new TermIndexEntry( array(
 				'termType' => 'label',
 				'termLanguage' => 'de',
 				'entityId' => 3,
 				'entityType' => Property::ENTITY_TYPE,
 				'termText' => 'Drei',
 			) ),
-			new Term( array(
+			new TermIndexEntry( array(
 				'termType' => 'label',
 				'termLanguage' => 'de',
 				'entityId' => 4,
@@ -88,28 +88,28 @@ class TermPropertyLabelResolverTest extends \MediaWikiTestCase {
 			) ),
 
 			// en
-			new Term( array(
+			new TermIndexEntry( array(
 				'termType' => 'label',
 				'termLanguage' => 'en',
 				'entityId' => 1,
 				'entityType' => Property::ENTITY_TYPE,
 				'termText' => 'One',
 			) ),
-			new Term( array(
+			new TermIndexEntry( array(
 				'termType' => 'label',
 				'termLanguage' => 'en',
 				'entityId' => 2,
 				'entityType' => Item::ENTITY_TYPE, // not a property
 				'termText' => 'Two',
 			) ),
-			new Term( array(
+			new TermIndexEntry( array(
 				'termType' => 'alias', // not a label
 				'termLanguage' => 'en',
 				'entityId' => 3,
 				'entityType' => Property::ENTITY_TYPE,
 				'termText' => 'Three',
 			) ),
-			new Term( array(
+			new TermIndexEntry( array(
 				'termType' => 'description', // not a label
 				'termLanguage' => 'en',
 				'entityId' => 4,
@@ -120,56 +120,57 @@ class TermPropertyLabelResolverTest extends \MediaWikiTestCase {
 
 		return array(
 			array( // #0
-				'de',   // lang
-				$terms, // terms
-				array(),  // labels
-				array(),  // expected
+				'de',
+				$terms,
+				array(), // labels
+				array(), // expected
 			),
 			array( // #1
-				'de',   // lang
-				$terms, // terms
-				array(  // labels
+				'de',
+				$terms,
+				array( // labels
 					'Eins',
 					'Zwei'
 				),
-				array(  // expected
+				array( // expected
 					'Eins' => new PropertyId( 'P1' ),
 					'Zwei' => new PropertyId( 'P2' ),
 				)
 			),
 			array( // #2
-				'de',   // lang
-				$terms, // terms
-				array(  // labels
+				'de',
+				$terms,
+				array( // labels
 					'Drei',
 					'Vier'
 				),
-				array(  // expected
+				array( // expected
 					'Drei' => new PropertyId( 'P3' ),
 				)
 			),
 			array( // #3
-				'en',   // lang
-				$terms, // terms
-				array(  // labels
+				'en',
+				$terms,
+				array( // labels
 					'Eins',
 					'Zwei'
 				),
-				array()  // expected
+				array() // expected
 			),
 			array( // #4
-				'en',   // lang
-				$terms, // terms
-				array(  // labels
+				'en',
+				$terms,
+				array( // labels
 					'One',
 					'Two',
 					'Three',
 					'Four'
 				),
-				array(  // expected
+				array( // expected
 					'One' => new PropertyId( 'P1' ),
 				)
 			),
 		);
 	}
+
 }

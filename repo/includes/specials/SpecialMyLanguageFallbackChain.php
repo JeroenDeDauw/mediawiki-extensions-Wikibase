@@ -4,7 +4,7 @@ namespace Wikibase\Repo\Specials;
 
 use Html;
 use IContextSource;
-use \Language;
+use Language;
 use SpecialPage;
 use Wikibase\LanguageFallbackChain;
 use Wikibase\LanguageFallbackChainFactory;
@@ -20,35 +20,41 @@ class SpecialMyLanguageFallbackChain extends SpecialPage {
 
 	/**
 	 * @var LanguageFallbackChain
-	 * @since 0.4
 	 */
 	private $chain;
 
 	/**
 	 * @var LanguageFallbackChainFactory
-	 * @since 0.4
 	 */
 	private $factory;
 
 	/**
-	 * Constructor.
-	 *
 	 * @since 0.4
 	 */
 	public function __construct() {
 		parent::__construct( 'MyLanguageFallbackChain' );
+
 		$this->factory = WikibaseRepo::getDefaultInstance()->getLanguageFallbackChainFactory();
+	}
+
+	/**
+	 * @see SpecialPage::getGroupName
+	 *
+	 * @return string
+	 */
+	protected function getGroupName() {
+		return 'wikibase';
 	}
 
 	/**
 	 * @see SpecialPage::getDescription
 	 *
 	 * @since 0.4
-	 * @return String
+	 *
+	 * @return string
 	 */
 	public function getDescription() {
-		// Message: special-mylanguagefallbackchain
-		return $this->msg( 'special-' . strtolower( $this->getName() ) )->text();
+		return $this->msg( 'special-mylanguagefallbackchain' )->text();
 	}
 
 	/**
@@ -84,11 +90,11 @@ class SpecialMyLanguageFallbackChain extends SpecialPage {
 	}
 
 	/**
-	 * Main method
+	 * @see SpecialPage::execute
 	 *
 	 * @since 0.4
 	 *
-	 * @param string $subPage
+	 * @param string|null $subPage
 	 */
 	public function execute( $subPage ) {
 		$this->setHeaders();
@@ -126,4 +132,5 @@ class SpecialMyLanguageFallbackChain extends SpecialPage {
 
 		$this->getOutput()->addHTML( Html::closeElement( 'ul' ) );
 	}
+
 }

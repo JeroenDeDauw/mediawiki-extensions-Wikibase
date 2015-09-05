@@ -1,55 +1,33 @@
 <?php
+
 namespace Wikibase;
 
 /**
  * Utility class for collecting dispatch statistics.
+ * Note that you must call load() before accessing any getters.
  *
  * @since 0.4
  *
  * @licence GNU GPL v2+
  * @author Daniel Kinzler
+ * @author Thiemo Mättig
  */
 class DispatchStats {
 
 	/**
-	 * @var string
+	 * @var object[]|null
 	 */
-	protected $dispatchTableName;
+	private $clientStates = null;
 
 	/**
-	 * @var string
+	 * @var object|null
 	 */
-	protected $changesTableName;
+	private $changeStats = null;
 
 	/**
-	 * @var null|array
+	 * @var object|null
 	 */
-	protected $clientStates;
-
-	/**
-	 * @var null|object
-	 */
-	protected $changeStats;
-
-	/**
-	 * @var null|object
-	 */
-	protected $average;
-
-	/**
-	 * creates a new DispatchStats instance.
-	 *
-	 * Call load() before accessing any getters.
-	 */
-	public function __construct() {
-		$this->dispatchTableName = 'wb_changes_dispatch';
-		$this->changesTableName = 'wb_changes';
-
-		$this->clientStates = null;
-		$this->changeStats = null;
-
-		$this->average = null;
-	}
+	private $average = null;
 
 	/**
 	 * Loads the current dispatch status from the database and calculates statistics.
@@ -65,7 +43,7 @@ class DispatchStats {
 		$now = wfTimestamp( TS_UNIX, $now );
 
 		$this->changeStats = $db->selectRow(
-			$this->changesTableName,
+			'wb_changes',
 			array(
 				'min( change_id ) as min_id',
 				'max( change_id ) as max_id',
@@ -77,9 +55,9 @@ class DispatchStats {
 		);
 
 		$res = $db->select(
-			array (
-				$this->dispatchTableName,
-				$this->changesTableName
+			array(
+				'wb_changes_dispatch',
+				'wb_changes'
 			),
 			array( 'chd_site',
 					'chd_db',
@@ -97,7 +75,7 @@ class DispatchStats {
 				'ORDER BY' => 'chd_seen ASC'
 			),
 			array(
-				$this->changesTableName => array( 'LEFT JOIN', 'chd_seen = change_id' )
+				'wb_changes' => array( 'LEFT JOIN', 'chd_seen = change_id' )
 			)
 		);
 
@@ -108,7 +86,7 @@ class DispatchStats {
 
 		$this->clientStates = array();
 
-		while ( $row = $res->fetchObject() ) {
+		while ( ( $row = $res->fetchObject() ) !== false ) {
 			if ( $this->changeStats ) {
 				// time between last dispatch and now
 				$row->chd_untouched = max( 0, $now
@@ -147,17 +125,21 @@ class DispatchStats {
 		$n = count( $this->clientStates );
 
 		if ( $n > 0 ) {
-			$this->average->chd_untouched = intval( $this->average->chd_untouched / $n );
-			$this->average->chd_pending = intval( $this->average->chd_pending / $n );
+			$this->average->chd_untouched = (int)( $this->average->chd_untouched / $n );
+			$this->average->chd_pending = (int)( $this->average->chd_pending / $n );
 			$this->average->chd_lag = $this->average->chd_lag === null
-										? null : intval( $this->average->chd_lag / $n );
+				? null
+				: (int)( $this->average->chd_lag / $n );
 		}
 
 		return $n;
 	}
 
+	/**
+	 * @return bool
+	 */
 	public function hasStats() {
-		return is_array( $this->clientStates );
+		return !empty( $this->clientStates );
 	}
 
 	/**
@@ -173,7 +155,7 @@ class DispatchStats {
 	 *            determined, but the lag is large.
 	 * * chd_lock: the name of the lock currently in effect for that wiki
 	 *
-	 * @return array|null A list of objects representing the dispatch state
+	 * @return object[]|null A list of objects representing the dispatch state
 	 *         for each client wiki.
 	 */
 	public function getClientStates() {
@@ -186,7 +168,7 @@ class DispatchStats {
 	 * @return int
 	 */
 	public function getClientCount() {
-		return count( $this->clientStates );
+		return $this->clientStates ? count( $this->clientStates ) : 0;
 	}
 
 	/**
@@ -195,10 +177,10 @@ class DispatchStats {
 	 *
 	 * See getClientStates() for the structure of the status object.
 	 *
-	 * @return object
+	 * @return object|null
 	 */
 	public function getFreshest() {
-		return end( $this->clientStates );
+		return $this->clientStates ? end( $this->clientStates ) : null;
 	}
 
 	/**
@@ -207,12 +189,11 @@ class DispatchStats {
 	 *
 	 * See getClientStates() for the structure of the status object.
 	 *
-	 * @return object
+	 * @return object|null
 	 */
 	public function getStalest() {
-		return reset( $this->clientStates );
+		return $this->clientStates ? reset( $this->clientStates ) : null;
 	}
-
 
 	/**
 	 * Returns a dispatch status object for the client wiki
@@ -220,16 +201,14 @@ class DispatchStats {
 	 *
 	 * See getClientStates() for the structure of the status object.
 	 *
-	 * @return object
+	 * @return object|null
 	 */
 	public function getMedian() {
-		$n = $this->getClientCount();
-
-		if ( $n == 0 ) {
+		if ( empty( $this->clientStates ) ) {
 			return null;
 		}
 
-		$i = (int)floor( $n / 2 );
+		$i = (int)( count( $this->clientStates ) / 2 );
 		return $this->clientStates[$i];
 	}
 
@@ -259,9 +238,11 @@ class DispatchStats {
 	public function getLockedCount() {
 		$c = 0;
 
-		foreach ( $this->clientStates as $row ) {
-			if ( $row->chd_lock !== null ) {
-				$c++;
+		if ( !empty( $this->clientStates ) ) {
+			foreach ( $this->clientStates as $row ) {
+				if ( $row->chd_lock !== null ) {
+					$c++;
+				}
 			}
 		}
 
@@ -274,7 +255,7 @@ class DispatchStats {
 	 * @return int
 	 */
 	public function getMaxChangeId() {
-		return intval( $this->changeStats->max_id );
+		return (int)$this->changeStats->max_id;
 	}
 
 	/**
@@ -283,7 +264,7 @@ class DispatchStats {
 	 * @return int
 	 */
 	public function getMinChangeId() {
-		return intval( $this->changeStats->min_id );
+		return (int)$this->changeStats->min_id;
 	}
 
 	/**
@@ -305,4 +286,3 @@ class DispatchStats {
 	}
 
 }
-

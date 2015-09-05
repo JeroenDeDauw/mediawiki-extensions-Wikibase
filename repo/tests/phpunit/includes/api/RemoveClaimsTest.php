@@ -1,21 +1,22 @@
 <?php
 
-namespace Wikibase\Test\Api;
+namespace Wikibase\Test\Repo\Api;
 
 use DataValues\StringValue;
-use Wikibase\DataModel\Entity\Entity;
-use Wikibase\DataModel\Claim\Claim;
 use Wikibase\DataModel\Claim\Claims;
 use Wikibase\DataModel\Entity\Item;
-use Wikibase\Lib\ClaimGuidGenerator;
 use Wikibase\DataModel\Entity\Property;
+use Wikibase\DataModel\Services\Statement\GuidGenerator;
 use Wikibase\DataModel\Snak\PropertyNoValueSnak;
 use Wikibase\DataModel\Snak\PropertySomeValueSnak;
 use Wikibase\DataModel\Snak\PropertyValueSnak;
+use Wikibase\DataModel\Statement\Statement;
+use Wikibase\DataModel\Statement\StatementList;
+use Wikibase\DataModel\Term\Fingerprint;
 use Wikibase\Repo\WikibaseRepo;
 
 /**
- * @covers Wikibase\Api\RemoveClaims
+ * @covers Wikibase\Repo\Api\RemoveClaims
  *
  * @group API
  * @group Database
@@ -35,102 +36,107 @@ class RemoveClaimsTest extends WikibaseApiTestCase {
 	private static $propertyId;
 
 	/**
-	 * @param Entity $entity
+	 * @param Item $item
 	 *
-	 * @return Entity
+	 * @return Item
 	 */
-	protected function addClaimsAndSave( Entity $entity ) {
+	private function addStatementsAndSave( Item $item ) {
 		$store = WikibaseRepo::getDefaultInstance()->getEntityStore();
-		$store->saveEntity( $entity, '', $GLOBALS['wgUser'], EDIT_NEW );
+		$store->saveEntity( $item, '', $GLOBALS['wgUser'], EDIT_NEW );
 
 		if ( !isset( self::$propertyId ) ) {
 			self::$propertyId = $this->getNewProperty( 'string' )->getId();
 		}
 
-		/** @var $claims Claim[] */
-		$claims[0] = $entity->newClaim( new PropertyNoValueSnak( self::$propertyId ) );
-		$claims[1] = $entity->newClaim( new PropertyNoValueSnak( self::$propertyId ) );
-		$claims[2] = $entity->newClaim( new PropertySomeValueSnak( self::$propertyId ) );
-		$claims[3] = $entity->newClaim(
-			new PropertyValueSnak( self::$propertyId, new StringValue( 'o_O' ) )
+		/** @var Statement[] $statements */
+		$statements = array(
+			new Statement( new PropertyNoValueSnak( self::$propertyId ) ),
+			new Statement( new PropertyNoValueSnak( self::$propertyId ) ),
+			new Statement( new PropertySomeValueSnak( self::$propertyId ) ),
+			new Statement( new PropertyValueSnak( self::$propertyId, new StringValue( 'o_O' ) ) ),
 		);
 
-		foreach( $claims as $key => $claim ){
-			$guidGenerator = new ClaimGuidGenerator();
-			$claim->setGuid( $guidGenerator->newGuid( $entity->getId() ) );
-			$entity->addClaim( $claim );
+		foreach ( $statements as $statement ) {
+			$guidGenerator = new GuidGenerator();
+			$statement->setGuid( $guidGenerator->newGuid( $item->getId() ) );
+			$item->getStatements()->addStatement( $statement );
 		}
 
-		$store->saveEntity( $entity, '', $GLOBALS['wgUser'], EDIT_UPDATE );
+		$store->saveEntity( $item, '', $GLOBALS['wgUser'], EDIT_UPDATE );
 
-		return $entity;
+		return $item;
 	}
 
-	public function entityProvider() {
-		$property = Property::newEmpty();
-		$property->setDataTypeId( 'string' );
+	/**
+	 * @return Item[]
+	 */
+	public function itemProvider() {
+		$fingerprint = new Fingerprint();
+		$fingerprint->setLabel( 'en', 'kittens' );
+
+		$nonEmptyItem = new Item();
+		$nonEmptyItem->setFingerprint( $fingerprint );
 
 		return array(
-			$this->addClaimsAndSave( Item::newEmpty() ),
-			$this->addClaimsAndSave( $property ),
+			$this->addStatementsAndSave( new Item() ),
+			$this->addStatementsAndSave( $nonEmptyItem ),
 		);
 	}
 
 	public function testValidRequests() {
-		foreach ( $this->entityProvider() as $entity ) {
-			$this->doTestValidRequestSingle( $entity );
+		foreach ( $this->itemProvider() as $item ) {
+			$this->doTestValidRequestSingle( $item );
 		}
 
-		foreach ( $this->entityProvider() as $entity ) {
-			$this->doTestValidRequestMultiple( $entity );
+		foreach ( $this->itemProvider() as $item ) {
+			$this->doTestValidRequestMultiple( $item );
 		}
 	}
 
 	/**
-	 * @param Entity $entity
+	 * @param Item $item
 	 */
-	public function doTestValidRequestSingle( Entity $entity ) {
-		/**
-		 * @var Claim[] $claims
-		 */
-		$claims = $entity->getClaims();
-		while ( $claim = array_shift( $claims ) ) {
-			$this->makeTheRequest( array( $claim->getGuid() ) );
+	public function doTestValidRequestSingle( Item $item ) {
+		$statements = $item->getStatements()->toArray();
+		$obtainedStatements = null;
 
-			$entity = WikibaseRepo::getDefaultInstance()->getEntityLookup()->getEntity( $entity->getId() );
-			$obtainedClaims = new Claims( $entity->getClaims() );
+		while ( $statement = array_shift( $statements ) ) {
+			$this->makeTheRequest( array( $statement->getGuid() ) );
 
-			$this->assertFalse( $obtainedClaims->hasClaimWithGuid( $claim->getGuid() ) );
+			/** @var Item $obtainedItem */
+			$obtainedItem = WikibaseRepo::getDefaultInstance()->getEntityLookup()->getEntity( $item->getId() );
+			$obtainedStatements = $obtainedItem->getStatements();
 
-			$currentClaims = new Claims( $claims );
+			$this->assertNull( $obtainedStatements->getFirstStatementWithGuid( $statement->getGuid() ) );
 
-			$this->assertTrue( $obtainedClaims->getHash() === $currentClaims->getHash() );
+			$currentStatements = new StatementList( $statements );
+
+			$this->assertTrue( $obtainedStatements->equals( $currentStatements ) );
 		}
 
-		$this->assertTrue( $obtainedClaims->isEmpty() );
+		$this->assertTrue( $obtainedStatements === null || $obtainedStatements->isEmpty() );
 	}
 
 	/**
-	 * @param Entity $entity
+	 * @param Item $item
 	 */
-	public function doTestValidRequestMultiple( Entity $entity ) {
+	public function doTestValidRequestMultiple( Item $item ) {
 		$guids = array();
 
-		/**
-		 * @var Claim $claim
-		 */
-		foreach ( $entity->getClaims() as $claim ) {
-			$guids[] = $claim->getGuid();
+		/** @var Statement $statement */
+		foreach ( $item->getStatements() as $statement ) {
+			$guids[] = $statement->getGuid();
 		}
 
 		$this->makeTheRequest( $guids );
 
-		$obtainedEntity = WikibaseRepo::getDefaultInstance()->getEntityLookup()->getEntity( $entity->getId() );
+		/** @var Item $obtainedItem */
+		$obtainedItem = WikibaseRepo::getDefaultInstance()->getEntityLookup()->getEntity( $item->getId() );
 
-		$this->assertFalse( $obtainedEntity->hasClaims() );
+		$this->assertTrue( $obtainedItem->getStatements()->isEmpty() );
 	}
 
-	protected function makeTheRequest( array $claimGuids ) {
+	private function makeTheRequest( array $claimGuids ) {
 		$params = array(
 			'action' => 'wbremoveclaims',
 			'claim' => implode( '|', $claimGuids ),
@@ -173,9 +179,9 @@ class RemoveClaimsTest extends WikibaseApiTestCase {
 	/**
 	 * @param string $type
 	 *
-	 * @return \Wikibase\Property
+	 * @return Property
 	 */
-	protected function getNewProperty( $type ) {
+	private function getNewProperty( $type ) {
 		$property = Property::newFromType( $type );
 
 		$store = WikibaseRepo::getDefaultInstance()->getEntityStore();

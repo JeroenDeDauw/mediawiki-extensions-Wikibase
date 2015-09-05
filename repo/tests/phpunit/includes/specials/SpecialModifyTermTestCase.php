@@ -2,8 +2,9 @@
 
 namespace Wikibase\Test;
 
+use FauxRequest;
 use Wikibase\DataModel\Entity\Item;
-use Wikibase\ItemContent;
+use Wikibase\EntityContent;
 use Wikibase\Repo\WikibaseRepo;
 
 /**
@@ -22,7 +23,7 @@ abstract class SpecialModifyTermTestCase extends SpecialPageTestBase {
 	 * @return string
 	 */
 	private function createNewItem() {
-		$item = Item::newEmpty();
+		$item = new Item();
 		// add data and check if it is shown in the form
 		$item->setLabel( 'de', 'foo' );
 		$item->setDescription( 'de', 'foo' );
@@ -30,20 +31,16 @@ abstract class SpecialModifyTermTestCase extends SpecialPageTestBase {
 
 		// save the item
 		$store = WikibaseRepo::getDefaultInstance()->getEntityStore();
-		$store->saveEntity( $item, "testing", $GLOBALS['wgUser'], EDIT_NEW );
+		$store->saveEntity( $item, "testing", $GLOBALS['wgUser'], EDIT_NEW | EntityContent::EDIT_IGNORE_CONSTRAINTS );
 
 		// return the id
 		return $item->getId()->getSerialization();
 	}
 
 	public function testExecute() {
-		//TODO: Actually verify that the output is correct.
-		//      Currently this just tests that there is no fatal error,
-		//      and that the restriction handling is working and doesn't
-		//      block. That is, the default should let the user execute
-		//      the page.
-
 		$id = $this->createNewItem();
+
+		$this->setMwGlobals( 'wgGroupPermissions', array( '*' => array( 'edit' => true, 'item-term' => true ) ) );
 
 		$page = $this->newSpecialPage();
 
@@ -80,7 +77,7 @@ abstract class SpecialModifyTermTestCase extends SpecialPageTestBase {
 
 		// execute with no subpage value
 		list( $output, ) = $this->executeSpecialPage( '', null, 'en' );
-		foreach( $matchers as $key => $matcher ) {
+		foreach ( $matchers as $key => $matcher ) {
 			$this->assertTag( $matcher, $output, "Failed to match html output with tag '{$key}'" );
 		}
 
@@ -104,7 +101,7 @@ abstract class SpecialModifyTermTestCase extends SpecialPageTestBase {
 				'value' => 'remove',
 			) );
 
-		foreach( $matchers as $key => $matcher ) {
+		foreach ( $matchers as $key => $matcher ) {
 			$this->assertTag( $matcher, $output, "Failed to match html output with tag '{$key}' passing one subpage value" );
 		}
 
@@ -113,9 +110,29 @@ abstract class SpecialModifyTermTestCase extends SpecialPageTestBase {
 		$matchers['language']['attributes']['value'] = 'de';
 		$matchers['value']['attributes']['value'] = 'foo';
 
-		foreach( $matchers as $key => $matcher ) {
+		foreach ( $matchers as $key => $matcher ) {
 			$this->assertTag( $matcher, $output, "Failed to match html output with tag '{$key}' passing two subpage values" );
 		}
+	}
+
+	public function testValuePreservesWhenNothingEntered() {
+		$id = $this->createNewItem();
+
+		$this->setMwGlobals( 'wgGroupPermissions', array( '*' => array( 'edit' => true, 'item-term' => true ) ) );
+
+		$request = new FauxRequest( array( 'id' => $id, 'language' => 'de', 'value' => '' ), true );
+
+		list( $output, ) = $this->executeSpecialPage( '', $request );
+
+		$this->assertTag( array(
+			'tag' => 'input',
+			'attributes' => array(
+				'id' => 'wb-modifyterm-value',
+				'class' => 'wb-input',
+				'name' => 'value',
+				'value' => 'foo',
+			)
+		), $output, 'Value still preserves when no value was entered in the big form' );
 	}
 
 }

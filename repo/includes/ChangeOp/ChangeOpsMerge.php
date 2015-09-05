@@ -3,16 +3,19 @@
 namespace Wikibase\ChangeOp;
 
 use InvalidArgumentException;
-use ValueValidators\Result;
+use Site;
+use SiteLookup;
 use ValueValidators\Error;
-use Wikibase\DataModel\Entity\EntityId;
-use Wikibase\Validators\EntityConstraintProvider;
-use Wikibase\DataModel\Claim\Claim;
-use Wikibase\DataModel\Claim\Statement;
+use ValueValidators\Result;
 use Wikibase\DataModel\Entity\Entity;
+use Wikibase\DataModel\Entity\EntityId;
 use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Reference;
-use Wikibase\Validators\UniquenessViolation;
+use Wikibase\DataModel\SiteLink;
+use Wikibase\DataModel\Statement\Statement;
+use Wikibase\Repo\Validators\CompositeEntityValidator;
+use Wikibase\Repo\Validators\EntityConstraintProvider;
+use Wikibase\Repo\Validators\UniquenessViolation;
 
 /**
  * @since 0.5
@@ -23,17 +26,34 @@ use Wikibase\Validators\UniquenessViolation;
  */
 class ChangeOpsMerge {
 
+	/**
+	 * @var Item
+	 */
 	private $fromItem;
+
+	/**
+	 * @var Item
+	 */
 	private $toItem;
+
+	/**
+	 * @var ChangeOps
+	 */
 	private $fromChangeOps;
+
+	/**
+	 * @var ChangeOps
+	 */
 	private $toChangeOps;
 
 	/**
-	 * @var array
+	 * @var string[]
 	 */
 	private $ignoreConflicts;
 
-	/** @var EntityConstraintProvider */
+	/**
+	 * @var EntityConstraintProvider
+	 */
 	private $constraintProvider;
 
 	/**
@@ -42,12 +62,20 @@ class ChangeOpsMerge {
 	private $changeOpFactoryProvider;
 
 	/**
+	 * @var SiteLookup
+	 */
+	private $siteLookup;
+
+	public static $conflictTypes = array( 'description', 'sitelink' );
+
+	/**
 	 * @param Item $fromItem
 	 * @param Item $toItem
-	 * @param array $ignoreConflicts list of elements to ignore conflicts for
-	 *        can only contain 'label' and or 'description' and or 'sitelink'
+	 * @param string[] $ignoreConflicts list of elements to ignore conflicts for
+	 *        can only contain 'description' and or 'sitelink'
 	 * @param EntityConstraintProvider $constraintProvider
 	 * @param ChangeOpFactoryProvider $changeOpFactoryProvider
+	 * @param SiteLookup $siteLookup
 	 *
 	 * @todo: Injecting ChangeOpFactoryProvider is an Abomination Unto Nuggan, we'll
 	 *        need a MergeChangeOpsSequenceBuilder or some such. This will allow us
@@ -56,9 +84,10 @@ class ChangeOpsMerge {
 	public function __construct(
 		Item $fromItem,
 		Item $toItem,
-		$ignoreConflicts,
+		array $ignoreConflicts,
 		EntityConstraintProvider $constraintProvider,
-		ChangeOpFactoryProvider $changeOpFactoryProvider
+		ChangeOpFactoryProvider $changeOpFactoryProvider,
+		SiteLookup $siteLookup
 	) {
 		$this->assertValidIgnoreConflictValues( $ignoreConflicts );
 
@@ -68,29 +97,21 @@ class ChangeOpsMerge {
 		$this->toChangeOps = new ChangeOps();
 		$this->ignoreConflicts = $ignoreConflicts;
 		$this->constraintProvider = $constraintProvider;
+		$this->siteLookup = $siteLookup;
 
 		$this->changeOpFactoryProvider = $changeOpFactoryProvider;
 	}
 
 	/**
-	 * @param array $ignoreConflicts can contain strings 'label', 'description', 'sitelink'
+	 * @param string[] $ignoreConflicts can contain strings 'description' or 'sitelink'
 	 *
 	 * @throws InvalidArgumentException
 	 */
-	private function assertValidIgnoreConflictValues( $ignoreConflicts ) {
-		if( !is_array( $ignoreConflicts ) ){
-			throw new InvalidArgumentException( '$ignoreConflicts must be an array' );
-		}
-		foreach( $ignoreConflicts as $ignoreConflict ){
-			if(
-				$ignoreConflict !== 'label' &&
-				$ignoreConflict !== 'description' &&
-				$ignoreConflict !== 'sitelink'
-			) {
-				throw new InvalidArgumentException(
-					'$ignoreConflicts array can only contain "label", "description" and or "sitelink" values'
-				);
-			}
+	private function assertValidIgnoreConflictValues( array $ignoreConflicts ) {
+		if ( array_diff( $ignoreConflicts, self::$conflictTypes ) ) {
+			throw new InvalidArgumentException(
+				'$ignoreConflicts array can only contain "description" and or "sitelink" values'
+			);
 		}
 	}
 
@@ -99,13 +120,6 @@ class ChangeOpsMerge {
 	 */
 	private function getFingerprintChangeOpFactory() {
 		return $this->changeOpFactoryProvider->getFingerprintChangeOpFactory();
-	}
-
-	/**
-	 * @return ClaimChangeOpFactory
-	 */
-	private function getClaimChangeOpFactory() {
-		return $this->changeOpFactoryProvider->getClaimChangeOpFactory();
 	}
 
 	/**
@@ -123,7 +137,7 @@ class ChangeOpsMerge {
 	}
 
 	public function apply() {
-		// NOTE: we don't want to validate the ChangeOps individualy, since they represent
+		// NOTE: we don't want to validate the ChangeOps individually, since they represent
 		// data already present and saved on the system. Also, validating each would be
 		// potentially expensive.
 
@@ -143,31 +157,32 @@ class ChangeOpsMerge {
 		$this->generateDescriptionsChangeOps();
 		$this->generateAliasesChangeOps();
 		$this->generateSitelinksChangeOps();
-		$this->generateClaimsChangeOps();
+		$this->generateStatementsChangeOps();
 	}
 
 	private function generateLabelsChangeOps() {
-		foreach( $this->fromItem->getLabels() as $langCode => $label ){
-			$toLabel = $this->toItem->getLabel( $langCode );
-			if( $toLabel === false || $toLabel === $label ){
+		foreach ( $this->fromItem->getFingerprint()->getLabels()->toTextArray() as $langCode => $label ) {
+			if ( !$this->toItem->getFingerprint()->hasLabel( $langCode )
+				|| $this->toItem->getFingerprint()->getLabel( $langCode )->getText() === $label
+			) {
 				$this->fromChangeOps->add( $this->getFingerprintChangeOpFactory()->newRemoveLabelOp( $langCode ) );
 				$this->toChangeOps->add( $this->getFingerprintChangeOpFactory()->newSetLabelOp( $langCode, $label ) );
 			} else {
-				if( !in_array( 'label', $this->ignoreConflicts ) ){
-					throw new ChangeOpException( "Conflicting labels for language {$langCode}" );
-				}
+				$this->fromChangeOps->add( $this->getFingerprintChangeOpFactory()->newRemoveLabelOp( $langCode ) );
+				$this->toChangeOps->add( $this->getFingerprintChangeOpFactory()->newAddAliasesOp( $langCode, array( $label ) ) );
 			}
 		}
 	}
 
 	private function generateDescriptionsChangeOps() {
-		foreach( $this->fromItem->getDescriptions() as $langCode => $desc ){
-			$toDescription = $this->toItem->getDescription( $langCode );
-			if( $toDescription === false || $toDescription === $desc ){
+		foreach ( $this->fromItem->getFingerprint()->getDescriptions()->toTextArray() as $langCode => $desc ) {
+			if ( !$this->toItem->getFingerprint()->hasDescription( $langCode )
+				|| $this->toItem->getFingerprint()->getDescription( $langCode )->getText() === $desc
+			) {
 				$this->fromChangeOps->add( $this->getFingerprintChangeOpFactory()->newRemoveDescriptionOp( $langCode ) );
 				$this->toChangeOps->add( $this->getFingerprintChangeOpFactory()->newSetDescriptionOp( $langCode, $desc ) );
 			} else {
-				if( !in_array( 'description', $this->ignoreConflicts ) ){
+				if ( !in_array( 'description', $this->ignoreConflicts ) ) {
 					throw new ChangeOpException( "Conflicting descriptions for language {$langCode}" );
 				}
 			}
@@ -175,68 +190,108 @@ class ChangeOpsMerge {
 	}
 
 	private function generateAliasesChangeOps() {
-		foreach( $this->fromItem->getAllAliases() as $langCode => $aliases ){
+		foreach ( $this->fromItem->getFingerprint()->getAliasGroups()->toTextArray() as $langCode => $aliases ) {
 			$this->fromChangeOps->add( $this->getFingerprintChangeOpFactory()->newRemoveAliasesOp( $langCode, $aliases ) );
-			$this->toChangeOps->add( $this->getFingerprintChangeOpFactory()->newAddAliasesOp( $langCode, $aliases, 'add' ) );
+			$this->toChangeOps->add( $this->getFingerprintChangeOpFactory()->newAddAliasesOp( $langCode, $aliases ) );
 		}
 	}
 
 	private function generateSitelinksChangeOps() {
-		foreach( $this->fromItem->getSiteLinks() as $simpleSiteLink ){
-			$siteId = $simpleSiteLink->getSiteId();
-			if( !$this->toItem->hasLinkToSite( $siteId ) ){
-				$this->fromChangeOps->add( $this->getSiteLinkChangeOpFactory()->newRemoveSiteLinkOp( $siteId ) );
-				$this->toChangeOps->add(
-					$this->getSiteLinkChangeOpFactory()->newSetSiteLinkOp(
-						$siteId,
-						$simpleSiteLink->getPageName(),
-						$simpleSiteLink->getBadges()
-					)
-				);
+		foreach ( $this->fromItem->getSiteLinkList()->toArray() as $fromSiteLink ) {
+			$siteId = $fromSiteLink->getSiteId();
+			if ( !$this->toItem->getSiteLinkList()->hasLinkWithSiteId( $siteId ) ) {
+				$this->generateSitelinksChangeOpsWithNoConflict( $fromSiteLink );
 			} else {
-				if( !in_array( 'sitelink', $this->ignoreConflicts ) ){
-					throw new ChangeOpException( "Conflicting sitelinks for {$siteId}" );
-				}
+				$this->generateSitelinksChangeOpsWithConflict( $fromSiteLink );
 			}
 		}
 	}
 
-	private function generateClaimsChangeOps() {
-		foreach( $this->fromItem->getClaims() as $fromClaim ) {
-			$this->fromChangeOps->add( $this->getClaimChangeOpFactory()->newRemoveClaimOp( $fromClaim->getGuid() ) );
+	private function generateSitelinksChangeOpsWithNoConflict( SiteLink $fromSiteLink ) {
+		$siteId = $fromSiteLink->getSiteId();
+		$this->fromChangeOps->add( $this->getSiteLinkChangeOpFactory()->newRemoveSiteLinkOp( $siteId ) );
+		$this->toChangeOps->add(
+			$this->getSiteLinkChangeOpFactory()->newSetSiteLinkOp(
+				$siteId,
+				$fromSiteLink->getPageName(),
+				$fromSiteLink->getBadges()
+			)
+		);
+	}
 
-			$toClaim = clone $fromClaim;
-			$toClaim->setGuid( null );
-			$toMergeToClaim = false;
+	private function generateSitelinksChangeOpsWithConflict( SiteLink $fromSiteLink ) {
+		$siteId = $fromSiteLink->getSiteId();
+		$toSiteLink = $this->toItem->getSiteLink( $siteId );
+		$fromPageName = $fromSiteLink->getPageName();
+		$toPageName = $toSiteLink->getPageName();
 
-			if( $toClaim instanceof Statement ) {
-				$toMergeToClaim = $this->findEquivalentClaim( $toClaim );
-			}
+		if ( $fromPageName !== $toPageName ) {
+			$site = $this->getSite( $siteId );
+			$fromPageName = $site->normalizePageName( $fromPageName );
+			$toPageName = $site->normalizePageName( $toPageName );
+		}
+		if ( $fromPageName === $toPageName ) {
+			$this->fromChangeOps->add( $this->getSiteLinkChangeOpFactory()->newRemoveSiteLinkOp( $siteId ) );
+			$this->toChangeOps->add(
+				$this->getSiteLinkChangeOpFactory()->newSetSiteLinkOp(
+					$siteId,
+					$fromPageName,
+					array_unique( array_merge( $fromSiteLink->getBadges(), $toSiteLink->getBadges() ) )
+				)
+			);
+		} elseif ( !in_array( 'sitelink', $this->ignoreConflicts ) ) {
+			throw new ChangeOpException( "Conflicting sitelinks for {$siteId}" );
+		}
+	}
 
-			if( $toMergeToClaim ) {
-				$this->generateReferencesChangeOps( $toClaim, $toMergeToClaim );
+	/**
+	 * @param string $siteId
+	 *
+	 * @throws ChangeOpException
+	 * @return Site
+	 */
+	private function getSite( $siteId ) {
+		$site = $this->siteLookup->getSite( $siteId );
+		if ( $site === null ) {
+			throw new ChangeOpException( "Conflicting sitelinks for {$siteId}, Failed to normalize" );
+		}
+		return $site;
+	}
+
+	private function generateStatementsChangeOps() {
+		foreach ( $this->fromItem->getStatements() as $fromStatement ) {
+			$this->fromChangeOps->add( $this->getStatementChangeOpFactory()->newRemoveStatementOp( $fromStatement->getGuid() ) );
+
+			$toStatement = clone $fromStatement;
+			$toStatement->setGuid( null );
+			$toMergeToStatement = $this->findEquivalentStatement( $toStatement );
+
+			if ( $toMergeToStatement ) {
+				$this->generateReferencesChangeOps( $toStatement, $toMergeToStatement );
 			} else {
-				$this->toChangeOps->add( $this->getClaimChangeOpFactory()->newSetClaimOp( $toClaim ) );
+				$this->toChangeOps->add( $this->getStatementChangeOpFactory()->newSetStatementOp( $toStatement ) );
 			}
 		}
 	}
 
 	/**
-	 * Finds a claim in the target entity with the same main snak and qualifiers as $fromStatement
+	 * Finds a statement in the target entity with the same main snak and qualifiers as $fromStatement
 	 *
 	 * @param Statement $fromStatement
 	 *
-	 * @return Claim|bool Claim to merge reference into or false
+	 * @return Statement|false Statement to merge reference into or false
 	 */
-	private function findEquivalentClaim( $fromStatement ) {
-		/** @var $claim Claim */
-		foreach( $this->toItem->getClaims() as $claim ) {
-			$fromHash = $this->getClaimHash( $fromStatement );
-			$toHash = $this->getClaimHash( $claim );
-			if( $toHash === $fromHash ) {
-				return $claim;
+	private function findEquivalentStatement( $fromStatement ) {
+		$fromHash = $this->getStatementHash( $fromStatement );
+
+		/** @var Statement $statement */
+		foreach ( $this->toItem->getStatements() as $statement ) {
+			$toHash = $this->getStatementHash( $statement );
+			if ( $toHash === $fromHash ) {
+				return $statement;
 			}
 		}
+
 		return false;
 	}
 
@@ -245,7 +300,7 @@ class ChangeOpsMerge {
 	 *
 	 * @return string combined hash of the Mainsnak and Qualifiers
 	 */
-	private function getClaimHash( Statement $statement ) {
+	private function getStatementHash( Statement $statement ) {
 		return $statement->getMainSnak()->getHash() . $statement->getQualifiers()->getHash();
 	}
 
@@ -254,7 +309,7 @@ class ChangeOpsMerge {
 	 * @param Statement $toStatement statement to add references to
 	 */
 	private function generateReferencesChangeOps( Statement $fromStatement, Statement $toStatement ) {
-		/** @var $reference Reference */
+		/** @var Reference $reference */
 		foreach ( $fromStatement->getReferences() as $reference ) {
 			if ( !$toStatement->getReferences()->hasReferenceHash( $reference->getHash() ) ) {
 				$this->toChangeOps->add( $this->getStatementChangeOpFactory()->newSetReferenceOp(
@@ -271,14 +326,16 @@ class ChangeOpsMerge {
 	 * @throws ChangeOpException
 	 */
 	private function applyConstraintChecks( Entity $entity, EntityId $fromId ) {
-		$constraintValidator = $this->constraintProvider->getConstraints( $entity->getType() );
+		$constraintValidator = new CompositeEntityValidator(
+			$this->constraintProvider->getUpdateValidators( $entity->getType() )
+		);
 
 		$result = $constraintValidator->validateEntity( $entity );
 		$errors = $result->getErrors();
 
 		$errors = $this->removeConflictsWithEntity( $errors, $fromId );
 
-		if( !empty( $errors ) ) {
+		if ( !empty( $errors ) ) {
 			$result = Result::newError( $errors );
 			throw new ChangeOpValidationException( $result );
 		}
@@ -307,4 +364,5 @@ class ChangeOpsMerge {
 
 		return $filtered;
 	}
+
 }

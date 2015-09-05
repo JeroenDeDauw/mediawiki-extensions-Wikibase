@@ -1,16 +1,15 @@
 <?php
 
-namespace Wikibase\Test\Validators;
+namespace Wikibase\Test\Repo\Validators;
 
 use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\ItemId;
-use Wikibase\DataModel\SiteLink;
-use Wikibase\SiteLinkLookup;
+use Wikibase\Lib\Store\SiteLinkConflictLookup;
+use Wikibase\Repo\Validators\SiteLinkUniquenessValidator;
 use Wikibase\Test\ChangeOpTestMockProvider;
-use Wikibase\Validators\SiteLinkUniquenessValidator;
 
 /**
- * @covers Wikibase\Validators\SiteLinkUniquenessValidator
+ * @covers Wikibase\Repo\Validators\SiteLinkUniquenessValidator
  *
  * @group Database
  * @group Wikibase
@@ -23,21 +22,20 @@ use Wikibase\Validators\SiteLinkUniquenessValidator;
 class SiteLinkUniquenessValidatorTest extends \PHPUnit_Framework_TestCase {
 
 	/**
-	 * @return SiteLinkLookup
+	 * @return SiteLinkConflictLookup
 	 */
-	private function getMockSiteLinkLookup() {
+	private function getMockSiteLinkConflictLookup() {
 		$mockProvider = new ChangeOpTestMockProvider( $this );
-		return $mockProvider->getMockSitelinkCache();
+		return $mockProvider->getMockSiteLinkConflictLookup();
 	}
 
 	public function testValidateEntity() {
-		$goodEntity = Item::newEmpty();
-		$goodEntity->setId( new ItemId( 'Q5' ) );
-		$goodEntity->addSiteLink( new SiteLink( 'testwiki', 'Foo' ) );
+		$goodEntity = new Item( new ItemId( 'Q5' ) );
+		$goodEntity->getSiteLinkList()->addNewSiteLink( 'testwiki', 'Foo' );
 
-		$siteLinkLookup = $this->getMockSiteLinkLookup();
+		$siteLinkConflictLookup = $this->getMockSiteLinkConflictLookup();
 
-		$validator = new SiteLinkUniquenessValidator( $siteLinkLookup );
+		$validator = new SiteLinkUniquenessValidator( $siteLinkConflictLookup );
 
 		$result = $validator->validateEntity( $goodEntity );
 
@@ -45,13 +43,12 @@ class SiteLinkUniquenessValidatorTest extends \PHPUnit_Framework_TestCase {
 	}
 
 	public function testValidateEntity_conflict() {
-		$badEntity = Item::newEmpty();
-		$badEntity->setId( new ItemId( 'Q7' ) );
-		$badEntity->addSiteLink( new SiteLink( 'testwiki', 'DUPE' ) );
+		$badEntity = new Item( new ItemId( 'Q7' ) );
+		$badEntity->getSiteLinkList()->addNewSiteLink( 'testwiki', 'DUPE' );
 
-		$siteLinkLookup = $this->getMockSiteLinkLookup();
+		$siteLinkConflictLookup = $this->getMockSiteLinkConflictLookup();
 
-		$validator = new SiteLinkUniquenessValidator( $siteLinkLookup );
+		$validator = new SiteLinkUniquenessValidator( $siteLinkConflictLookup );
 
 		$result = $validator->validateEntity( $badEntity );
 
@@ -59,7 +56,7 @@ class SiteLinkUniquenessValidatorTest extends \PHPUnit_Framework_TestCase {
 
 		$errors = $result->getErrors();
 		$this->assertEquals( 'sitelink-conflict', $errors[0]->getCode() );
-		$this->assertInstanceOf( 'Wikibase\Validators\UniquenessViolation', $errors[0] );
+		$this->assertInstanceOf( 'Wikibase\Repo\Validators\UniquenessViolation', $errors[0] );
 
 		//NOTE: ChangeOpTestMockProvider::getSiteLinkConflictsForItem() uses 'Q666' as
 		//      the conflicting item for all site links with the name 'DUPE'.

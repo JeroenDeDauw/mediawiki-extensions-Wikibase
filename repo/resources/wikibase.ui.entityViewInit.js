@@ -1,318 +1,392 @@
 /**
- * JavaScript for 'wikibase' extension, initializing some stuff when ready. This is the main
- * entry point for initializing edit tools for editing entities on entity pages.
- *
- * @since 0.1
- *
  * @licence GNU GPL v2+
+ * @author H. Snater < mediawiki@snater.com >
  * @author Daniel Werner < daniel.werner at wikimedia.de >
- *
- * TODO: Refactor this huge single function into smaller pieces of code.
+ * @author Adrian Heine < adrian.heine@wikimedia.de >
  */
-
-( function( $, mw, wb ) {
+( function( $, mw, wb, dataTypeStore, getExpertsStore, getFormatterStore, getParserStore ) {
 	'use strict';
-	/* jshint nonew: false */
 
 	mw.hook( 'wikipage.content' ).add( function() {
-		// TODO: Remove global DOM adjustments
-		// remove most HTML edit links with links to special pages
-		$( 'span.wb-editsection, div.wb-editsection' ).remove();
-
-		// remove all infos about empty values which are displayed in non-JS
-		$( '.wb-value-empty' ).empty().removeClass( 'wb-value-empty' );
-
-		// Since the DOM is altered for the property edit tools to property initialize, the
-		// following hook informs about these operations having finished.
-		// TODO: This hook is not supposed to be permanent. Remove it as soon as no more global DOM
-		// adjustments are necessary.
-		mw.hook( 'wikibase.domready' ).fire();
-
-		// add an edit tool for the main label. This will be integrated into the heading nicely:
-		if ( $( '.wb-firstHeading' ).length ) { // Special pages do not have a custom wb heading
-			var labelEditTool = new wb.ui.LabelEditTool( $( '.wb-firstHeading' )[0] ),
-				editableLabel = labelEditTool.getValues( true )[0], // [0] will always be set
-				fn = function( event, origin ) {
-					// Limit the global stopItemPageEditMode event to that element
-					if ( event.type !== 'stopItemPageEditMode' || origin === editableLabel ) {
-						var title = editableLabel.isEmpty()
-							? mw.config.get( 'wgTitle' )
-							: editableLabel.getValue()[0];
-
-						// update 'title' tag
-						$( 'title' ).text( mw.msg( 'pagetitle', title ) );
-					}
-				};
-
-			editableLabel.getSubject().on( 'eachchange', fn );
-			// Can't use afterStopEditing because it does not fire on cancel
-			// but this is needed to reset the title
-			$( wb ).on( 'stopItemPageEditMode', fn );
+		if( mw.config.get( 'wbEntity' ) === null ) {
+			return;
 		}
 
-		// add an edit tool for all properties in the data view:
-		$( '.wb-property-container' ).each( function() {
-			// TODO: Make this nicer when we have implemented the data model
-			if( $( this ).children( '.wb-property-container-key' ).attr( 'title' ) === 'description' ) {
-				new wb.ui.DescriptionEditTool( this );
-			} else {
-				new wb.ui.PropertyEditTool( this );
+		var $entityview = $( '.wikibase-entityview' );
+		var entityInitializer = new wb.EntityInitializer( 'wbEntity' );
+		var canEdit = !mw.config.get( 'wbUserIsBlocked' ) && mw.config.get( 'wbUserCanEdit' )
+			&& mw.config.get( 'wbIsEditView' );
+
+		if( canEdit ) {
+			initToolbarController( $entityview );
+		}
+
+		entityInitializer.getEntity().done( function( entity ) {
+			var viewName = createEntityView( entity, $entityview.first() );
+
+			if( canEdit ) {
+				attachAnonymousEditWarningTrigger( $entityview, viewName, entity.getType() );
+				attachWatchLinkUpdater( $entityview, viewName );
 			}
 		} );
 
-		if( mw.config.get( 'wbEntity' ) !== null ) {
-			// if there are no aliases yet, the DOM structure for creating new ones is created manually since it is not
-			// needed for running the page without JS
-			$( '.wb-aliases-empty' )
-			.each( function() {
-				$( this ).replaceWith( wb.ui.AliasesEditTool.getEmptyStructure() );
+		if( canEdit ) {
+			$entityview
+			.on( 'entitytermsviewchange entitytermsviewafterstopediting', function( event ) {
+				var $entitytermsview = $( event.target ),
+					entitytermsview = $entitytermsview.data( 'entitytermsview' );
+
+				$.each( entitytermsview.value(), function() {
+					if( this.language !== mw.config.get( 'wgUserLanguage' ) ) {
+						return true;
+					}
+
+					var label = this.label.getText();
+
+					$( 'title' ).text(
+						mw.msg( 'pagetitle', label !== '' ? label : mw.config.get( 'wgTitle' ) )
+					);
+
+					$( 'h1' ).find( '.wikibase-title' )
+						.toggleClass( 'wb-empty', label === '' )
+						.find( '.wikibase-title-label' )
+						.text( label !== '' ? label : mw.msg( 'wikibase-label-empty' ) );
+
+					return false;
+				} );
 			} );
 
-			// edit tool for aliases:
-			$( '.wb-aliases' ).each( function() {
-				new wb.ui.AliasesEditTool( this );
-			} );
+			attachCopyrightTooltip( $entityview );
+		}
+	} );
 
-			// BUILD CLAIMS VIEW:
-			// Note: $.entityview() only works for claims right now, the goal is to use it for more
-			var $claims = $( '.wb-claims' ).first(),
-				$claimsParent = $claims.parent();
-
-			// The toolbars (defined per jquery.wikibase.toolbarcontroller.definition) that should
-			// be initialized:
-			var toolbarControllerConfig = {
+	/**
+	 * @param {jQuery} $entityview
+	 */
+	function initToolbarController( $entityview ) {
+		// The toolbars (defined per jquery.wikibase.toolbarcontroller.definition) that should
+		// be initialized:
+		var toolbarControllerConfig = {
+			toolbars: {
 				addtoolbar: [
-					'claimgrouplistview',
-					'claimlistview',
-					'claim-qualifiers-snak',
-					'references',
-					'referenceview-snakview'
-				],
-				edittoolbar: ['claimview', 'referenceview'],
-				removetoolbar: ['claim-qualifiers-snak', 'referenceview-snakview-remove'],
-				movetoolbar: [
-					'claimlistview-claimview',
-					'claim-qualifiers-snak',
+					'statementgrouplistview-statementgroupview',
+					'statementlistview-statementview',
+					'statementview-snakview',
 					'statementview-referenceview',
 					'referenceview-snakview'
+				],
+				edittoolbar: [
+					'statementview',
+					'entitytermsview',
+					'referenceview',
+					'sitelinkgroupview'
+				],
+				removetoolbar: [
+					'statementview-snakview',
+					'referenceview-snakview',
+					'sitelinkgroupview-sitelinkview'
 				]
-			};
+			}
+		};
 
-			// TODO: Initialize toolbarcontroller on entity node when initializing entityview on
-			// the entity node (see FIXME below).
-			$claims.toolbarcontroller( toolbarControllerConfig ); // BUILD TOOLBARS
+		$entityview.toolbarcontroller( toolbarControllerConfig );
+	}
 
-			var entityStore = new wb.store.EntityStore();
-			wb.compileEntityStoreFromMwConfig( entityStore );
+	/**
+	 * @param {jQuery} $entityview
+	 */
+	function attachCopyrightTooltip( $entityview ) {
+		$entityview.on( 'edittoolbarafterstartediting', function( event ) {
+			var $target = $( event.target ),
+				gravity = 'sw';
 
-			// FIXME: Initializing entityview on $claims leads to the claim section inserted as
-			// child of $claims. It should be direct child of ".wb-entity".
-			$claims.entityview( {
-				value: wb.entity,
-				entityStore: entityStore
-			} ).appendTo( $claimsParent );
+			if( $target.data( 'sitelinkgroupview' ) ) {
+				gravity = 'nw';
+			} else if( $target.data( 'entitytermsview' ) ) {
+				gravity = 'w';
+			}
 
-			// This is here to be sure there is never a duplicate id
-			$( '.wb-claimgrouplistview' )
-				.prev( '.wb-section-heading' )
-				.first()
-				.attr( 'id', 'claims' );
-
-			// removing site links heading to rebuild it with value counter
-			$( 'table.wb-sitelinks' ).each( function() {
-				var group = $( this ).data( 'wb-sitelinks-group' ),
-					$sitesCounterContainer = $( '<span/>' );
-
-				$( this ).prev().append( $sitesCounterContainer );
-
-				// actual initialization
-				new wb.ui.SiteLinksEditTool( $( this ), {
-					allowedSites: wb.getSitesOfGroup( group ),
-					counterContainers: $sitesCounterContainer
-				} );
-			} );
-
-			$( '.wb-entity' ).claimgrouplabelscroll();
-		}
-
-		// Handle edit restrictions:
-		$( wb )
-		.on( 'restrictEntityPageActions blockEntityPageActions', function( event ) {
-			$( '.wikibase-toolbarbutton' ).each( function( i, node ) {
-				var toolbarButton = $( node ).data( 'toolbarbutton' );
-
-				toolbarButton.disable();
-
-				var messageId = ( event.type === 'blockEntityPageActions' )
-					? 'wikibase-blockeduser-tooltip-message'
-					: 'wikibase-restrictionedit-tooltip-message';
-
-				toolbarButton.element.wbtooltip( {
-					content: mw.message( messageId ).escaped(),
-					gravity: 'nw'
-				} );
-			} );
+			showCopyrightTooltip( $entityview, $target, gravity );
 		} );
+	}
 
-		if ( mw.config.get( 'wbUserIsBlocked' ) ) {
-			$( wb ).triggerHandler( 'blockEntityPageActions' );
-		} else if ( !mw.config.get( 'wbUserCanEdit' ) ) {
-			$( wb ).triggerHandler( 'restrictEntityPageActions' );
+	/**
+	 * Builds an entity store.
+	 *
+	 * @param {wikibase.api.RepoApi} repoApi
+	 * @param {string} languageCode The language code of the ui language
+	 * @return {wikibase.store.CombiningEntityStore}
+	 */
+	function buildEntityStore( repoApi, languageCode ) {
+		// Deserializer for fetched content whose content is a wb.datamodel.Entity:
+		var fetchedEntityDeserializer = new wb.store.FetchedContentUnserializer(
+				new wb.serialization.EntityDeserializer()
+			);
+
+		return new wb.store.CachingEntityStore(
+			new wb.store.ApiEntityStore(
+				repoApi,
+				fetchedEntityDeserializer,
+				[ languageCode ]
+			)
+		);
+	}
+
+	/**
+	 * @param {wikibase.datamodel.Entity} entity
+	 * @param {jQuery} $entityview
+	 * @return {string} The name of the entity view widget class
+	 *
+	 * @throws {Error} if no widget to render the entity exists.
+	 */
+	function createEntityView( entity, $entityview ) {
+		var repoConfig = mw.config.get( 'wbRepo' ),
+			repoApiUrl = repoConfig.url + repoConfig.scriptPath + '/api.php',
+			mwApi = wb.api.getLocationAgnosticMwApi( repoApiUrl ),
+			repoApi = new wb.api.RepoApi( mwApi ),
+			userLanguages = getUserLanguages(),
+			entityStore = buildEntityStore( repoApi, userLanguages[0] ),
+			revisionStore = new wb.RevisionStore( mw.config.get( 'wgCurRevisionId' ) ),
+			entityChangersFactory = new wb.entityChangers.EntityChangersFactory(
+				repoApi,
+				revisionStore,
+				entity
+			),
+			contentLanguages = new wikibase.WikibaseContentLanguages(),
+			viewFactory = new wikibase.view.ViewFactory(
+				contentLanguages,
+				dataTypeStore,
+				entityChangersFactory,
+				entityStore,
+				getExpertsStore( dataTypeStore ),
+				getFormatterStore( repoApi, dataTypeStore ),
+				{
+					getMessage: function( key, params ) {
+						return mw.msg.apply( mw, [ key ].concat( params ) );
+					}
+				},
+				getParserStore( repoApi ),
+				userLanguages,
+				repoApiUrl
+			);
+
+		var entityView = viewFactory.getEntityView( entity, $entityview );
+
+		return entityView.widgetName;
+	}
+
+	/**
+	 * @return {string[]} An ordered list of languages the user wants to use, the first being her
+	 *                    preferred language, and thus the UI language (currently wgUserLanguage).
+	 */
+	function getUserLanguages() {
+		var userLanguages = mw.config.get( 'wbUserSpecifiedLanguages' ),
+			isUlsDefined = mw.uls && $.uls && $.uls.data,
+			languages;
+
+		if( !userLanguages.length && isUlsDefined ) {
+			languages = mw.uls.getFrequentLanguageList().slice( 1, 4 );
+		} else {
+			languages = userLanguages.slice();
+			languages.splice( $.inArray( mw.config.get( 'wgUserLanguage' ), userLanguages ), 1 );
 		}
 
-		if( !mw.config.get( 'wbIsEditView' ) ) {
-			// no need to implement a 'disableEntityPageActions' since hiding all the toolbars directly like this is
-			// not really worse than hacking the Toolbar prototype to achieve this:
-			$( '.wikibase-toolbar' ).hide();
-			$( 'body' ).addClass( 'wb-editing-disabled' );
-			// make it even harder to edit stuff, e.g. if someone is trying to be smart, using
-			// firebug to show hidden nodes again to click on them:
-			$( wb ).triggerHandler( 'restrictEntityPageActions' );
+		languages.unshift( mw.config.get( 'wgUserLanguage' ) );
+
+		return languages;
+	}
+
+	/**
+	 * Update the state of the watch link if the user has watchdefault enabled.
+	 */
+	function attachWatchLinkUpdater( $entityview, viewName ) {
+		var update = mw.page && mw.page.watch ? mw.page.watch.updateWatchLink : null;
+
+		if( !update || !mw.user.options.get( 'watchdefault' ) ) {
+			return;
 		}
 
-		$( wb ).on( 'startItemPageEditMode', function( event, origin, options ) {
-			// Display anonymous user edit warning:
-			if ( mw.user && mw.user.isAnon()
-				&& $.find( '.mw-notification-content' ).length === 0
-				&& !$.cookie( 'wikibase-no-anonymouseditwarning' )
-			) {
-				mw.notify(
-					mw.msg( 'wikibase-anonymouseditwarning',
-						mw.msg( 'wikibase-entity-' + wb.entity.getType() )
-					)
-				);
-			}
-
-			// add copyright warning to 'save' button if there is one:
-			if( mw.config.exists( 'wbCopyright' ) ) {
-
-				var copyRight = mw.config.get( 'wbCopyright' ),
-					copyRightVersion = copyRight.version,
-					copyRightMessageHtml = copyRight.messageHtml,
-					cookieKey = 'wikibase.acknowledgedcopyrightversion',
-					optionsKey = 'wb-acknowledgedcopyrightversion';
-
-				if ( $.cookie( cookieKey ) === copyRightVersion ||
-					mw.user.options.get( optionsKey ) === copyRightVersion
-				) {
-					return;
-				}
-
-				var $message = $( '<span><p>' + copyRightMessageHtml + '</p></span>' );
-				var $activeToolbar = $( '.wb-edit' )
-					// label/description of EditableValue always in edit mode if empty, 2nd '.wb-edit'
-					// on PropertyEditTool only appended when really being edited by the user though
-					.not( '.wb-ui-propertyedittool-editablevalue-ineditmode' )
-					.find( '.wikibase-toolbareditgroup-ineditmode' );
-
-				if( !$activeToolbar.length ) {
-					return; // no toolbar for some reason, just stop
-				} else if ( $( 'table.wb-terms' ).hasClass( 'wb-edit' ) ) {
-					// TODO: When having multiple empty EditableValues which are initialized in edit
-					// mode, every EditableValue has the same classes assigned. This check should
-					// either be made more generic (not just invoked for the terms table) or an
-					// improved detection of the active toolbar be implemented.
-					$activeToolbar = origin.getSubject()
-						.find( '.wikibase-toolbareditgroup-ineditmode' );
-				}
-
-				var toolbar = $activeToolbar.data( 'toolbareditgroup' )
-					|| $activeToolbar.data( 'toolbar' );
-
-				var $hideMessage = $( '<a/>', {
-						text: mw.msg( 'wikibase-copyrighttooltip-acknowledge' )
-					} ).appendTo( $message );
-
-				var gravity = ( options && options.wbCopyrightWarningGravity ) || 'nw';
-
-				// Tooltip gets its own anchor since other elements might have their own tooltip.
-				// we don't even have to add this new toolbar element to the toolbar, we only use it
-				// to manage the tooltip which will have the 'save' button as element to point to.
-				// The 'save' button can still have its own tooltip though.
-				var $messageAnchor = $( '<span/>' )
-					.appendTo( 'body' )
-					.toolbarlabel()
-					.wbtooltip( {
-						content: $message,
-						permanent: true,
-						gravity: gravity,
-						$anchor: toolbar.getButton( 'save' )
-					} );
-
-				$hideMessage.on( 'click', function( event ) {
-					event.preventDefault();
-					$messageAnchor.data( 'wbtooltip' ).degrade( true );
-					if ( mw.user.isAnon() ) {
-						$.cookie( cookieKey, copyRightVersion, { 'expires': 365 * 3, 'path': '/' } );
-					} else {
-						var api = new mw.Api();
-						api.get( {
-							'action': 'tokens',
-							'type': 'options'
-						}, function( data ) {
-							if ( data.tokens && data.tokens.optionstoken ) {
-								api.post( {
-									'action': 'options',
-									'token': data.tokens.optionstoken,
-									'optionname': optionsKey,
-									'optionvalue': copyRightVersion
-								} );
-							}
-						} );
-					}
-				} );
-
-				$messageAnchor.data( 'wbtooltip' ).show();
-
-				// destroy tooltip after edit mode gets closed again:
-				$( wb ).one( 'stopItemPageEditMode', function( event, origin ) {
-					if( $messageAnchor.data( 'wbtooltip' ) !== undefined ) {
-						$messageAnchor.data( 'wbtooltip' ).degrade( true );
-					}
-				} );
-			}
-		} );
-
-		// Check if the watch link (star in the Vector skin) needs to be updated after an edit
-		$( wb ).on( 'stopItemPageEditMode', function( event, origin, options ) {
-			// If save is undefined it should default to true
-			var canceled = options && options.save === false;
-			var updateWatchLink = mw.page && mw.page.watch ? mw.page.watch.updateWatchLink : null;
-
-			// Skip if module isn't loaded or user doesn't have "watch by default" enabled anyway
-			if ( canceled || !updateWatchLink || !mw.user.options.get( 'watchdefault' ) ) {
-				return;
-			}
-
+		function updateWatchLink() {
 			// All four supported skins are using the same ID, the other selectors
 			// in mediawiki.page.watch.ajax.js are undocumented and probably legacy stuff
 			var $link = $( '#ca-watch a' );
 
 			// Skip if page is already watched and there is no "watch this page" link
 			// Note: The exposed function fails for empty jQuery collections
-			if ( $link.length ) {
-				updateWatchLink( $link, 'watch', 'loading' );
+			if( !$link.length ) {
+				return;
+			}
+
+			update( $link, 'watch', 'loading' );
+
+			var api = new mw.Api(),
+				pageId = mw.config.get( 'wgArticleId' );
+
+			api.get( {
+				action: 'query',
+				prop: 'info',
+				inprop: 'watched',
+				pageids: pageId
+			} ).done( function( data ) {
+				var watched = data.query && data.query.pages[pageId]
+					&& data.query.pages[pageId].watched !== undefined;
+				update( $link, watched ? 'unwatch' : 'watch' );
+			} ).fail( function() {
+				update( $link, 'watch' );
+			} );
+		}
+
+		$entityview.on( viewName + 'afterstopediting', function( event, dropValue ) {
+			if( !dropValue ) {
+				updateWatchLink();
+			}
+		} );
+	}
+
+	/**
+	 * @param {jQuery.wikibase.entityview} $entityview
+	 * @param {string} viewName
+	 * @param {string} entityType
+	 */
+	function attachAnonymousEditWarningTrigger( $entityview, viewName, entityType ) {
+		if( !mw.user || !mw.user.isAnon() ) {
+			return;
+		}
+
+		$entityview.on( viewName + 'afterstartediting', function() {
+			if( !$.find( '.mw-notification-content' ).length
+				&& !$.cookie( 'wikibase-no-anonymouseditwarning' )
+			) {
+				var message = mw.msg(
+					'wikibase-anonymouseditwarning',
+					mw.msg( 'wikibase-entity-' + entityType )
+				);
+				mw.notify( message, { autoHide: false, type: 'warn' } );
+			}
+		} );
+	}
+
+	/**
+	 * @param {jQuery} $entityview
+	 * @param {jQuery} $origin
+	 * @param {string} gravity
+	 */
+	function showCopyrightTooltip( $entityview, $origin, gravity ) {
+		if( !mw.config.exists( 'wbCopyright' ) ) {
+			return;
+		}
+
+		gravity = gravity || 'nw';
+
+		var copyRight = mw.config.get( 'wbCopyright' ),
+			copyRightVersion = copyRight.version,
+			copyRightMessageHtml = copyRight.messageHtml,
+			cookieKey = 'wikibase.acknowledgedcopyrightversion',
+			optionsKey = 'wb-acknowledgedcopyrightversion';
+
+		if( $.cookie( cookieKey ) === copyRightVersion
+			|| mw.user.options.get( optionsKey ) === copyRightVersion
+		) {
+			return;
+		}
+
+		var $message = $( '<span><p>' + copyRightMessageHtml + '</p></span>' )
+				.addClass( 'wikibase-copyrightnotification-container' ),
+			$hideMessage = $( '<a/>', {
+				text: mw.msg( 'wikibase-copyrighttooltip-acknowledge' )
+			} ).appendTo( $message ),
+			editableTemplatedWidget = $origin.data( 'EditableTemplatedWidget' );
+
+		// TODO: Use notification system for copyright messages on all widgets.
+		if( editableTemplatedWidget
+			&& !( editableTemplatedWidget instanceof $.wikibase.statementview )
+			&& !( editableTemplatedWidget instanceof $.wikibase.aliasesview )
+		) {
+			editableTemplatedWidget.notification( $message, 'wb-edit' );
+
+			$hideMessage.on( 'click', function( event ) {
+				event.preventDefault();
+				editableTemplatedWidget.notification();
+				if( mw.user.isAnon() ) {
+					$.cookie( cookieKey, copyRightVersion, { expires: 365 * 3, path: '/' } );
+				} else {
+					var api = new mw.Api();
+					api.postWithToken( 'options', {
+						action: 'options',
+						optionname: optionsKey,
+						optionvalue: copyRightVersion
+					} );
+				}
+			} );
+			return;
+		}
+
+		var edittoolbar = $origin.data( 'edittoolbar' );
+
+		if( !edittoolbar ) {
+			return;
+		}
+
+		// Tooltip gets its own anchor since other elements might have their own tooltip.
+		// we don't even have to add this new toolbar element to the toolbar, we only use it
+		// to manage the tooltip which will have the 'save' button as element to point to.
+		// The 'save' button can still have its own tooltip though.
+		var $messageAnchor = $( '<span/>' )
+			.appendTo( 'body' )
+			.toolbaritem()
+			.wbtooltip( {
+				content: $message,
+				permanent: true,
+				gravity: gravity,
+				$anchor: edittoolbar.getContainer()
+			} );
+
+		$hideMessage.on( 'click', function( event ) {
+			event.preventDefault();
+			$messageAnchor.data( 'wbtooltip' ).degrade( true );
+			$( window ).off( '.wbCopyrightTooltip' );
+			if( mw.user.isAnon() ) {
+				$.cookie( cookieKey, copyRightVersion, { expires: 365 * 3, path: '/' } );
+			} else {
 				var api = new mw.Api();
-				var pageid = mw.config.get( 'wgArticleId' );
-				api.get( {
-					'action': 'query',
-					'prop': 'info',
-					'inprop': 'watched',
-					'pageids': pageid
-				} ).done( function( data ) {
-					var watched = data.query && data.query.pages[pageid] &&
-						data.query.pages[pageid].watched !== undefined;
-					updateWatchLink( $link, watched ? 'unwatch' : 'watch' );
-				} ).fail( function() {
-					updateWatchLink( $link, 'watch' );
+				api.postWithToken( 'options', {
+					action: 'options',
+					optionname: optionsKey,
+					optionvalue: copyRightVersion
 				} );
 			}
 		} );
 
-		// remove loading spinner after JavaScript has kicked in
-		$( '.wb-entity' ).removeClass( 'loading' );
-		$( '.wb-entity-spinner' ).remove();
+		$messageAnchor.data( 'wbtooltip' ).show();
 
-	} );
+		// destroy tooltip after edit mode gets closed again:
+		$entityview
+		.one( 'entityviewafterstopediting.wbCopyRightTooltip', function( event, origin ) {
+			var tooltip = $messageAnchor.data( 'wbtooltip' );
+			if( tooltip ) {
+				tooltip.degrade( true );
+			}
+			$( window ).off( '.wbCopyrightTooltip' );
+		} );
 
-} )( jQuery, mediaWiki, wikibase );
+		$( window ).one(
+			'scroll.wbCopyrightTooltip touchmove.wbCopyrightTooltip resize.wbCopyrightTooltip',
+			function() {
+				var tooltip = $messageAnchor.data( 'wbtooltip' );
+				if( tooltip ) {
+					$messageAnchor.data( 'wbtooltip' ).hide();
+				}
+				$entityview.off( '.wbCopyRightTooltip' );
+			}
+		);
+	}
+
+} )(
+	jQuery,
+	mediaWiki,
+	wikibase,
+	wikibase.dataTypeStore,
+	wikibase.experts.getStore,
+	wikibase.formatters.getStore,
+	wikibase.parsers.getStore
+);

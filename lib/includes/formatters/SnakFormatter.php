@@ -1,6 +1,9 @@
 <?php
+
 namespace Wikibase\Lib;
-use Wikibase\Snak;
+
+use ValueFormatters\ValueFormatter;
+use Wikibase\DataModel\Snak\Snak;
 
 /**
  * SnakFormatter is an interface for services that render Snaks to a specific
@@ -12,12 +15,16 @@ use Wikibase\Snak;
  */
 interface SnakFormatter {
 
+	/**
+	 * Options key for controlling the output language.
+	 */
+	const OPT_LANG = ValueFormatter::OPT_LANG;
+
 	const FORMAT_PLAIN = 'text/plain';
 	const FORMAT_WIKI = 'text/x-wiki';
 	const FORMAT_HTML = 'text/html';
 	const FORMAT_HTML_WIDGET = 'text/html; disposition=widget';
 	const FORMAT_HTML_DIFF = 'text/html; disposition=diff';
-	const FORMAT_JSON = 'application/json';
 
 	/**
 	 * Formats a snak.

@@ -1,21 +1,21 @@
 <?php
 
-namespace Wikibase\Test\Api;
+namespace Wikibase\Test\Repo\Api;
 
 use DataValues\StringValue;
 use UsageException;
 use Wikibase\DataModel\Entity\Item;
-use Wikibase\DataModel\Snak\PropertyValueSnak;
-use Wikibase\DataModel\Snak\Snak;
-use Wikibase\Lib\ClaimGuidGenerator;
+use Wikibase\DataModel\Services\Statement\GuidGenerator;
 use Wikibase\DataModel\Snak\PropertyNoValueSnak;
 use Wikibase\DataModel\Snak\PropertySomeValueSnak;
+use Wikibase\DataModel\Snak\PropertyValueSnak;
+use Wikibase\DataModel\Snak\Snak;
 use Wikibase\DataModel\Snak\SnakList;
-use Wikibase\DataModel\Claim\Statement;
+use Wikibase\DataModel\Statement\Statement;
 use Wikibase\Repo\WikibaseRepo;
 
 /**
- * @covers Wikibase\Api\RemoveQualifiers
+ * @covers Wikibase\Repo\Api\RemoveQualifiers
  *
  * @group API
  * @group Database
@@ -74,17 +74,15 @@ class RemoveQualifiersTest extends WikibaseApiTestCase {
 		$store = WikibaseRepo::getDefaultInstance()->getEntityStore();
 
 		foreach ( $this->statementProvider() as $statement ) {
-			$item = Item::newEmpty();
+			$item = new Item();
 
-			wfSuppressWarnings(); // We are referencing properties that don't exist. Not relevant here.
 			$store->saveEntity( $item, '', $GLOBALS['wgUser'], EDIT_NEW );
 
-			$guidGenerator = new ClaimGuidGenerator();
+			$guidGenerator = new GuidGenerator();
 			$statement->setGuid( $guidGenerator->newGuid( $item->getId() ) );
-			$item->addClaim( $statement );
+			$item->getStatements()->addStatement( $statement );
 
 			$store->saveEntity( $item, '', $GLOBALS['wgUser'], EDIT_UPDATE );
-			wfRestoreWarnings();
 
 			$this->assertInternalType( 'string', $statement->getGuid() );
 
@@ -96,8 +94,7 @@ class RemoveQualifiersTest extends WikibaseApiTestCase {
 					array( '~=[,,_,,]:3' ),
 					'no-such-qualifier'
 				);
-			}
-			else {
+			} else {
 				$hashes = array_map(
 					function( Snak $qualifier ) {
 						return $qualifier->getHash();
@@ -174,7 +171,7 @@ class RemoveQualifiersTest extends WikibaseApiTestCase {
 	}
 
 	public function invalidGuidProvider() {
-		$qualifierSnak = new PropertyValueSnak( 722, new StringValue( 'abc') );
+		$qualifierSnak = new PropertyValueSnak( 722, new StringValue( 'abc' ) );
 		$hash = $qualifierSnak->getHash();
 
 		return array(

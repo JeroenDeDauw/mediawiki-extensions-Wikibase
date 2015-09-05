@@ -1,10 +1,13 @@
 <?php
 
-namespace Wikibase;
+namespace Wikibase\Repo\Content;
 
 use Content;
 use ContentHandler;
+use DataUpdate;
+use Diff\Patcher\PatcherException;
 use IContextSource;
+use InvalidArgumentException;
 use Language;
 use MWContentSerializationException;
 use MWException;
@@ -13,38 +16,122 @@ use RequestContext;
 use Revision;
 use Title;
 use User;
-use Wikibase\Validators\EntityValidator;
+use Wikibase\Content\DeferredDecodingEntityHolder;
+use Wikibase\Content\EntityHolder;
+use Wikibase\DataModel\Entity\Entity;
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Entity\EntityRedirect;
+use Wikibase\DataModel\Entity\EntityIdParser;
+use Wikibase\DataModel\Entity\EntityIdParsingException;
+use Wikibase\EntityContent;
+use Wikibase\Lib\Store\EntityContentDataCodec;
+use Wikibase\Repo\Store\EntityPerPage;
+use Wikibase\Repo\Validators\EntityConstraintProvider;
+use Wikibase\Repo\Validators\EntityValidator;
+use Wikibase\Repo\Validators\ValidatorErrorLocalizer;
+use Wikibase\Repo\WikibaseRepo;
+use Wikibase\TermIndex;
+use Wikibase\Updates\DataUpdateAdapter;
 
 /**
- * Base handler class for Wikibase\Entity content classes.
- * TODO: interface for enforcing singleton
- *
- * @since 0.1
+ * Base handler class for Entity content classes.
  *
  * @licence GNU GPL v2+
  * @author Daniel Kinzler
  * @author Jeroen De Dauw < jeroendedauw@gmail.com >
+ * @author Daniel Kinzler
  */
 abstract class EntityHandler extends ContentHandler {
 
 	/**
-	 * @var EntityValidator[]
+	 * Added to parser options for EntityContent.
+	 *
+	 * Bump the version when making incompatible changes
+	 * to parser output.
 	 */
-	protected $preSaveValidators;
+	const PARSER_VERSION = 2;
+
+	/**
+	 * @var EntityPerPage
+	 */
+	private $entityPerPage;
+
+	/**
+	 * @var TermIndex
+	 */
+	private $termIndex;
+
+	/**
+	 * @var EntityContentDataCodec
+	 */
+	protected $contentCodec;
+
+	/**
+	 * @var EntityConstraintProvider
+	 */
+	protected $constraintProvider;
+
+	/**
+	 * @var ValidatorErrorLocalizer
+	 */
+	private $errorLocalizer;
+
+	/**
+	 * @var callable|null Callback to determine whether a serialized
+	 *        blob needs to be re-serialized on export.
+	 */
+	private $legacyExportFormatDetector;
 
 	/**
 	 * @param string $modelId
-	 * @param EntityValidator[] $preSaveValidators
+	 * @param EntityPerPage $entityPerPage
+	 * @param TermIndex $termIndex
+	 * @param EntityContentDataCodec $contentCodec
+	 * @param EntityConstraintProvider $constraintProvider
+	 * @param ValidatorErrorLocalizer $errorLocalizer
+	 * @param EntityIdParser $entityIdParser
+	 * @param callable|null $legacyExportFormatDetector Callback to determine whether a serialized
+	 *        blob needs to be re-serialized on export. The callback must take two parameters,
+	 *        the blob an the serialization format. It must return true if re-serialization is needed.
+	 *        False positives are acceptable, false negatives are not.
+	 *
+	 * @throws InvalidArgumentException
 	 */
-	public function __construct( $modelId, $preSaveValidators ) {
-		$formats = array(
-			CONTENT_FORMAT_JSON,
-			CONTENT_FORMAT_SERIALIZED
-		);
+	public function __construct(
+		$modelId,
+		EntityPerPage $entityPerPage,
+		TermIndex $termIndex,
+		EntityContentDataCodec $contentCodec,
+		EntityConstraintProvider $constraintProvider,
+		ValidatorErrorLocalizer $errorLocalizer,
+		EntityIdParser $entityIdParser,
+		$legacyExportFormatDetector = null
+	) {
+		$formats = $contentCodec->getSupportedFormats();
 
 		parent::__construct( $modelId, $formats );
 
-		$this->preSaveValidators = $preSaveValidators;
+		if ( $legacyExportFormatDetector && !is_callable( $legacyExportFormatDetector ) ) {
+			throw new InvalidArgumentException( '$legacyExportFormatDetector must be a callable (or null)' );
+		}
+
+		$this->entityPerPage = $entityPerPage;
+		$this->termIndex = $termIndex;
+		$this->contentCodec = $contentCodec;
+		$this->constraintProvider = $constraintProvider;
+		$this->errorLocalizer = $errorLocalizer;
+		$this->entityIdParser = $entityIdParser;
+		$this->legacyExportFormatDetector = $legacyExportFormatDetector;
+	}
+
+	/**
+	 * Returns the callback used to determine whether a serialized blob needs
+	 * to be re-serialized on export (or null of re-serialization is disabled).
+	 *
+	 * @return callable|null
+	 */
+	public function getLegacyExportFormatDetector() {
+		return $this->legacyExportFormatDetector;
 	}
 
 	/**
@@ -57,25 +144,124 @@ abstract class EntityHandler extends ContentHandler {
 	abstract protected function getContentClass();
 
 	/**
-	 * Returns a set of validators for enforcing hard constraints on the content
-	 * before saving. For soft constraints, see the TermValidatorFactory.
+	 * @see ContentHandler::getDiffEngineClass
+	 *
+	 * @return string
+	 */
+	protected function getDiffEngineClass() {
+		return 'Wikibase\Repo\Diff\EntityContentDiffView';
+	}
+
+	/**
+	 * Get EntityValidators for on-save validation.
+	 *
+	 * @see getValidationErrorLocalizer()
+	 *
+	 * @param bool $forCreation Whether the entity is created (true) or updated (false).
 	 *
 	 * @return EntityValidator[]
 	 */
-	public function getOnSaveValidators() {
-		return $this->preSaveValidators;
+	public function getOnSaveValidators( $forCreation ) {
+		if ( $forCreation ) {
+			$validators = $this->constraintProvider->getCreationValidators( $this->getEntityType() );
+		} else {
+			$validators = $this->constraintProvider->getUpdateValidators( $this->getEntityType() );
+		}
+
+		return $validators;
+	}
+
+	/**
+	 * Error localizer for use together with getOnSaveValidators().
+	 *
+	 * @see getOnSaveValidators()
+	 *
+	 * @return ValidatorErrorLocalizer
+	 */
+	public function getValidationErrorLocalizer() {
+		return $this->errorLocalizer;
 	}
 
 	/**
 	 * @see ContentHandler::makeEmptyContent
 	 *
-	 * @since 0.1
-	 *
+	 * @throws MWException Always. EntityContent cannot be empty.
 	 * @return EntityContent
 	 */
 	public function makeEmptyContent() {
+		throw new MWException( 'Cannot make an empty EntityContent, since we require at least an ID to be set.' );
+	}
+
+	/**
+	 * Returns an empty Entity object of the type supported by this handler.
+	 * This is intended to provide a baseline for diffing and related operations.
+	 *
+	 * @note The Entity returned here will not have an ID set, and is thus not
+	 * suitable for use in an EntityContent object.
+	 *
+	 * @since 0.5
+	 *
+	 * @return Entity
+	 */
+	abstract public function makeEmptyEntity();
+
+	/**
+	 * Will return a new EntityContent representing the given EntityRedirect,
+	 * or null if the Content class does not support redirects (that is, if it does
+	 * not have a static newFromRedirect() function).
+	 *
+	 * @see makeRedirectContent()
+	 * @see supportsRedirects()
+	 *
+	 * @since 0.5
+	 *
+	 * @param EntityRedirect $redirect
+	 *
+	 * @return EntityContent|null
+	 */
+	public function makeEntityRedirectContent( EntityRedirect $redirect ) {
 		$contentClass = $this->getContentClass();
-		return $contentClass::newEmpty();
+
+		if ( !$this->supportsRedirects() ) {
+			return null;
+		} else {
+			$title = $this->getTitleForId( $redirect->getTargetId() );
+			return $contentClass::newFromRedirect( $redirect, $title );
+		}
+	}
+
+	/**
+	 * Will return true if the Content class has a static newFromRedirect() function.
+	 *
+	 * @see makeRedirectContent()
+	 * @see makeEntityRedirectContent()
+	 *
+	 * @since 0.5
+	 *
+	 * @return bool
+	 */
+	public function supportsRedirects() {
+		$contentClass = $this->getContentClass();
+		return method_exists( $contentClass, 'newFromRedirect' );
+	}
+
+	/**
+	 * @see ContentHandler::makeRedirectContent
+	 *
+	 * @warn Always throws an MWException, since an EntityRedirects needs to know it's own
+	 * ID in addition to the target ID. We have no way to guess that in makeRedirectContent().
+	 * Use makeEntityRedirectContent() instead.
+	 *
+	 * @see makeEntityRedirectContent()
+	 *
+	 * @param Title $title
+	 * @param string $text
+	 *
+	 * @throws MWException Always.
+	 * @return EntityContent|null
+	 */
+	public function makeRedirectContent( Title $title, $text = '' ) {
+		throw new MWException( 'EntityContent does not support plain title based redirects. Use makeEntityRedirectContent() instead.' );
 	}
 
 	/**
@@ -99,104 +285,177 @@ abstract class EntityHandler extends ContentHandler {
 		// The html representation of entities depends on the user language, so we
 		// have to call ParserOptions::getUserLangObj to split the cache by user language.
 		$options->getUserLangObj();
+
+		// bump PARSER VERSION when making breaking changes to parser output (e.g. entity view).
+		$options->addExtraKey( 'wb' . self::PARSER_VERSION );
+
 		return $options;
 	}
 
 	/**
-	 * Creates a Content object for the given Entity object.
+	 * @see ContentHandler::exportTransform
 	 *
-	 * @since 0.4
-	 *
-	 * @param Entity $entity
-	 *
-	 * @return EntityContent
-	 */
-	public function makeEntityContent( Entity $entity ) {
-		$contentClass = $this->getContentClass();
-		return new $contentClass( $entity );
-	}
-
-	/**
-	 * @since 0.1
-	 *
-	 * @return string
-	 */
-	public function getDefaultFormat() {
-		return EntityFactory::singleton()->getDefaultFormat();
-	}
-
-	/**
-	 * @param Content $content
+	 * @param string $blob
 	 * @param string|null $format
 	 *
-	 * @throws MWException
-	 * @return string
+	 * @return string|void
 	 */
-	public function serializeContent( Content $content, $format = null ) {
-
-		if ( is_null( $format ) ) {
-			$format = $this->getDefaultFormat();
+	public function exportTransform( $blob, $format = null ) {
+		if ( !$this->legacyExportFormatDetector ) {
+			return $blob;
 		}
 
-		//FIXME: assert $content is a WikibaseContent instance
-		$data = $content->getNativeData();
+		$needsTransform = call_user_func( $this->legacyExportFormatDetector, $blob, $format );
 
-		switch ( $format ) {
-			case CONTENT_FORMAT_SERIALIZED:
-				$blob = serialize( $data );
-				break;
-			case CONTENT_FORMAT_JSON:
-				$blob = json_encode( $data );
-				break;
-			default:
-				throw new MWException( "serialization format $format is not supported for "
-					. "Wikibase content model" );
+		if ( $needsTransform ) {
+			$format = ( $format === null ) ? $this->getDefaultFormat() : $format;
+
+			$content = $this->unserializeContent( $blob, $format );
+			$blob = $this->serializeContent( $content );
 		}
 
 		return $blob;
 	}
 
 	/**
-	 * @param string $blob
+	 * Creates a Content object for the given Entity object.
+	 *
+	 * @since 0.5
+	 *
+	 * @param EntityHolder $entityHolder
+	 *
+	 * @return EntityContent
+	 */
+	public function makeEntityContent( EntityHolder $entityHolder ) {
+		$contentClass = $this->getContentClass();
+
+		/* EntityContent $content */
+		$content = new $contentClass( $entityHolder );
+
+		//TODO: make sure the entity is valid/complete!
+
+		return $content;
+	}
+
+	/**
+	 * Parses the given ID string into an EntityId for the type of entity
+	 * supported by this EntityHandler. If the string is not a valid
+	 * serialization of the correct type of entity ID, an exception is thrown.
+	 *
+	 * @param string $id String representation the entity ID
+	 *
+	 * @return EntityId
+	 *
+	 * @throws InvalidArgumentException
+	 */
+	abstract public function makeEntityId( $id );
+
+	/**
+	 * @return string
+	 */
+	public function getDefaultFormat() {
+		return $this->contentCodec->getDefaultFormat();
+	}
+
+	/**
+	 * @param Content $content
 	 * @param string|null $format
 	 *
-	 * @throws MWException
+	 * @throws InvalidArgumentException
 	 * @throws MWContentSerializationException
-	 * @return mixed
+	 * @return string
 	 */
-	protected function unserializedData( $blob, $format = null ) {
-		if ( is_null( $format ) ) {
-			$format = $this->getDefaultFormat();
+	public function serializeContent( Content $content, $format = null ) {
+		if ( !( $content instanceof EntityContent ) ) {
+			throw new InvalidArgumentException( '$content must be an instance of EntityContent' );
 		}
 
-		switch ( $format ) {
-			case CONTENT_FORMAT_SERIALIZED:
-				$data = unserialize( $blob ); //FIXME: suppress notice on failed serialization!
-				break;
-			case CONTENT_FORMAT_JSON:
-				$data = json_decode( $blob, true ); //FIXME: suppress notice on failed serialization!
-				break;
-			default:
-				throw new MWException( "serialization format $format is not supported "
-					. "for Wikibase content model" );
+		if ( $content->isRedirect() ) {
+			$redirect = $content->getEntityRedirect();
+			return $this->contentCodec->encodeRedirect( $redirect, $format );
+		} else {
+			//TODO: if we have an un-decoded Entity in a DeferredDecodingEntityHolder, just re-use the encoded form.
+			$entity = $content->getEntity();
+			return $this->contentCodec->encodeEntity( $entity, $format );
+		}
+	}
+
+	/**
+	 * @see ContentHandler::unserializeContent
+	 *
+	 * @param string $blob
+	 * @param string $format
+	 *
+	 * @throws MWContentSerializationException
+	 * @return EntityContent
+	 */
+	public function unserializeContent( $blob, $format = CONTENT_FORMAT_JSON ) {
+		$redirect = $this->contentCodec->decodeRedirect( $blob, $format );
+
+		if ( $redirect ) {
+			if ( $redirect === null ) {
+				throw new MWContentSerializationException(
+					'The serialized data contains neither an Entity nor an EntityRedirect!'
+				);
+			}
+
+			return $this->makeEntityRedirectContent( $redirect );
+		} else {
+			$holder = new DeferredDecodingEntityHolder( $this->contentCodec, $blob, $format, $this->getEntityType() );
+			$entityContent = $this->makeEntityContent( $holder );
+
+			return $entityContent;
+		}
+	}
+
+	/**
+	 * Returns the ID of the entity contained by the page of the given title.
+	 *
+	 * @warn This should not really be needed and may just go away!
+	 *
+	 * @since 0.5
+	 *
+	 * @param Title $target
+	 *
+	 * @throws EntityIdParsingException
+	 * @return EntityId
+	 */
+	public function getIdForTitle( Title $target ) {
+		return $this->entityIdParser->parse( $target->getText() );
+	}
+
+	/**
+	 * Returns the appropriate page Title for the given EntityId.
+	 *
+	 * @warn This should not really be needed and may just go away!
+	 *
+	 * @since 0.5
+	 *
+	 * @see EntityTitleLookup::getTitleForId
+	 *
+	 * @param EntityId $id
+	 *
+	 * @throws InvalidArgumentException if $id refers to an entity of the wrong type.
+	 * @return Title
+	 */
+	public function getTitleForId( EntityId $id ) {
+		if ( $id->getEntityType() !== $this->getEntityType() ) {
+			throw new InvalidArgumentException( 'The given ID does not refer to an entity of type '
+				. $this->getEntityType() );
 		}
 
-		if ( $data === false || $data === null ) {
-			throw new MWContentSerializationException( 'failed to deserialize' );
-		}
-
-		return $data;
+		return Title::makeTitle( $this->getEntityNamespace(), $id->getSerialization() );
 	}
 
 	/**
 	 * @see EntityHandler::getEntityNamespace
 	 *
-	 * @since 0.1
-	 *
-	 * @return integer
+	 * @return int
 	 */
 	final public function getEntityNamespace() {
-		return NamespaceUtils::getEntityNamespace( $this->getModelID() );
+		$entityNamespaceLookup = WikibaseRepo::getDefaultInstance()->getEntityNamespaceLookup();
+
+		return $entityNamespaceLookup->getEntityNamespace( $this->getModelID() );
 	}
 
 	/**
@@ -227,9 +486,7 @@ abstract class EntityHandler extends ContentHandler {
 	 *
 	 * @see ContentHandler::isParserCacheSupported
 	 *
-	 * @since 0.1
-	 *
-	 * @return bool true
+	 * @return bool Always true in this default implementation.
 	 */
 	public function isParserCacheSupported() {
 		return true;
@@ -248,6 +505,7 @@ abstract class EntityHandler extends ContentHandler {
 	 */
 	public function getPageViewLanguage( Title $title, Content $content = null ) {
 		global $wgLang;
+
 		return $wgLang;
 	}
 
@@ -270,6 +528,7 @@ abstract class EntityHandler extends ContentHandler {
 	 */
 	public function getPageLanguage( Title $title, Content $content = null ) {
 		global $wgContLang;
+
 		return $wgContLang;
 	}
 
@@ -280,24 +539,10 @@ abstract class EntityHandler extends ContentHandler {
 	 *
 	 * @since 0.2
 	 *
-	 * @return string|null
+	 * @return string|null Always null in this default implementation.
 	 */
 	public function getSpecialPageForCreation() {
 		return null;
-	}
-
-	/**
-	 * Constructs a new EntityContent from an Entity.
-	 *
-	 * @since 0.3
-	 *
-	 * @param Entity $entity
-	 *
-	 * @return EntityContent
-	 */
-	public function newContentFromEntity( Entity $entity ) {
-		$contentClass = $this->getContentClass();
-		return new $contentClass( $entity );
 	}
 
 	/**
@@ -311,39 +556,43 @@ abstract class EntityHandler extends ContentHandler {
 	 *
 	 * @return Content|bool Content on success, false on failure
 	 */
-	public function getUndoContent( Revision $latestRevision, Revision $newerRevision,
+	public function getUndoContent(
+		Revision $latestRevision,
+		Revision $newerRevision,
 		Revision $olderRevision
 	) {
 		/**
 		 * @var EntityContent $latestContent
-		 * @var EntityContent $olderContent
 		 * @var EntityContent $newerContent
+		 * @var EntityContent $olderContent
 		 */
-		$olderContent = $olderRevision->getContent();
-		$newerContent = $newerRevision->getContent();
 		$latestContent = $latestRevision->getContent();
+		$newerContent = $newerRevision->getContent();
+		$olderContent = $olderRevision->getContent();
 
-		if ( $newerRevision->getId() === $latestRevision->getId() ) {
+		if ( $latestRevision->getId() === $newerRevision->getId() ) {
 			// no patching needed, just roll back
 			return $olderContent;
 		}
 
 		// diff from new to base
-		$patch = $newerContent->getEntity()->getDiff( $olderContent->getEntity() );
+		$patch = $newerContent->getDiff( $olderContent );
 
-		// apply the patch( new -> old ) to the current revision.
-		$patchedCurrent = $latestContent->getEntity()->copy();
-		$patchedCurrent->patch( $patch );
+		try {
+			// apply the patch( new -> old ) to the current revision.
+			$patchedCurrent = $latestContent->getPatchedCopy( $patch );
+		} catch ( PatcherException $ex ) {
+			return false;
+		}
 
 		// detect conflicts against current revision
-		$cleanPatch = $latestContent->getEntity()->getDiff( $patchedCurrent );
+		$cleanPatch = $latestContent->getDiff( $patchedCurrent );
 		$conflicts = $patch->count() - $cleanPatch->count();
 
 		if ( $conflicts > 0 ) {
 			return false;
 		} else {
-			$undo = $this->makeEntityContent( $patchedCurrent );
-			return $undo;
+			return $patchedCurrent;
 		}
 	}
 
@@ -353,4 +602,108 @@ abstract class EntityHandler extends ContentHandler {
 	 * @return string
 	 */
 	abstract public function getEntityType();
+
+	/**
+	 * Returns deletion updates for the given EntityContent.
+	 *
+	 * @see Content::getDeletionUpdates
+	 *
+	 * @since 0.5
+	 *
+	 * @param EntityContent $content
+	 * @param Title $title
+	 *
+	 * @return DataUpdate[]
+	 */
+	public function getEntityDeletionUpdates( EntityContent $content, Title $title ) {
+		$updates = array();
+
+		$entityId = $content->getEntityId();
+
+		// Call the WikibaseEntityDeletionUpdate hook.
+		// Do this before doing any well-known updates.
+		$updates[] = new DataUpdateAdapter(
+			'wfRunHooks',
+			'WikibaseEntityDeletionUpdate',
+			array( $content, $title )
+		);
+
+		// Unregister the entity from the terms table.
+		$updates[] = new DataUpdateAdapter(
+			array( $this->termIndex, 'deleteTermsOfEntity' ),
+			$entityId
+		);
+
+		// Unregister the entity from the EntityPerPage table.
+		$updates[] = new DataUpdateAdapter(
+			array( $this->entityPerPage, 'deleteEntityPage' ),
+			$entityId,
+			$title->getArticleID()
+		);
+
+		return $updates;
+	}
+
+	/**
+	 * Returns modification updates for the given EntityContent.
+	 *
+	 * @see Content::getSecondaryDataUpdates
+	 *
+	 * @since 0.5
+	 *
+	 * @param EntityContent $content
+	 * @param Title $title
+	 *
+	 * @return DataUpdate[]
+	 */
+	public function getEntityModificationUpdates( EntityContent $content, Title $title ) {
+		$updates = array();
+
+		$entityId = $content->getEntityId();
+
+		//FIXME: we should not need this!
+		if ( $entityId === null ) {
+			$entityId = $this->getIdForTitle( $title );
+		}
+
+		if ( $content->isRedirect() ) {
+			// Remove the entity from the terms table since it's now a redirect.
+			$updates[] = new DataUpdateAdapter(
+				array( $this->termIndex, 'deleteTermsOfEntity' ),
+				$entityId
+			);
+
+			// Register the redirect from the EntityPerPage table.
+			$updates[] = new DataUpdateAdapter(
+				array( $this->entityPerPage, 'addRedirectPage' ),
+				$entityId,
+				$title->getArticleID(),
+				$content->getEntityRedirect()->getTargetId()
+			);
+		} else {
+			// Register the entity in the EntityPerPage table.
+			$updates[] = new DataUpdateAdapter(
+				array( $this->entityPerPage, 'addEntityPage' ),
+				$entityId,
+				$title->getArticleID()
+			);
+
+			// Register the entity in the terms table.
+			$updates[] = new DataUpdateAdapter(
+				array( $this->termIndex, 'saveTermsOfEntity' ),
+				$content->getEntity()
+			);
+		}
+
+		// Call the WikibaseEntityModificationUpdate hook.
+		// Do this after doing all well-known updates.
+		$updates[] = new DataUpdateAdapter(
+			'wfRunHooks',
+			'WikibaseEntityModificationUpdate',
+			array( $content, $title )
+		);
+
+		return $updates;
+	}
+
 }

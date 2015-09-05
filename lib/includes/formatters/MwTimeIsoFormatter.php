@@ -3,6 +3,7 @@
 namespace Wikibase\Lib;
 
 use DataValues\TimeValue;
+use InvalidArgumentException;
 use Language;
 use Message;
 use ValueFormatters\FormatterOptions;
@@ -15,228 +16,292 @@ use ValueFormatters\ValueFormatterBase;
  * @licence GNU GPL v2+
  * @author H. Snater < mediawiki@snater.com >
  * @author Adam Shorland
+ * @author Thiemo Mättig
  *
  * @todo move me to DataValues-time
  */
 class MwTimeIsoFormatter extends ValueFormatterBase {
 
 	/**
-	 * MediaWiki language object.
 	 * @var Language
 	 */
-	protected $language;
+	private $language;
 
 	/**
-	 * @param FormatterOptions $options
+	 * @param FormatterOptions|null $options
 	 */
-	public function __construct( FormatterOptions $options ) {
-		$this->options = $options;
+	public function __construct( FormatterOptions $options = null ) {
+		parent::__construct( $options );
 
-		$this->options->defaultOption( ValueFormatter::OPT_LANG, 'en' );
-
-		$this->language = Language::factory(
-			$this->options->getOption( ValueFormatter::OPT_LANG )
-		);
+		$this->language = Language::factory( $this->getOption( ValueFormatter::OPT_LANG ) );
 	}
 
 	/**
 	 * @see ValueFormatter::format
+	 *
+	 * @param TimeValue $value
+	 *
+	 * @throws InvalidArgumentException
+	 * @return string Text
 	 */
 	public function format( $value ) {
-		return $this->formatDate(
-			$value->getTime(),
-			$value->getPrecision()
-		);
-	}
-
-	private function formatDate( $extendedIsoTimestamp, $precision ) {
-		/**
-		 * $matches for +0000000000002013-07-16T01:02:03Z
-		 * [0] => +0000000000002013-07-16T00:00:00Z
-		 * [1] => +
-		 * [2] => 0000000000002013
-		 * [3] => 000000000000
-		 * [4] => 2013
-		 * [5] => 07
-		 * [6] => 16
-		 * [7] => 01
-		 * [8] => 02
-		 * [9] => 03
-		 */
-		$regexSuccess = preg_match( '/^(\+|\-)((\d{0,12})?(\d{4}))-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z/',
-			$extendedIsoTimestamp, $matches );
-
-		if( !$regexSuccess || intval( $matches[2] ) === 0 ) {
-			return $extendedIsoTimestamp;
-		}
-		$isBCE = ( $matches[1] === '-' );
-
-		// Positive 4-digit year allows using Language object.
-		$fourDigitYearTimestamp = str_pad(
-			substr( $extendedIsoTimestamp, strlen( $matches[1] . $matches[3] ) ),
-			20, // This is the length of 2013-07-16T00:00:00Z
-			'0',
-			STR_PAD_LEFT
-		);
-
-		$fourDigitYearTimestamp = $this->normaliseMwTimestampInput( $fourDigitYearTimestamp );
-		$timestamp = wfTimestamp( TS_MW, $fourDigitYearTimestamp );
-
-		$localisedDate = $this->language->sprintfDate(
-			$this->getDateFormat( $precision ),
-			$timestamp
-		);
-
-		// we do not handle parsing arabic, farsi, etc. digits (bug 63732)
-		$normalisedDate = $this->normaliseDigits( $localisedDate );
-
-		//If we cant reliably fix the year return the full timestamp,
-		//  this should never happen as sprintfDate should always return a 4 digit year
-		if( !$this->canFormatYear( $normalisedDate, $matches ) ) {
-			return $extendedIsoTimestamp;
+		if ( !( $value instanceof TimeValue ) ) {
+			throw new InvalidArgumentException( 'Data value type mismatch. Expected a TimeValue.' );
 		}
 
-		$formattedDate = str_replace(
-			$matches[4],
-			$this->formatYear( $matches[2], $precision, $isBCE ),
-			$normalisedDate
-		);
-
-		return $formattedDate;
+		return $this->formatTimeValue( $value );
 	}
 
 	/**
-	 * Normalize so that MWTimestamp, which does new DateTime( $timestamp ),
-	 * can handle timestamp strings with '00' for month and/or '00' for day.
-	 * We 'round' it to '01' and '01' for formatting purposes.
+	 * @param TimeValue $timeValue
 	 *
-	 * Without this, '+00000001995-00-00T00:00:00Z' gets becomes '1994-11-30 00:00:00'
-	 * in the DateTime object.  Then '1994' != '1995' comparison in $this->canFormatYear()
-	 * fails and a timestamp is returned on failure. (see bug: 64659)
-	 *
-	 * @param string $fourDigitYearTimestamp
-	 *
-	 * @return string
+	 * @return string Text
 	 */
-	private function normaliseMwTimestampInput( $fourDigitYearTimestamp ) {
-		if ( substr( $fourDigitYearTimestamp, 5, 2 ) === '00' ) {
-			$fourDigitYearTimestamp = substr_replace( $fourDigitYearTimestamp, '01', 5, 2 );
+	private function formatTimeValue( TimeValue $timeValue ) {
+		$isoTimestamp = $timeValue->getTime();
+
+		try {
+			return $this->getLocalizedDate( $isoTimestamp, $timeValue->getPrecision() );
+		} catch ( InvalidArgumentException $ex ) {
+			return $isoTimestamp;
+		}
+	}
+
+	/**
+	 * @param string $isoTimestamp
+	 * @param int $precision
+	 *
+	 * @throws InvalidArgumentException
+	 * @return string Formatted date
+	 */
+	private function getLocalizedDate( $isoTimestamp, $precision ) {
+		$dateFormat = $this->getDateFormat( $precision );
+		$localizedYear = $this->getLocalizedYear( $isoTimestamp, $precision );
+
+		if ( $dateFormat === 'Y' ) {
+			return $localizedYear;
 		}
 
-		if ( substr( $fourDigitYearTimestamp, 8, 2 ) === '00' ) {
-			$fourDigitYearTimestamp = substr_replace( $fourDigitYearTimestamp, '01', 8, 2 );
+		$mwTimestamp = $this->getMwTimestamp( $isoTimestamp, $precision );
+		$mwYear = $this->language->sprintfDate( 'Y', $mwTimestamp );
+		$localizedDate = $this->language->sprintfDate( $dateFormat, $mwTimestamp );
+
+		if ( $mwYear !== $localizedYear ) {
+			// If we cannot reliably fix the year, return the full time stamp. This should
+			// never happen as Language::sprintfDate should always return a 4 digit year.
+			if ( substr_count( $localizedDate, $mwYear ) !== 1 ) {
+				throw new InvalidArgumentException( 'Cannot identify year in formatted date.' );
+			}
+
+			$localizedDate = str_replace( $mwYear, $localizedYear, $localizedDate );
 		}
 
-		return $fourDigitYearTimestamp;
+		return $localizedDate;
 	}
 
 	/**
-	 * @param string $date
+	 * @param int $precision
 	 *
-	 * @return string
-	 */
-	private function normaliseDigits( $date ) {
-		return $this->language->parseFormattedNumber( $date );
-	}
-
-	/**
-	 * @param string $date
-	 * @param array $matches
-	 *
-	 * @return boolean
-	 */
-	private function canFormatYear( $date, $matches ) {
-		return substr_count( $date, $matches[4] ) === 1;
-	}
-
-	/**
-	 * Get the dateformat string for the given precision to be used by sprintfDate
-	 * @param integer $precision
-	 * @return string dateFormat to be used by sprintfDate
+	 * @return string Date format string to be used by Language::sprintfDate
 	 */
 	private function getDateFormat( $precision ) {
-		if( $precision <= TimeValue::PRECISION_YEAR ) {
+		if ( $precision <= TimeValue::PRECISION_YEAR ) {
 			return 'Y';
+		} elseif ( $precision === TimeValue::PRECISION_MONTH ) {
+			$format = $this->language->getDateFormatString( 'monthonly', 'dmy' );
+			return sprintf( '%s Y', $this->getMonthFormat( $format ) );
+		} else {
+			$format = $this->language->getDateFormatString( 'date', 'dmy' );
+			return sprintf( '%s %s Y', $this->getDayFormat( $format ), $this->getMonthFormat( $format ) );
 		}
-
-		if( $precision === TimeValue::PRECISION_MONTH ) {
-			return 'F Y';
-		}
-
-		return 'j F Y';
 	}
 
 	/**
-	 * @param string $fullYear
-	 * @param integer $precision
-	 * @param bool $isBCE
+	 * @see Language::sprintfDate
 	 *
-	 * @return string the formatted year
+	 * @param string $dateFormat
+	 *
+	 * @return string A date format for the day that roundtrips the Wikibase TimeParsers.
 	 */
-	private function formatYear( $fullYear, $precision, $isBCE ) {
-		if( $isBCE ) {
-			$msgPrefix = 'wikibase-time-precision-BCE';
-		} else {
-			$msgPrefix = 'wikibase-time-precision';
+	private function getDayFormat( $dateFormat ) {
+		if ( preg_match( '/(?:d|(?<!x)j)[.,]?/', $dateFormat, $matches ) ) {
+			return $matches[0];
 		}
 
-		switch( $precision ) {
-			case TimeValue::PRECISION_Ga:
-				$fullYear = round( $fullYear, -9 );
-				$fullYear = substr( $fullYear, 0, -9 );
-				return $this->getMessage( $msgPrefix . '-Gannum', $fullYear );
-			case TimeValue::PRECISION_100Ma:
-				$fullYear = round( $fullYear, -8 );
-				$fullYear = substr( $fullYear, 0, -6 );
-				return $this->getMessage( $msgPrefix . '-Mannum', $fullYear );
-			case TimeValue::PRECISION_10Ma:
-				$fullYear = round( $fullYear, -7 );
-				$fullYear = substr( $fullYear, 0, -6 );
-				return $this->getMessage( $msgPrefix . '-Mannum', $fullYear );
-			case TimeValue::PRECISION_Ma:
-				$fullYear = round( $fullYear, -6 );
-				$fullYear = substr( $fullYear, 0, -6 );
-				return $this->getMessage( $msgPrefix . '-Mannum', $fullYear );
-			case TimeValue::PRECISION_100ka:
-				$fullYear = round( $fullYear, -5 );
-				return $this->getMessage( $msgPrefix . '-annum', $fullYear );
-			case TimeValue::PRECISION_10ka:
-				$fullYear = round( $fullYear, -4 );
-				return $this->getMessage( $msgPrefix . '-annum', $fullYear );
-			case TimeValue::PRECISION_ka:
-				$fullYear = round( $fullYear, -3 );
-				$fullYear = substr( $fullYear, 0, -3 );
-				return $this->getMessage( $msgPrefix . '-millennium', $fullYear );
-			case TimeValue::PRECISION_100a:
-				$fullYear = round( $fullYear, -2 );
-				$fullYear = substr( $fullYear, 0, -2 );
-				return $this->getMessage( $msgPrefix . '-century', $fullYear );
-			case TimeValue::PRECISION_10a:
-				$fullYear = round( $fullYear, -1 );
-				return $this->getMessage( $msgPrefix . '-10annum', $fullYear );
-			default:
-				//If not one of the above make sure the year have at least 4 digits
-				$fullYear = ltrim( $fullYear, '0' );
-				if( $isBCE ) {
-					$fullYear .= ' BCE';
-				}
-				return $fullYear;
+		return 'j';
+	}
+
+	/**
+	 * @see Language::sprintfDate
+	 *
+	 * @param string $dateFormat
+	 *
+	 * @return string A date format for the month that roundtrips the Wikibase TimeParsers.
+	 */
+	private function getMonthFormat( $dateFormat ) {
+		if ( preg_match( '/(?:[FMn]|(?<!x)m|xg)[.,]?/', $dateFormat, $matches ) ) {
+			return $matches[0];
 		}
+
+		return 'F';
+	}
+
+	/**
+	 * @param string $isoTimestamp
+	 * @param int $precision
+	 *
+	 * @throws InvalidArgumentException
+	 * @return string MediaWiki time stamp in the format YYYYMMDDHHMMSS
+	 */
+	private function getMwTimestamp( $isoTimestamp, $precision ) {
+		$args = $this->splitIsoTimestamp( $isoTimestamp, $precision );
+
+		// Year must be in the range 0000 to 9999 in an MediaWiki time stamp
+		$args[0] = substr( $args[0], -4 );
+		// Month/day must default to 1 to not get the last day of the previous year/month
+		$args[1] = max( 1, $args[1] );
+		$args[2] = max( 1, $args[2] );
+
+		return vsprintf( '%04d%02d%02d%02d%02d%02d', $args );
+	}
+
+	/**
+	 * @param string $isoTimestamp
+	 * @param int $precision
+	 *
+	 * @throws InvalidArgumentException
+	 * @return string[] Year, month, day, hour, minute, second
+	 */
+	private function splitIsoTimestamp( $isoTimestamp, $precision ) {
+		if ( !preg_match(
+			'/(\d+)\D+(\d+)\D+(\d+)\D+(\d+)\D+(\d+)\D+(\d+)/',
+			$isoTimestamp,
+			$matches
+		) ) {
+			throw new InvalidArgumentException( 'Unable to parse time value.' );
+		}
+
+		list( , $year, $month, $day ) = $matches;
+
+		if ( $year == 0 && $precision < TimeValue::PRECISION_YEAR
+			|| $month == 0 && $precision >= TimeValue::PRECISION_MONTH
+			|| $day == 0 && $precision >= TimeValue::PRECISION_DAY
+		) {
+			throw new InvalidArgumentException( 'Time value insufficient for precision.' );
+		}
+
+		return array_slice( $matches, 1 );
+	}
+
+	/**
+	 * @param string $isoTimestamp
+	 * @param int $precision
+	 *
+	 * @throws InvalidArgumentException
+	 * @return string
+	 */
+	private function getLocalizedYear( $isoTimestamp, $precision ) {
+		$shift = 1e+0;
+		$unshift = 1e-0;
+		$func = 'round';
+
+		switch ( $precision ) {
+			case TimeValue::PRECISION_YEAR1G:
+				$msg = 'Gannum';
+				$shift = 1e+9;
+				break;
+			case TimeValue::PRECISION_YEAR100M:
+				$msg = 'Mannum';
+				$shift = 1e+8;
+				$unshift = 1e+2;
+				break;
+			case TimeValue::PRECISION_YEAR10M:
+				$msg = 'Mannum';
+				$shift = 1e+7;
+				$unshift = 1e+1;
+				break;
+			case TimeValue::PRECISION_YEAR1M:
+				$msg = 'Mannum';
+				$shift = 1e+6;
+				break;
+			case TimeValue::PRECISION_YEAR100K:
+				$msg = 'annum';
+				$shift = 1e+5;
+				$unshift = 1e+5;
+				break;
+			case TimeValue::PRECISION_YEAR10K:
+				$msg = 'annum';
+				$shift = 1e+4;
+				$unshift = 1e+4;
+				break;
+			case TimeValue::PRECISION_YEAR1K:
+				$msg = 'millennium';
+				$func = 'ceil';
+				$shift = 1e+3;
+				break;
+			case TimeValue::PRECISION_YEAR100:
+				$msg = 'century';
+				$func = 'ceil';
+				$shift = 1e+2;
+				break;
+			case TimeValue::PRECISION_YEAR10:
+				$msg = '10annum';
+				$func = 'floor';
+				$shift = 1e+1;
+				$unshift = 1e+1;
+				break;
+		}
+
+		$isBCE = substr( $isoTimestamp, 0, 1 ) === '-';
+		$year = abs( floatval( $isoTimestamp ) );
+
+		switch ( $func ) {
+			case 'ceil':
+				$number = round( ceil( $year / $shift ) * $unshift );
+				break;
+			case 'floor':
+				$number = round( floor( $year / $shift ) * $unshift );
+				break;
+			default:
+				$number = round( round( $year / $shift ) * $unshift );
+		}
+
+		// Year to small for precision, fall back to year
+		if ( empty( $number )
+			&& ( $precision < TimeValue::PRECISION_YEAR
+				|| ( $isBCE && $precision === TimeValue::PRECISION_YEAR )
+			)
+		) {
+			$msg = null;
+			$number = $year;
+			$isBCE = $isBCE && !empty( $number );
+		}
+
+		if ( empty( $msg ) ) {
+			// TODO: This needs a message.
+			return $number . ( $isBCE ? ' BCE' : '' );
+		}
+
+		return $this->getMessage(
+			'wikibase-time-precision-' . ( $isBCE ? 'BCE-' : '' ) . $msg,
+			$number
+		);
 	}
 
 	/**
 	 * @param string $key
-	 * @param string $fullYear
-	 * @return String
+	 * @param string $param
+	 *
+	 * @return string
 	 */
-	private function getMessage( $key, $fullYear ) {
+	private function getMessage( $key, $param ) {
 		$message = new Message( $key );
-		//FIXME: as the frontend can not parse the translated precisions we only want to present the ENGLISH for now
-		//once the frontend is using backend parsers we can switch the translation on
-		//See the fix me in: MwTimeIsoParser::reconvertOutputString
-		//$message->inLanguage( $this->language );
-		$message->inLanguage( new Language() );
-		$message->params( array( $fullYear ) );
+		// FIXME: As the frontend cannot parse the translated precisions we only want to
+		// present the English for now. Once the frontend is using backend parsers we can
+		// turn the translation on. See the FIXME in MwTimeIsoParser::reconvertOutputString.
+		// $message->inLanguage( $this->language );
+		$message->inLanguage( 'en' );
+		$message->params( array( $param ) );
 		return $message->text();
 	}
 

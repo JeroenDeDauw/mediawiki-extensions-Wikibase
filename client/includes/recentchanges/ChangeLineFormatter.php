@@ -1,11 +1,13 @@
 <?php
 
-namespace Wikibase;
+namespace Wikibase\Client\RecentChanges;
 
 use Language;
 use Linker;
 use Title;
 use User;
+use Wikibase\Client\RepoLinker;
+use Wikibase\DataModel\Entity\EntityId;
 
 /**
  * Formats a changes line for including changes from the Wikibase repo in
@@ -113,7 +115,7 @@ class ChangeLineFormatter {
 	/**
 	 * @fixme use shared bits of formatting from ChangesList and OldChangesList
 	 *
-	 * @param array
+	 * @param string[] $links
 	 *
 	 * @return string
 	 */
@@ -131,7 +133,7 @@ class ChangeLineFormatter {
 	/**
 	 * @fixme use shared bits of formatting from ChangesList and OldChangesList
 	 *
-	 * @param array
+	 * @param string[] $links
 	 *
 	 * @return string
 	 */
@@ -158,7 +160,7 @@ class ChangeLineFormatter {
 	 *
 	 * @return string
 	 */
-	private function formatEntityLink( $entityId ) {
+	private function formatEntityLink( EntityId $entityId ) {
 		$entityLink = $this->repoLinker->buildEntityLink( $entityId );
 
 		return wfMessage( 'word-separator' )->plain()
@@ -294,8 +296,6 @@ class ChangeLineFormatter {
 	}
 
 	/**
-	 * @since 0.5
-	 *
 	 * @param string $userName
 	 *
 	 * @return string[]

@@ -2,17 +2,19 @@
 
 namespace Wikibase\Lib\Test;
 
-use DataValues\DataValue;
+use DataValues\QuantityValue;
 use DataValues\StringValue;
 use Wikibase\DataModel\Entity\EntityId;
 use Wikibase\DataModel\Entity\EntityIdValue;
 use Wikibase\DataModel\Entity\ItemId;
 use Wikibase\DataModel\Entity\PropertyId;
-use Wikibase\PropertyNoValueSnak;
-use Wikibase\PropertySomeValueSnak;
-use Wikibase\PropertyValueSnak;
+use Wikibase\DataModel\Entity\BasicEntityIdParser;
+use Wikibase\DataModel\Services\EntityId\SuffixEntityIdParser;
+use Wikibase\DataModel\Snak\PropertyNoValueSnak;
+use Wikibase\DataModel\Snak\PropertySomeValueSnak;
+use Wikibase\DataModel\Snak\PropertyValueSnak;
+use Wikibase\DataModel\Snak\Snak;
 use Wikibase\ReferencedEntitiesFinder;
-use Wikibase\Snak;
 
 /**
  * @covers Wikibase\ReferencedEntitiesFinder
@@ -33,9 +35,11 @@ class ReferencedEntitiesFinderTest extends \PHPUnit_Framework_TestCase {
 		$p11 = new PropertyId( 'p11' );
 		$p27 = new PropertyId( 'p27' );
 		$p44 = new PropertyId( 'p44' );
+		$q800 = new ItemId( 'Q800' );
 
 		$q23Value = new EntityIdValue( new ItemId( 'q23' ) );
 		$q24Value = new EntityIdValue( new ItemId( 'q24' ) );
+		$quantityValueUnitQ800 = QuantityValue::newFromNumber( 3, 'http://acme.test/entity/Q800' );
 
 		$argLists[] = array(
 			array(),
@@ -56,7 +60,7 @@ class ReferencedEntitiesFinderTest extends \PHPUnit_Framework_TestCase {
 		);
 
 		$argLists[] = array(
-			array( new PropertyValueSnak( $p27, new StringValue( 'onoez' )  ) ),
+			array( new PropertyValueSnak( $p27, new StringValue( 'onoez' ) ) ),
 			array( $p27 ),
 			"PropertyValueSnak with string value"
 		);
@@ -64,7 +68,13 @@ class ReferencedEntitiesFinderTest extends \PHPUnit_Framework_TestCase {
 		$argLists[] = array(
 			array( new PropertyValueSnak( $p27, $q23Value ) ),
 			array( $p27, $q23Value->getEntityId() ),
-			"PropertyValueSnak with EntityId"
+			"PropertyValueSnak with EntityIdValue"
+		);
+
+		$argLists[] = array(
+			array( new PropertyValueSnak( $p27, $quantityValueUnitQ800 ) ),
+			array( $p27, $q800 ),
+			"PropertyValueSnak with unit URI in a QuantityValue"
 		);
 
 		$argLists[] = array(
@@ -90,7 +100,11 @@ class ReferencedEntitiesFinderTest extends \PHPUnit_Framework_TestCase {
 	 * @param string $message
 	 */
 	public function testFindSnakLinks( array $snaks, array $expected, $message ) {
-		$linkFinder = new ReferencedEntitiesFinder();
+		$linkFinder = new ReferencedEntitiesFinder(
+			new SuffixEntityIdParser(
+				'http://acme.test/entity/',
+				new BasicEntityIdParser()
+			) );
 
 		$actual = $linkFinder->findSnakLinks( $snaks );
 
@@ -103,55 +117,4 @@ class ReferencedEntitiesFinderTest extends \PHPUnit_Framework_TestCase {
 		$this->assertEquals( $expected, $actual, $message );
 	}
 
-	public function dataValuesProvider() {
-		$p21 = new PropertyId( 'p11' );
-		$q42 = new ItemId( 'q42' );
-		$stringValue = new StringValue( 'q1337' );
-
-		return array(
-			$this->dataValuesTestCaseFromEntity( $p21 ),
-			$this->dataValuesTestCaseFromEntity( $q42 ),
-			array(
-				$stringValue,
-				array(),
-				'StringValue without references'
-			)
-		);
-	}
-
-	/**
-	 * Returns a test definition suitable for "testFindDataValueLinks".
-	 *
-	 * @param string $entity
-	 * @return array
-	 */
-	private function dataValuesTestCaseFromEntity( $entity ) {
-		$definition = array(
-			new EntityIdValue( $entity ),
-			array( $entity ),
-			$entity->getEntityType()
-		);
-		return $definition;
-	}
-
-	/**
-	 * @dataProvider dataValuesProvider
-	 *
-	 * @param DataValue $dataValue
-	 * @param array $expected
-	 * @param string $message
-	 */
-	public function testFindDataValueLinks( DataValue $dataValue, array $expected, $message = '' ) {
-		$linkFinder = new ReferencedEntitiesFinder();
-
-		$actual = $linkFinder->findDataValueLinks( $dataValue );
-
-		$expected = array_values( $expected );
-		$actual = array_values( $actual );
-
-		asort( $expected );
-		asort( $actual );
-
-		$this->assertEquals( $expected, $actual, $message );
-	}
 }

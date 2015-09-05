@@ -62,7 +62,7 @@ class MockChunkAccess implements ChunkAccess {
 
 			$chunk[] = $rec;
 			$c++;
-		} while( next( $this->data ) );
+		} while ( next( $this->data ) );
 
 		return $chunk;
 	}
@@ -75,6 +75,7 @@ class MockChunkAccess implements ChunkAccess {
 	 * @return int
 	 */
 	public function getRecordId( $rec ) {
-		return intval( $rec );
+		return (int)$rec;
 	}
+
 }

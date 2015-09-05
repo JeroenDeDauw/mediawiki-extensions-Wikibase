@@ -86,17 +86,6 @@ class ChangeRow extends ORMRow implements Change {
 	}
 
 	/**
-	 * @see ORMRow::getId
-	 *
-	 * @since 0.2
-	 *
-	 * @return integer
-	 */
-	public function getId() {
-		return parent::getId();
-	}
-
-	/**
 	 * @since 0.1
 	 */
 	protected function postConstruct() {
@@ -187,12 +176,6 @@ class ChangeRow extends ORMRow implements Change {
 	protected function getInfo( $cache = 'no' ) {
 		$info = $this->getField( 'info' );
 
-		assert( !is_string( $info ) );
-
-		if ( !is_array( $info ) ) {
-			$info = array();
-		}
-
 		if ( $cache === 'cache' ) {
 			$this->setField( 'info', $info );
 		}
@@ -234,27 +217,22 @@ class ChangeRow extends ORMRow implements Change {
 	 * @return string
 	 */
 	public function serializeInfo( array $info ) {
-		if ( Settings::get( "changesAsJson" ) === true ) {
-			// Make sure we never serialize objects.
-			// This is a lot of overhead, so we only do it during testing.
-			if ( defined( 'MW_PHPUNIT_TEST' ) ) {
-				array_walk_recursive(
-					$info,
-					function ( $v ) {
-						if ( is_object( $v ) ) {
-							throw new MWException( "Refusing to serialize PHP object of type "
-								. get_class( $v ) );
-						}
+		// Make sure we never serialize objects.
+		// This is a lot of overhead, so we only do it during testing.
+		if ( defined( 'MW_PHPUNIT_TEST' ) ) {
+			array_walk_recursive(
+				$info,
+				function ( $v ) {
+					if ( is_object( $v ) ) {
+						throw new MWException( "Refusing to serialize PHP object of type "
+							. get_class( $v ) );
 					}
-				);
-			}
-
-			//XXX: we could JSON_UNESCAPED_UNICODE here, perhaps.
-			return json_encode( $info );
-		} else {
-			// for compatibility with old client code.
-			return serialize( $info );
+				}
+			);
 		}
+
+		//XXX: we could JSON_UNESCAPED_UNICODE here, perhaps.
+		return json_encode( $info );
 	}
 
 	/**
@@ -276,6 +254,12 @@ class ChangeRow extends ORMRow implements Change {
 			$info = unserialize( $str );
 		}
 
+		if ( !is_array( $info ) ) {
+			wfLogWarning( "Failed to unserializeInfo of id: " . $this->getObjectId() );
+			return array();
+		}
+
 		return $info;
 	}
+
 }

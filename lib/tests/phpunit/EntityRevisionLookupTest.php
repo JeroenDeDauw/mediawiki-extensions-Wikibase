@@ -2,12 +2,16 @@
 
 namespace Wikibase\Test;
 
+use ContentHandler;
 use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Entity\EntityRedirect;
+use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\ItemId;
+use Wikibase\DataModel\Entity\Property;
 use Wikibase\DataModel\Entity\PropertyId;
-use Wikibase\EntityLookup;
 use Wikibase\EntityRevision;
-use Wikibase\EntityRevisionLookup;
+use Wikibase\Lib\Store\EntityRevisionLookup;
+use Wikibase\Lib\Store\UnresolvedRedirectException;
 
 /**
  * Base class for testing EntityRevisionLookup implementations
@@ -17,38 +21,81 @@ use Wikibase\EntityRevisionLookup;
  * @licence GNU GPL v2+
  * @author Daniel Kinzler
  */
-abstract class EntityRevisionLookupTest extends EntityLookupTest {
+abstract class EntityRevisionLookupTest extends \MediaWikiTestCase {
+
+	/**
+	 * @return EntityRevision[]
+	 */
+	protected function getTestRevisions() {
+		$entities = array();
+
+		$item = new Item( new ItemId( 'Q42' ) );
+
+		$entities[11] = new EntityRevision( $item, 11, '20130101001100' );
+
+		$item = new Item( new ItemId( 'Q42' ) );
+		$item->setLabel( 'en', "Foo" );
+
+		$entities[12] = new EntityRevision( $item, 12, '20130101001200' );
+
+		$prop = Property::newFromType( "string" );
+		$prop->setId( 753 );
+
+		$entities[13] = new EntityRevision( $prop, 13, '20130101001300' );
+
+		return $entities;
+	}
+
+	/**
+	 * @return EntityRedirect[]
+	 */
+	protected function getTestRedirects() {
+		$redirects = array();
+
+		$redirects[] = new EntityRedirect( new ItemId( 'Q23' ), new ItemId( 'Q42' ) );
+
+		return $redirects;
+	}
+
+	protected function resolveLogicalRevision( $revision ) {
+		return $revision;
+	}
 
 	/**
 	 * @return EntityRevisionLookup
 	 */
 	protected function getEntityRevisionLookup() {
 		$revisions = $this->getTestRevisions();
-		$lookup = $this->newEntityRevisionLookup( $revisions );
+		$redirects = $this->getTestRedirects();
+
+		$lookup = $this->newEntityRevisionLookup( $revisions, $redirects );
 
 		return $lookup;
 	}
 
 	/**
 	 * @param EntityRevision[] $entityRevisions
+	 * @param EntityRedirect[] $entityRedirects
 	 *
 	 * @return EntityRevisionLookup
 	 */
-	protected abstract function newEntityRevisionLookup( array $entityRevisions );
+	abstract protected function newEntityRevisionLookup( array $entityRevisions, array $entityRedirects );
 
-	/**
-	 * @param EntityRevision[] $entities
-	 *
-	 * @return EntityLookup
-	 */
-	protected function newEntityLookup( array $entities ) {
-		return $this->newEntityRevisionLookup( $entities );
+	protected function itemSupportsRedirect() {
+		if ( !defined( 'CONTENT_MODEL_WIKIBASE_ITEM' ) ) {
+			// We currently cannot determine whether redirects are supported if
+			// no repo code is available. Just skip the corresponding tests in that case.
+			return false;
+		}
+
+		$handler = ContentHandler::getForModelID( CONTENT_MODEL_WIKIBASE_ITEM );
+		return $handler->supportsRedirects();
 	}
 
-	public static function provideGetEntityRevision() {
+	public function provideGetEntityRevision() {
 		$cases = array(
 			array( // #0: any revision
-				new ItemId( 'q42' ), 0, true,
+				new ItemId( 'q42' ), EntityRevisionLookup::LATEST_FROM_SLAVE, true,
 			),
 			array( // #1: first revision
 				new ItemId( 'q42' ), 11, true,
@@ -57,16 +104,16 @@ abstract class EntityRevisionLookupTest extends EntityLookupTest {
 				new ItemId( 'q42' ), 12, true,
 			),
 			array( // #3: bad revision
-				new ItemId( 'q42' ), 600000, false, 'Wikibase\StorageException',
+				new ItemId( 'q42' ), 600000, false, 'Wikibase\Lib\Store\StorageException',
 			),
 			array( // #4: wrong type
-				new ItemId( 'q753' ), 0, false,
+				new ItemId( 'q753' ), EntityRevisionLookup::LATEST_FROM_SLAVE, false,
 			),
-			array( // #5: bad revision
-				new PropertyId( 'p753' ), 23, false, 'Wikibase\StorageException',
+			array( // #5: mismatching revision
+				new PropertyId( 'p753' ), 11, false, 'Wikibase\Lib\Store\StorageException',
 			),
 			array( // #6: some revision
-				new PropertyId( 'p753' ), 0, true,
+				new PropertyId( 'p753' ), EntityRevisionLookup::LATEST_FROM_SLAVE, true,
 			),
 		);
 
@@ -77,7 +124,7 @@ abstract class EntityRevisionLookupTest extends EntityLookupTest {
 	 * @dataProvider provideGetEntityRevision
 	 *
 	 * @param EntityId $id    The entity to get
-	 * @param int             $revision The revision to get (or 0)
+	 * @param int             $revision The revision to get (or LATEST_FROM_SLAVE or LATEST_FROM_MASTER)
 	 * @param bool            $shouldExist
 	 * @param string|null     $expectException
 	 */
@@ -94,16 +141,39 @@ abstract class EntityRevisionLookupTest extends EntityLookupTest {
 		if ( $shouldExist == true ) {
 			$this->assertNotNull( $entityRev, "ID " . $id->__toString() );
 			$this->assertEquals( $id->__toString(), $entityRev->getEntity()->getId()->__toString() );
-
-			$has = $lookup->hasEntity( $id );
-			$this->assertTrue( $has, 'hasEntity' );
 		} else {
 			$this->assertNull( $entityRev, "ID " . $id->__toString() );
+		}
+	}
 
-			if ( $revision == 0 ) {
-				$has = $lookup->hasEntity( $id );
-				$this->assertFalse( $has, 'hasEntity' );
-			}
+	public function provideGetEntityRevision_redirect() {
+		$redirects = $this->getTestRedirects();
+		$cases = array();
+
+		foreach ( $redirects as $redirect ) {
+			$cases[] = array( $redirect->getEntityId(), $redirect->getTargetId() );
+		}
+
+		return $cases;
+	}
+
+	/**
+	 * @dataProvider provideGetEntityRevision_redirect
+	 */
+	public function testGetEntityRevision_redirect( EntityId $entityId, EntityId $expectedRedirect ) {
+		if ( !$this->itemSupportsRedirect() ) {
+			$this->markTestSkipped( 'redirects not supported' );
+		}
+
+		$lookup = $this->getEntityRevisionLookup();
+
+		try {
+			$lookup->getEntityRevision( $entityId );
+			$this->fail( 'Expected an UnresolvedRedirectException exception when looking up a redirect.' );
+		} catch ( UnresolvedRedirectException $ex ) {
+			$this->assertEquals( $expectedRedirect, $ex->getRedirectTargetId() );
+			$this->assertGreaterThan( 0, $ex->getRevisionId() );
+			$this->assertNotEmpty( $ex->getRevisionTimestamp() );
 		}
 	}
 
@@ -113,9 +183,6 @@ abstract class EntityRevisionLookupTest extends EntityLookupTest {
 				new ItemId( 'q42' ), 12,
 			),
 			array( // #1
-				new ItemId( 'q753' ), false,
-			),
-			array( // #2
 				new PropertyId( 'p753' ), 13,
 			),
 		);
@@ -135,16 +202,24 @@ abstract class EntityRevisionLookupTest extends EntityLookupTest {
 
 		$expected = $this->resolveLogicalRevision( $expected );
 
+		$this->assertInternalType( 'int', $result );
 		$this->assertEquals( $expected, $result );
 
 		$entityRev = $lookup->getEntityRevision( $id );
+		$this->assertInstanceOf( 'Wikibase\EntityRevision', $entityRev );
+	}
 
-		if ( $expected ) {
-			$this->assertInstanceOf( 'Wikibase\EntityRevision', $entityRev );
-		} else {
-			$this->assertNull( $entityRev );
-		}
+	public function testGetLatestRevisionForMissing() {
+		$lookup = $this->getEntityRevisionLookup();
+		$itemId = new ItemId( 'Q753' );
+
+		$result = $lookup->getLatestRevisionId( $itemId );
+		$expected = $this->resolveLogicalRevision( false );
+
+		$this->assertEquals( $expected, $result );
+
+		$entityRev = $lookup->getEntityRevision( $itemId );
+		$this->assertNull( $entityRev );
 	}
 
 }
-

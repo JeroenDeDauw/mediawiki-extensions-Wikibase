@@ -4,6 +4,8 @@ namespace Wikibase\Lib\Test;
 
 use DataValues\NumberValue;
 use DataValues\QuantityValue;
+use ValueFormatters\BasicNumberLocalizer;
+use ValueFormatters\BasicQuantityUnitFormatter;
 use ValueFormatters\FormatterOptions;
 use ValueFormatters\ValueFormatter;
 use Wikibase\Lib\QuantityDetailsFormatter;
@@ -20,13 +22,19 @@ use Wikibase\Lib\QuantityDetailsFormatter;
  */
 class QuantityDetailsFormatterTest extends \PHPUnit_Framework_TestCase {
 
+	private function newFormatter( FormatterOptions $options = null ) {
+		$numberLocalizer = new BasicNumberLocalizer();
+		$unitFormatter = new BasicQuantityUnitFormatter();
+		$formatter = new QuantityDetailsFormatter( $numberLocalizer, $unitFormatter, $options );
+
+		return $formatter;
+	}
+
 	/**
 	 * @dataProvider quantityFormatProvider
-	 *
-	 * @covers QuantityDetailsFormatter::format
 	 */
 	public function testFormat( $value, $options, $pattern ) {
-		$formatter = new QuantityDetailsFormatter( $options );
+		$formatter = $this->newFormatter( $options );
 
 		$html = $formatter->format( $value );
 		$this->assertRegExp( $pattern, $html );
@@ -54,14 +62,12 @@ class QuantityDetailsFormatterTest extends \PHPUnit_Framework_TestCase {
 		);
 	}
 
-	/**
-	 * @covers QuantityDetailsFormatter::format
-	 */
 	public function testFormatError() {
-		$formatter = new QuantityDetailsFormatter( new FormatterOptions() );
+		$formatter = $formatter = $this->newFormatter();
 		$value = new NumberValue( 23 );
 
 		$this->setExpectedException( 'InvalidArgumentException' );
 		$formatter->format( $value );
 	}
+
 }

@@ -2,9 +2,11 @@
 
 namespace Wikibase;
 
-use DatabaseBase;
-use MessageReporter;
+use RuntimeException;
+use Wikibase\DataModel\Entity\Property;
 use Wikibase\DataModel\Entity\PropertyId;
+use Wikibase\DataModel\Services\Lookup\EntityLookup;
+use Wikibase\Lib\Reporting\MessageReporter;
 
 /**
  * Utility class for rebuilding the wb_property_info table.
@@ -17,70 +19,75 @@ use Wikibase\DataModel\Entity\PropertyId;
 class PropertyInfoTableBuilder {
 
 	/**
-	 * @since 0.4
-	 *
-	 * @var PropertyInfoTable $table
+	 * @var PropertyInfoTable
 	 */
-	protected $table;
+	private $propertyInfoTable;
 
 	/**
 	 * @var EntityLookup
 	 */
-	protected $entityLookup;
+	private $entityLookup;
 
 	/**
-	 * @since 0.4
-	 *
-	 * @var MessageReporter $reporter
+	 * @var PropertyInfoBuilder
 	 */
-	protected $reporter;
+	private $propertyInfoBuilder;
 
 	/**
-	 * @since 0.4
-	 *
+	 * @var MessageReporter|null
+	 */
+	private $reporter = null;
+
+	/**
 	 * @var bool
 	 */
-	protected $useTransactions = true;
+	private $useTransactions = true;
 
 	/**
 	 * Whether all entries should be updated, or only missing entries
 	 *
 	 * @var bool
 	 */
-	protected $all = false;
+	private $shouldUpdateAllEntities = false;
+
+	/**
+	 * Whether to use the epp_redirect_target column.
+	 *
+	 * @var bool
+	 */
+	private $useRedirectTargetColumn;
 
 	/**
 	 * Starting point
 	 *
 	 * @var int
 	 */
-	protected $fromId = 1;
+	private $fromId = 1;
 
 	/**
 	 * The batch size, giving the number of rows to be updated in each database transaction.
 	 *
 	 * @var int
 	 */
-	protected $batchSize = 100;
+	private $batchSize = 100;
 
-	/**
-	 * Constructor.
-	 *
-	 * @since 0.4
-	 *
-	 * @param PropertyInfoTable $table
-	 * @param EntityLookup $entityLookup
-	 */
-	public function __construct( PropertyInfoTable $table, EntityLookup $entityLookup ) {
-		$this->table = $table;
+	public function __construct(
+		PropertyInfoTable $propertyInfoTable,
+		EntityLookup $entityLookup,
+		PropertyInfoBuilder $propertyInfoBuilder,
+		$useRedirectTargetColumn = true
+	) {
+		$this->propertyInfoTable = $propertyInfoTable;
 		$this->entityLookup = $entityLookup;
+		$this->propertyInfoBuilder = $propertyInfoBuilder;
+		$this->useRedirectTargetColumn = $useRedirectTargetColumn;
 	}
 
 	/**
-	 * @return boolean
+	 * @return bool
 	 */
 	public function getRebuildAll() {
-		return $this->all;
+		return $this->shouldUpdateAllEntities;
 	}
 
 	/**
@@ -98,10 +105,10 @@ class PropertyInfoTableBuilder {
 	}
 
 	/**
-	 * @param boolean $all
+	 * @param bool $all
 	 */
 	public function setRebuildAll( $all ) {
-		$this->all = $all;
+		$this->shouldUpdateAllEntities = $all;
 	}
 
 	/**
@@ -148,7 +155,7 @@ class PropertyInfoTableBuilder {
 	 * @since 0.4
 	 */
 	public function rebuildPropertyInfo() {
-		$dbw = $this->table->getWriteConnection();
+		$dbw = $this->propertyInfoTable->getWriteConnection();
 
 		$rowId = $this->fromId -1;
 
@@ -157,11 +164,11 @@ class PropertyInfoTableBuilder {
 		$join = array();
 		$tables = array( 'wb_entity_per_page' );
 
-		if ( !$this->all ) {
+		if ( !$this->shouldUpdateAllEntities ) {
 			// Find properties in wb_entity_per_page with no corresponding
 			// entry in wb_property_info.
 
-			$piTable = $this->table->getTableName();
+			$piTable = $this->propertyInfoTable->getTableName();
 
 			$tables[] = $piTable;
 			$join[$piTable] = array( 'LEFT JOIN',
@@ -174,12 +181,13 @@ class PropertyInfoTableBuilder {
 		while ( true ) {
 			// Make sure we are not running too far ahead of the slaves,
 			// as that would cause the site to be rendered read only.
-			$this->waitForSlaves( $dbw );
+			wfWaitForSlaves();
 
 			if ( $this->useTransactions ) {
 				$dbw->begin();
 			}
 
+			//FIXME: use an EntityIdPager from EntityPerPage
 			$props = $dbw->select(
 				$tables,
 				array(
@@ -188,7 +196,8 @@ class PropertyInfoTableBuilder {
 				array(
 					'epp_entity_type = ' . $dbw->addQuotes( Property::ENTITY_TYPE ),
 					'epp_entity_id > ' . (int) $rowId,
-					$this->all ? '1' : 'pi_property_id IS NULL', // if not $all, only add missing entries
+					$this->useRedirectTargetColumn ? 'epp_redirect_target IS NULL' : '1',
+					$this->shouldUpdateAllEntities ? '1' : 'pi_property_id IS NULL', // if not $all, only add missing entries
 				),
 				__METHOD__,
 				array(
@@ -207,7 +216,7 @@ class PropertyInfoTableBuilder {
 
 			foreach ( $props as $row ) {
 				$id = PropertyId::newFromNumber( (int)$row->epp_entity_id );
-				$this->updatePropertyInfo( $dbw, $id );
+				$this->updatePropertyInfo( $id );
 
 				$rowId = $row->epp_entity_id;
 				$c+= 1;
@@ -217,7 +226,7 @@ class PropertyInfoTableBuilder {
 				$dbw->commit();
 			}
 
-			$this->report( "Updated $c properties, up to ID $rowId." );
+			$this->reportMessage( "Updated $c properties, up to ID $rowId." );
 			$total += $c;
 
 			if ( $c < $this->batchSize ) {
@@ -230,62 +239,32 @@ class PropertyInfoTableBuilder {
 	}
 
 	/**
-	 * Wait for slaves (quietly)
-	 *
-	 * @todo: this should be in the Database class.
-	 * @todo: thresholds should be configurable
-	 *
-	 * @author Tim Starling (stolen from recompressTracked.php)
-	 */
-	protected function waitForSlaves() {
-		$lb = wfGetLB(); //TODO: allow foreign DB, get from $this->table
-
-		while ( true ) {
-			list( $host, $maxLag ) = $lb->getMaxLag();
-			if ( $maxLag < 2 ) {
-				break;
-			}
-
-			$this->report( "Slaves are lagged by $maxLag seconds, sleeping..." );
-			sleep( 5 );
-			$this->report( "Resuming..." );
-		}
-	}
-
-	/**
 	 * Updates the property info entry for the given property.
 	 * The property is loaded in full using the EntityLookup
 	 * provide to the constructor.
 	 *
-	 * @see Wikibase\PropertyInfoUpdate
-	 * @throws \RuntimeException
+	 * @throws RuntimeException
 	 *
-	 * @since 0.4
-	 *
-	 * @param DatabaseBase $dbw the database connection to use
 	 * @param PropertyId $id the Property to process
 	 */
-	protected function updatePropertyInfo( DatabaseBase $dbw, PropertyId $id ) {
+	private function updatePropertyInfo( PropertyId $id ) {
 		$property = $this->entityLookup->getEntity( $id );
 
-		if( !$property instanceof Property ) {
-			throw new \RuntimeException(
-				"EntityLookup didn't return a Property for id " . $id->getPrefixedId()
+		if ( !( $property instanceof Property ) ) {
+			throw new RuntimeException(
+				'EntityLookup did not return a Property for id ' . $id->getSerialization()
 			);
 		}
 
-		$update = new PropertyInfoUpdate( $property, $this->table );
-		$update->doUpdate();
+		$info = $this->propertyInfoBuilder->buildPropertyInfo( $property );
+
+		$this->propertyInfoTable->setPropertyInfo(
+			$property->getId(),
+			$info
+		);
 	}
 
-	/**
-	 * reports a message
-	 *
-	 * @since 0.4
-	 *
-	 * @param $msg
-	 */
-	protected function report( $msg ) {
+	private function reportMessage( $msg ) {
 		if ( $this->reporter ) {
 			$this->reporter->reportMessage( $msg );
 		}

@@ -3,7 +3,7 @@
 namespace Wikibase;
 
 use DatabaseBase;
-use MessageReporter;
+use Wikibase\Lib\Reporting\MessageReporter;
 
 /**
  * Utility class for rebuilding the term_search_key field.
@@ -20,16 +20,16 @@ class TermSearchKeyBuilder {
 	/**
 	 * @since 0.4
 	 *
-	 * @var TermSqlIndex $table
+	 * @var TermSqlIndex
 	 */
 	protected $table;
 
 	/**
 	 * @since 0.4
 	 *
-	 * @var MessageReporter $reporter
+	 * @var MessageReporter|null
 	 */
-	protected $reporter;
+	protected $reporter = null;
 
 	/**
 	 * Whether all keys should be updated, or only missing keys
@@ -39,9 +39,7 @@ class TermSearchKeyBuilder {
 	protected $all = true;
 
 	/**
-	 * Whether all keys should be updated, or only missing keys
-	 *
-	 * @var bool
+	 * @var int
 	 */
 	protected $fromId = 1;
 
@@ -53,8 +51,6 @@ class TermSearchKeyBuilder {
 	protected $batchSize = 100;
 
 	/**
-	 * Constructor.
-	 *
 	 * @since 0.4
 	 *
 	 * @param TermSqlIndex $table
@@ -64,7 +60,7 @@ class TermSearchKeyBuilder {
 	}
 
 	/**
-	 * @return boolean
+	 * @return bool
 	 */
 	public function getRebuildAll() {
 		return $this->all;
@@ -78,14 +74,14 @@ class TermSearchKeyBuilder {
 	}
 
 	/**
-	 * @return boolean
+	 * @return int
 	 */
 	public function getFromId() {
 		return $this->fromId;
 	}
 
 	/**
-	 * @param boolean $all
+	 * @param bool $all
 	 */
 	public function setRebuildAll( $all ) {
 		$this->all = $all;
@@ -99,7 +95,7 @@ class TermSearchKeyBuilder {
 	}
 
 	/**
-	 * @param boolean $fromId
+	 * @param int $fromId
 	 */
 	public function setFromId( $fromId ) {
 		$this->fromId = $fromId;
@@ -126,14 +122,14 @@ class TermSearchKeyBuilder {
 	public function rebuildSearchKey() {
 		$dbw = $this->table->getWriteDb();
 
-		$rowId = $this->fromId -1;
+		$rowId = $this->fromId - 1;
 
 		$total = 0;
 
 		while ( true ) {
 			// Make sure we are not running too far ahead of the slaves,
 			// as that would cause the site to be rendered read only.
-			$this->waitForSlaves( $dbw );
+			wfWaitForSlaves();
 
 			$dbw->begin();
 
@@ -160,13 +156,13 @@ class TermSearchKeyBuilder {
 			$cError = 0;
 
 			foreach ( $terms as $row ) {
-				$key = $this->updateSearchKey( $dbw, $row->term_row_id, $row->term_text, $row->term_language );
+				$key = $this->updateSearchKey( $dbw, $row->term_row_id, $row->term_text );
 
 				if ( $key === false ) {
 					$this->report( "Unable to calculate search key for " . $row->term_text );
 					$cError += 1;
 				} else {
-					$c+= 1;
+					$c += 1;
 				}
 
 				$rowId = $row->term_row_id;
@@ -187,29 +183,6 @@ class TermSearchKeyBuilder {
 	}
 
 	/**
-	 * Wait for slaves (quietly)
-	 *
-	 * @todo: this should be in the Database class.
-	 * @todo: thresholds should be configurable
-	 *
-	 * @author Tim Starling (stolen from recompressTracked.php)
-	 */
-	protected function waitForSlaves() {
-		$lb = wfGetLB(); //TODO: allow foreign DB, get from $this->table
-
-		while ( true ) {
-			list( $host, $maxLag ) = $lb->getMaxLag();
-			if ( $maxLag < 2 ) {
-				break;
-			}
-
-			$this->report( "Slaves are lagged by $maxLag seconds, sleeping..." );
-			sleep( 5 );
-			$this->report( "Resuming..." );
-		}
-	}
-
-	/**
 	 * Updates a single row with a newley calculated search key.
 	 * The search key is calculated using TermSqlIndex::getSearchKey().
 	 *
@@ -220,12 +193,11 @@ class TermSearchKeyBuilder {
 	 * @param \DatabaseBase $dbw the database connection to use
 	 * @param int $rowId the row to update
 	 * @param string $text the term's text
-	 * @param string $lang the term's language
 	 *
 	 * @return string|bool the search key, or false if no search key could be calculated.
 	 */
-	protected function updateSearchKey( \DatabaseBase $dbw, $rowId, $text, $lang ) {
-		$key = $this->table->getSearchKey( $text, $lang );
+	protected function updateSearchKey( \DatabaseBase $dbw, $rowId, $text ) {
+		$key = $this->table->getSearchKey( $text );
 
 		if ( $key === '' ) {
 			wfDebugLog( __CLASS__, __FUNCTION__ . ": failed to normalized term: $text" );
@@ -253,7 +225,7 @@ class TermSearchKeyBuilder {
 	 *
 	 * @since 0.4
 	 *
-	 * @param $msg
+	 * @param string $msg
 	 */
 	protected function report( $msg ) {
 		if ( $this->reporter ) {

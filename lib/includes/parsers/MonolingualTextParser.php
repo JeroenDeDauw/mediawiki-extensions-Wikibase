@@ -2,6 +2,7 @@
 
 namespace Wikibase\Parsers;
 
+use DataValues\IllegalValueException;
 use DataValues\MonolingualTextValue;
 use ValueParsers\ParseException;
 use ValueParsers\StringValueParser;
@@ -13,6 +14,7 @@ use ValueParsers\StringValueParser;
  *
  * @licence GNU GPL v2+
  * @author Daniel Kinzler
+ * @author Thiemo Mättig
  */
 class MonolingualTextParser extends StringValueParser {
 
@@ -21,21 +23,25 @@ class MonolingualTextParser extends StringValueParser {
 	/**
 	 * @see StringValueParser::stringParse
 	 *
-	 * @note Uses the "lang" option to set the language code in
-	 * the MonolingualTextValue
-	 *
-	 * @since 0.5
+	 * @note Uses the "valuelang" option to set the language code in the MonolingualTextValue.
 	 *
 	 * @param string $value
 	 *
+	 * @throws ParseException if the "valuelang" option is missing or empty
 	 * @return MonolingualTextValue
-	 * @throws ParseException
 	 */
 	protected function stringParse( $value ) {
-		$this->getOptions()->defaultOption( 'lang', 'en' );
-		$lang = $this->getOptions()->getOption( 'lang' );
+		if ( !$this->options->hasOption( 'valuelang' ) ) {
+			throw new ParseException( 'Cannot construct a MonolingualTextValue without a language code.' );
+		}
 
-		return new MonolingualTextValue( trim( $lang ), trim( $value ) );
+		$lang = $this->getOption( 'valuelang' );
+
+		try {
+			return new MonolingualTextValue( trim( $lang ), trim( $value ) );
+		} catch ( IllegalValueException $ex ) {
+			throw new ParseException( $ex->getMessage() );
+		}
 	}
 
 }

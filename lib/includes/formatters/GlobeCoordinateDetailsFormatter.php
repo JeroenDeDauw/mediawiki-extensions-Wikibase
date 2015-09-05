@@ -2,13 +2,13 @@
 
 namespace Wikibase\Lib;
 
-use DataValues\GlobeCoordinateValue;
+use DataValues\Geo\Formatters\GeoCoordinateFormatter;
+use DataValues\Geo\Formatters\GlobeCoordinateFormatter;
+use DataValues\Geo\Values\GlobeCoordinateValue;
 use Html;
 use InvalidArgumentException;
 use Message;
 use ValueFormatters\FormatterOptions;
-use ValueFormatters\GeoCoordinateFormatter;
-use ValueFormatters\GlobeCoordinateFormatter;
 use ValueFormatters\ValueFormatter;
 use ValueFormatters\ValueFormatterBase;
 
@@ -28,17 +28,15 @@ class GlobeCoordinateDetailsFormatter extends ValueFormatterBase {
 	protected $coordinateFormatter;
 
 	/**
-	 * @param FormatterOptions $options
+	 * @param FormatterOptions|null $options
 	 */
-	public function __construct( FormatterOptions $options ) {
+	public function __construct( FormatterOptions $options = null ) {
 		parent::__construct( $options );
 
-		if ( !$options->hasOption( GeoCoordinateFormatter::OPT_FORMAT ) ) {
-			//TODO: what'S a good default? Should this be locale dependant? Configurable?
-			$options->setOption( GeoCoordinateFormatter::OPT_FORMAT, GeoCoordinateFormatter::TYPE_DMS );
-		}
+		// TODO: What's a good default? Should this be locale dependant? Configurable?
+		$this->defaultOption( GeoCoordinateFormatter::OPT_FORMAT, GeoCoordinateFormatter::TYPE_DMS );
 
-		$this->coordinateFormatter = new GlobeCoordinateFormatter( $options );
+		$this->coordinateFormatter = new GlobeCoordinateFormatter( $this->options );
 	}
 
 	/**
@@ -47,14 +45,14 @@ class GlobeCoordinateDetailsFormatter extends ValueFormatterBase {
 	 *
 	 * @since 0.5
 	 *
-	 * @param GlobeCoordinateValue $value The ID to format
+	 * @param GlobeCoordinateValue $value
 	 *
 	 * @throws InvalidArgumentException
-	 * @return string
+	 * @return string HTML
 	 */
 	public function format( $value ) {
 		if ( !( $value instanceof GlobeCoordinateValue ) ) {
-			throw new InvalidArgumentException( 'Data value type mismatch. Expected an GlobeCoordinateValue.' );
+			throw new InvalidArgumentException( 'Data value type mismatch. Expected a GlobeCoordinateValue.' );
 		}
 
 		$html = '';
@@ -107,8 +105,11 @@ class GlobeCoordinateDetailsFormatter extends ValueFormatterBase {
 	protected function getFieldLabel( $fieldName ) {
 		$lang = $this->getOption( ValueFormatter::OPT_LANG );
 
-		// Messages: wb-globedetails-amount, wb-globedetails-upperbound,
-		// wb-globedetails-lowerbound, wb-globedetails-unit
+		// Messages:
+		// wikibase-globedetails-latitude
+		// wikibase-globedetails-longitude
+		// wikibase-globedetails-precision
+		// wikibase-globedetails-globe
 		$key = 'wikibase-globedetails-' . strtolower( $fieldName );
 		$msg = wfMessage( $key )->inLanguage( $lang );
 

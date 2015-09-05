@@ -23,18 +23,18 @@ class LanguageFallbackChainFactory {
 	const FALLBACK_ALL = 0xff;
 
 	/**
-	 * The language itself. eg. 'en' for 'en'.
+	 * The language itself, e.g. 'en' for 'en'.
 	 */
 	const FALLBACK_SELF = 1;
 
 	/**
 	 * Other compatible languages that can be translated into the requested language
-	 * (and translation is automatically done). eg. 'sr', 'sr-ec' and 'sr-el' for 'sr'.
+	 * (and translation is automatically done), e.g. 'sr', 'sr-ec' and 'sr-el' for 'sr'.
 	 */
 	const FALLBACK_VARIANTS = 2;
 
 	/**
-	 * All other language from the system fallback chain. eg. 'de' and 'en' for 'de-formal'.
+	 * All other language from the system fallback chain, e.g. 'de' and 'en' for 'de-formal'.
 	 */
 	const FALLBACK_OTHERS = 4;
 
@@ -120,7 +120,7 @@ class LanguageFallbackChainFactory {
 	/**
 	 * Build fallback chain array for a given language or validated language code.
 	 *
-	 * @param $language Language object or language code as string
+	 * @param Language|string $language Language object or language code as string
 	 * @param int $mode Bitfield of self::FALLBACK_*
 	 * @param LanguageFallbackChain[] $chain for recursive calls
 	 * @param array $fetched for recursive calls
@@ -128,8 +128,6 @@ class LanguageFallbackChainFactory {
 	 * @return LanguageWithConversion[]
 	 */
 	public function buildFromLanguage( $language, $mode, &$chain = array(), &$fetched = array() ) {
-		wfProfileIn( __METHOD__ );
-
 		if ( is_string( $language ) ) {
 			$languageCode = $language;
 		} else {
@@ -191,7 +189,6 @@ class LanguageFallbackChainFactory {
 			}
 		}
 
-		wfProfileOut( __METHOD__ );
 		return $chain;
 	}
 
@@ -227,20 +224,14 @@ class LanguageFallbackChainFactory {
 	 * @return LanguageFallbackChain
 	 */
 	public function newFromUserAndLanguageCode( User $user, $languageCode ) {
-		wfProfileIn( __METHOD__ );
-
 		if ( !class_exists( 'Babel' ) || $user->isAnon() ) {
-			$cached =  $this->newFromLanguageCode( $languageCode, self::FALLBACK_ALL );
-			wfProfileOut( __METHOD__ );
-			return $cached;
+			return $this->newFromLanguageCode( $languageCode, self::FALLBACK_ALL );
 		}
 
 		$languageCode = LanguageWithConversion::validateLanguageCode( $languageCode );
 
 		if ( isset( $this->userLanguageCache[$user->getName()][$languageCode] ) ) {
-			$cached = $this->userLanguageCache[$user->getName()][$languageCode];
-			wfProfileOut( __METHOD__ );
-			return $cached;
+			return $this->userLanguageCache[$user->getName()][$languageCode];
 		}
 
 		$babel = $this->getBabel( $languageCode, $user );
@@ -250,7 +241,6 @@ class LanguageFallbackChainFactory {
 
 		$this->userLanguageCache[$user->getName()][$languageCode] = $languageFallbackChain;
 
-		wfProfileOut( __METHOD__ );
 		return $languageFallbackChain;
 	}
 
@@ -303,8 +293,6 @@ class LanguageFallbackChainFactory {
 	 * @return LanguageWithConversion[]
 	 */
 	public function buildFromBabel( array $babel ) {
-		wfProfileIn( __METHOD__ );
-
 		$chain = array();
 		$fetched = array();
 
@@ -336,7 +324,6 @@ class LanguageFallbackChainFactory {
 			}
 		}
 
-		wfProfileOut( __METHOD__ );
 		return $chain;
 	}
 
@@ -345,24 +332,36 @@ class LanguageFallbackChainFactory {
 	 * Caching mechanisms used are taken into consideration.
 	 *
 	 * @param IContextSource $context
+	 * @deprecated 0.5 use newFromUserAndLanguageCodeForPageView or other method.
 	 *
 	 * @return LanguageFallbackChain
 	 */
 	public function newFromContextForPageView( IContextSource $context ) {
+		return $this->newFromUserAndLanguageCodeForPageView(
+			$context->getUser(),
+			$context->getLanguage()->getCode()
+		);
+	}
+
+	/**
+	 * @param User $user
+	 * @param string $languageCode
+	 *
+	 * @return LanguageFallbackChain
+	 */
+	public function newFromUserAndLanguageCodeForPageView( User $user, $languageCode ) {
 		if ( $this->isExperimentalMode ) {
 			// The generated chain should yield a cacheable result
-			if ( $this->anonymousPageViewCached && $context->getUser()->isAnon() ) {
+			if ( $this->anonymousPageViewCached && $user->isAnon() ) {
 				// Anonymous users share the same Squid cache, which is splitted by URL.
-				// That means we can't do anything except for what completely depends by URL such as &uselang=.
-				return $this->newFromLanguage( $context->getLanguage() );
+				// That means we can't do anything except for what completely depends
+				// by URL such as &uselang=.
+				return $this->newFromLanguageCode( $languageCode );
 			}
 
-			return $this->newFromContext( $context );
+			return $this->newFromUserAndLanguageCode( $user, $languageCode );
 		} else {
-			return $this->newFromLanguage(
-				$context->getLanguage(),
-				self::FALLBACK_SELF
-			);
+			return $this->newFromLanguageCode( $languageCode, self::FALLBACK_SELF );
 		}
 	}
 

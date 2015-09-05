@@ -2,11 +2,11 @@
 
 namespace Wikibase\Lib\Test;
 
+use Wikibase\DataModel\Entity\Property;
 use Wikibase\DataModel\Entity\PropertyId;
-use Wikibase\Lib\EntityRetrievingDataTypeLookup;
-use Wikibase\Lib\PropertyDataTypeLookup;
+use Wikibase\DataModel\Services\Lookup\EntityRetrievingDataTypeLookup;
+use Wikibase\DataModel\Services\Lookup\PropertyDataTypeLookup;
 use Wikibase\Lib\PropertyInfoDataTypeLookup;
-use Wikibase\Property;
 use Wikibase\PropertyInfoStore;
 use Wikibase\Test\MockPropertyInfoStore;
 use Wikibase\Test\MockRepository;
@@ -37,8 +37,8 @@ class PropertyInfoDataTypeLookupTest extends \PHPUnit_Framework_TestCase {
 		$emptyInfoStore = new MockPropertyInfoStore();
 		$mockInfoStore = new MockPropertyInfoStore();
 
-		$mockRepo = new MockRepository();
-		$mockDataTypeLookup = new EntityRetrievingDataTypeLookup( $mockRepo );
+		$entityLookup = new MockRepository();
+		$propertyDataTypeLookup = new EntityRetrievingDataTypeLookup( $entityLookup );
 
 		foreach ( $this->propertiesAndTypes as $propertyId => $dataTypeId ) {
 			$id = new PropertyId( $propertyId );
@@ -50,10 +50,9 @@ class PropertyInfoDataTypeLookupTest extends \PHPUnit_Framework_TestCase {
 			);
 
 			// register property as an entity, for the fallback
-			$property = Property::newEmpty();
+			$property = Property::newFromType( $dataTypeId );
 			$property->setId( $id );
-			$property->setDataTypeId( $dataTypeId );
-			$mockRepo->putEntity( $property );
+			$entityLookup->putEntity( $property );
 
 			// try with a working info store
 			$argLists[] = array(
@@ -66,7 +65,7 @@ class PropertyInfoDataTypeLookupTest extends \PHPUnit_Framework_TestCase {
 			// try with via fallback
 			$argLists[] = array(
 				$emptyInfoStore,
-				$mockDataTypeLookup,
+				$propertyDataTypeLookup,
 				$id,
 				$dataTypeId
 			);
@@ -86,7 +85,7 @@ class PropertyInfoDataTypeLookupTest extends \PHPUnit_Framework_TestCase {
 		// try with via fallback
 		$argLists[] = array(
 			$emptyInfoStore,
-			$mockDataTypeLookup,
+			$propertyDataTypeLookup,
 			$id,
 			false
 		);
@@ -104,7 +103,7 @@ class PropertyInfoDataTypeLookupTest extends \PHPUnit_Framework_TestCase {
 		$expectedDataType
 	) {
 		if ( $expectedDataType === false ) {
-			$this->setExpectedException( 'Wikibase\Lib\PropertyNotFoundException' );
+			$this->setExpectedException( 'Wikibase\DataModel\Services\Lookup\PropertyDataTypeLookupException' );
 		}
 
 		$lookup = new PropertyInfoDataTypeLookup( $infoStore, $fallbackLookup );

@@ -2,8 +2,7 @@
 
 namespace Wikibase\Test;
 
-use Wikibase\DataModel\SimpleSiteLink;
-use Wikibase\Item;
+use Wikibase\DataModel\Entity\Item;
 use Wikibase\Repo\ItemSearchTextGenerator;
 
 /**
@@ -14,19 +13,20 @@ use Wikibase\Repo\ItemSearchTextGenerator;
  *
  * @licence GNU GPL v2+
  * @author Katie Filbert < aude.wiki@gmail.com >
+ * @author Thiemo Mättig
  */
 class ItemSearchTextGeneratorTest extends \PHPUnit_Framework_TestCase {
 
 	public function generateProvider() {
-		$item = Item::newEmpty();
+		$item = new Item();
 
 		$item->setLabel( 'en', 'Test' );
 		$item->setLabel( 'de', 'Testen' );
 		$item->setDescription( 'en', 'city in Spain' );
 		$item->setAliases( 'en', array( 'abc', 'cde' ) );
 		$item->setAliases( 'de', array( 'xyz', 'uvw' ) );
-		$item->addSiteLink( new SimpleSiteLink( 'dewiki', 'Berlin' ) );
-		$item->addSiteLink( new SimpleSiteLink( 'enwiki', 'Rome' ) );
+		$item->getSiteLinkList()->addNewSiteLink( 'dewiki', 'Berlin' );
+		$item->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Rome' );
 
 		$patterns = array(
 			'/^Test$/',
@@ -48,9 +48,8 @@ class ItemSearchTextGeneratorTest extends \PHPUnit_Framework_TestCase {
 
 	/**
 	 * @dataProvider generateProvider
-	 *
 	 * @param Item $item
-	 * @param array $patterns
+	 * @param string[] $patterns
 	 */
 	public function testGenerate( Item $item, array $patterns ) {
 		$generator = new ItemSearchTextGenerator();
@@ -59,6 +58,24 @@ class ItemSearchTextGeneratorTest extends \PHPUnit_Framework_TestCase {
 		foreach ( $patterns as $pattern ) {
 			$this->assertRegExp( $pattern . 'm', $text );
 		}
+	}
+
+	public function testGivenEmptyItem_emptyStringIsReturned() {
+		$generator = new ItemSearchTextGenerator();
+		$item = new Item();
+		$text = $generator->generate( $item );
+
+		$this->assertSame( '', $text );
+	}
+
+	public function testGivenUntrimmedPageName_generateDoesNotTrim() {
+		$item = new Item();
+		$item->getFingerprint()->setLabel( 'en', ' untrimmed label ' );
+		$item->getSiteLinkList()->addNewSiteLink( 'enwiki', ' untrimmed pageName ' );
+		$generator = new ItemSearchTextGenerator();
+		$text = $generator->generate( $item );
+
+		$this->assertSame( " untrimmed label \n untrimmed pageName ", $text );
 	}
 
 }

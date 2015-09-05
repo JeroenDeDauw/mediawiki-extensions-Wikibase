@@ -1,6 +1,7 @@
 <?php
 
 namespace Wikibase;
+
 use IORMRow;
 use MWException;
 
@@ -15,19 +16,21 @@ use MWException;
 class ChangesTable extends \ORMTable implements ChunkAccess {
 
 	/**
-	 * Constructor.
-	 *
-	 * @param String|null $changesDatabase the logical name of the database to interact with.
+	 * @param string|bool|null $changesDatabase the logical name of the database to interact with
+	 *        (or false if the local wiki shall be used).
 	 *        If null, Settings::get( 'changesDatabase' ) will be used to determine the target DB.
 	 *
 	 * @since 0.1
 	 */
 	public function __construct( $changesDatabase = null ) {
 		if ( $changesDatabase === null ) {
-			$changesDatabase = Settings::get( 'changesDatabase' );
+			$settings = Settings::singleton();
+			$changesDatabase = $settings->getSetting( 'changesDatabase' );
 		}
 
 		$this->setTargetWiki( $changesDatabase );
+
+		$this->fieldPrefix = 'change_';
 	}
 
 	/**
@@ -40,21 +43,12 @@ class ChangesTable extends \ORMTable implements ChunkAccess {
 	}
 
 	/**
-	 * @see ORMTable::getFieldPrefix()
-	 * @since 0.1
-	 * @return string
-	 */
-	protected function getFieldPrefix() {
-		return 'change_';
-	}
-
-	/**
 	 * @see IORMTable::getRowClass()
 	 * @since 0.1
 	 * @return string
 	 */
 	public function getRowClass() {
-		return '\Wikibase\ChangeRow';
+		return 'Wikibase\ChangeRow';
 	}
 
 	/**
@@ -85,7 +79,8 @@ class ChangesTable extends \ORMTable implements ChunkAccess {
 	 * @return string
 	 */
 	public static function getClassForType( $type ) {
-		$typeMap = Settings::get( 'changeHandlers' );
+		$settings = Settings::singleton();
+		$typeMap = $settings->getSetting( 'changeHandlers' );
 		return array_key_exists( $type, $typeMap ) ? $typeMap[$type] : 'Wikibase\ChangeRow';
 	}
 
@@ -117,11 +112,10 @@ class ChangesTable extends \ORMTable implements ChunkAccess {
 	 *
 	 * @param ChangeRow|IORMRow $row
 	 *
+	 * @throws MWException
 	 * @return array
 	 */
 	protected function getWriteValues( IORMRow $row ) {
-		assert( $row instanceof ChangeRow );
-
 		$values = parent::getWriteValues( $row );
 
 		$infoField = $this->getPrefixedField( 'info' );
@@ -129,6 +123,10 @@ class ChangesTable extends \ORMTable implements ChunkAccess {
 		$userIdField = $this->getPrefixedField( 'user_id' );
 
 		if ( isset( $values[$infoField] ) ) {
+			if ( !( $row instanceof ChangeRow ) ) {
+				throw new MWException( '$row must be a ChangeRow.' );
+			}
+
 			$values[$infoField] = $row->serializeInfo( $values[$infoField] );
 		}
 
@@ -152,12 +150,10 @@ class ChangesTable extends \ORMTable implements ChunkAccess {
 	 * @return Change[]
 	 */
 	public function loadChunk( $start, $size ) {
-		wfProfileIn( __METHOD__ );
-
-		$changes = $this->selectObjects(
+		return $this->selectObjects(
 			null,
 			array(
-				'id >= ' . intval( $start )
+				'id >= ' . (int)$start
 			),
 			array(
 				'LIMIT' => $size,
@@ -165,9 +161,6 @@ class ChangesTable extends \ORMTable implements ChunkAccess {
 			),
 			__METHOD__
 		);
-
-		wfProfileOut( __METHOD__ );
-		return $changes;
 	}
 
 	/**
@@ -181,4 +174,5 @@ class ChangesTable extends \ORMTable implements ChunkAccess {
 		/* @var Change $rec */
 		return $rec->getId();
 	}
+
 }

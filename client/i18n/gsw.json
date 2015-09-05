@@ -1,14 +1,23 @@
 {
 	"@metadata": {
 		"authors": [
-			"Als-Holder"
+			"Als-Holder",
+			"J. 'mach' wust"
 		]
 	},
 	"wikibase-client-desc": "Macht e Client fir d Erwyterig Wikibase megli",
+	"tooltip-t-wikibase": "Link zum verbundenen Objäkt im Daterepositorium",
 	"wikibase-after-page-move": "Du chasch au s zuegordnet Wikidata-Elemänt [$1 aktualisiere], go Sprochlink vu verschobene Syte verwalte.",
+	"wikibase-comment-update": "S {{WBREPONAME}}-Objäkt isch gänderet wore",
+	"wikibase-dataitem": "{{WBREPONAME}}-Datenobjäkt",
 	"wikibase-editlinks": "Links bearbeite",
 	"wikibase-editlinkstitle": "Sprachibergryfigi Link bearbeite",
-	"wikibase-rc-hide-wikidata": "Wikidata $1",
+	"wikibase-rc-hide-wikidata": "{{WBREPONAME}} $1",
 	"wikibase-rc-hide-wikidata-hide": "uusblände",
-	"wikibase-rc-hide-wikidata-show": "aazeige"
+	"wikibase-rc-hide-wikidata-show": "aazeige",
+	"wikibase-rc-wikibase-edit-letter": "D",
+	"wikibase-rc-wikibase-edit-title": "{{WBREPONAME}}-Bearbeitig",
+	"wikibase-otherprojects": "Andri Projäkt",
+	"wikibase-otherprojects-beta-message": "Syteleiste für anderi Projekt",
+	"wikibase-otherprojects-beta-description": "En Abschnitt «{{int:wikibase-otherprojects}}» chunt zur Syteleiste derzue. Är het Links zu anderne Wikimedia-Projekt, wo uf {{WBREPONAME}}-Date basiere."
 }

@@ -3,55 +3,59 @@
 namespace Wikibase\Test;
 
 use Language;
-use Wikibase\CopyrightMessageBuilder;
+use Message;
 use Wikibase\Repo\Specials\SpecialPageCopyrightView;
 
 /**
  * @covers Wikibase\Repo\Specials\SpecialPageCopyrightView
  *
  * @group Wikibase
+ * @group WikibaseRepo
+ * @group Database
  *
  * @licence GNU GPL v2+
  * @author Katie Filbert < aude.wiki@gmail.com >
  */
-class SpecialPageCopyrightViewTest extends \PHPUnit_Framework_TestCase {
+class SpecialPageCopyrightViewTest extends \MediaWikiTestCase {
 
 	/**
 	 * @dataProvider getHtmlProvider
 	 */
-	public function testGetHtml( $regex, $matcher, $rightsUrl, $rightsText ) {
-		$lang = Language::factory( 'qqx' );
+	public function testGetHtml( $expected, $message, $languageCode ) {
+		$lang = Language::factory( $languageCode );
 
 		$specialPageCopyrightView = new SpecialPageCopyrightView(
-			new CopyrightMessageBuilder(),
-			$rightsUrl,
-			$rightsText
+			$this->getCopyrightMessageBuilder( $message ), 'x', 'y'
 		);
 
-		$html = $specialPageCopyrightView->getHtml( $lang );
+		$html = $specialPageCopyrightView->getHtml( $lang, 'wikibase-submit' );
+		$this->assertEquals( $expected, $html );
+	}
 
-		$this->assertRegExp( $regex, $html, 'message html includes wikibase-save and copyrightpage' );
-		$this->assertTag( $matcher, $html, 'message html includes license link and text' );
+	private function getCopyrightMessageBuilder( Message $message ) {
+		$copyrightMessageBuilder = $this->getMockBuilder( 'Wikibase\CopyrightMessageBuilder' )
+			->getMock();
+
+		$copyrightMessageBuilder->expects( $this->any() )
+			->method( 'build' )
+			->will( $this->returnValue( $message ) );
+
+		return $copyrightMessageBuilder;
 	}
 
 	public function getHtmlProvider() {
+		$message = new Message(
+			'wikibase-shortcopyrightwarning',
+			array( 'wikibase-submit', 'copyrightpage', 'copyrightlink' )
+		);
+
 		return array(
 			array(
-				'/\(wikibase-shortcopyrightwarning: \(wikibase-save\), ' .
-				preg_quote( wfMessage( 'copyrightpage' )->inContentLanguage()->text(), '/' ) .
-				'/',
-				array(
-					'tag' => 'a',
-					'attributes' => array(
-						'href' => 'https://creativecommons.org'
-					),
-					'content' => 'Creative Commons Attribution-Share Alike 3.0'
-				),
-				'https://creativecommons.org',
-				'Creative Commons Attribution-Share Alike 3.0'
+				'<div>(wikibase-shortcopyrightwarning: wikibase-submit, copyrightpage, copyrightlink)</div>',
+				$message,
+				'qqx'
 			)
 		);
 	}
 
 }
-

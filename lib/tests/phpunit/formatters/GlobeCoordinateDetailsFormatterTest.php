@@ -2,8 +2,8 @@
 
 namespace Wikibase\Lib\Test;
 
-use DataValues\GlobeCoordinateValue;
-use DataValues\LatLongValue;
+use DataValues\Geo\Values\GlobeCoordinateValue;
+use DataValues\Geo\Values\LatLongValue;
 use DataValues\NumberValue;
 use ValueFormatters\FormatterOptions;
 use ValueFormatters\ValueFormatter;
@@ -23,8 +23,6 @@ class GlobeCoordinateDetailsFormatterTest extends \PHPUnit_Framework_TestCase {
 
 	/**
 	 * @dataProvider quantityFormatProvider
-	 *
-	 * @covers GlobeCoordinateDetailsFormatter::format
 	 */
 	public function testFormat( $value, $options, $pattern ) {
 		$formatter = new GlobeCoordinateDetailsFormatter( $options );
@@ -55,9 +53,6 @@ class GlobeCoordinateDetailsFormatterTest extends \PHPUnit_Framework_TestCase {
 		);
 	}
 
-	/**
-	 * @covers GlobeCoordinateDetailsFormatter::format
-	 */
 	public function testFormatError() {
 		$formatter = new GlobeCoordinateDetailsFormatter( new FormatterOptions() );
 		$value = new NumberValue( 23 );
@@ -65,4 +60,5 @@ class GlobeCoordinateDetailsFormatterTest extends \PHPUnit_Framework_TestCase {
 		$this->setExpectedException( 'InvalidArgumentException' );
 		$formatter->format( $value );
 	}
+
 }

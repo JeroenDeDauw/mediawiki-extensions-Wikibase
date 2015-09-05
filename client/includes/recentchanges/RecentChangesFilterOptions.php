@@ -1,10 +1,11 @@
 <?php
 
-namespace Wikibase;
+namespace Wikibase\Client\RecentChanges;
+
+use FormOptions;
 use Wikibase\Client\WikibaseClient;
 
 /**
- *
  * @since 0.4
  *
  * @licence GNU GPL v2+
@@ -14,14 +15,12 @@ class RecentChangesFilterOptions {
 
 	private $opts;
 
-	public function __construct( \FormOptions $opts ) {
+	public function __construct( FormOptions $opts ) {
 		$this->opts = $opts;
 	}
 
 	/**
 	 * Is Wikibase recent changes feature disabled?
-	 *
-	 * @since 0.4
 	 *
 	 * @return bool
 	 */
@@ -40,8 +39,6 @@ class RecentChangesFilterOptions {
 	/**
 	 * Is hidewikidata filter selected?
 	 *
-	 * @since 0.4
-	 *
 	 * @return bool
 	 */
 	private function hideWikibase() {
@@ -56,8 +53,6 @@ class RecentChangesFilterOptions {
 	 * Is the enhanced changes format used?
 	 *
 	 * @note this is temporary and we will support enhanced changes in the near future
-	 *
-	 * @since 0.4
 	 *
 	 * @return bool
 	 */

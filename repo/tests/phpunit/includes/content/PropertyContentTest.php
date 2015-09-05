@@ -2,6 +2,10 @@
 
 namespace Wikibase\Test;
 
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Entity\Property;
+use Wikibase\DataModel\Entity\PropertyId;
+use Wikibase\DataModel\Snak\PropertyNoValueSnak;
 use Wikibase\PropertyContent;
 
 /**
@@ -19,35 +23,64 @@ use Wikibase\PropertyContent;
 class PropertyContentTest extends EntityContentTest {
 
 	/**
-	 * @see EntityContentTest::getContentClass
+	 * @return PropertyId
 	 */
-	protected function getContentClass() {
-		return '\Wikibase\PropertyContent';
+	protected function getDummyId() {
+		return new PropertyId( 'P100' );
 	}
 
 	/**
-	 * @see EntityContentTest::newEmpty
-	 */
-	protected function newEmpty() {
-		$content = PropertyContent::newEmpty();
-		$content->getProperty()->setDataTypeId( 'string' );
-
-		return $content;
-	}
-
-	/**
-	 * Injects a property data type into the generic entity data array.
+	 * @param EntityId $propertyId
 	 *
-	 * @param array $data
-	 *
-	 * @return array
+	 * @return PropertyContent
 	 */
-	protected function prepareEntityData( array $data ) {
+	protected function newEmpty( EntityId $propertyId = null ) {
+		$empty = PropertyContent::newEmpty();
 
-		if ( !isset( $data['datatype'] ) ) {
-			$data['datatype'] = 'string';
+		if ( $propertyId !== null ) {
+			$empty->getProperty()->setId( $propertyId );
 		}
 
-		return $data;
+		return $empty;
 	}
+
+	public function provideGetEntityId() {
+		$p11 = new PropertyId( 'P11' );
+
+		return array(
+			'property id' => array( $this->newEmpty( $p11 ), $p11 ),
+		);
+	}
+
+	public function testIsEmpty_emptyProperty() {
+		$content = PropertyContent::newFromProperty( Property::newFromType( 'foo' ) );
+		$this->assertTrue( $content->isEmpty() );
+	}
+
+	public function testIsEmpty_nonEmptyProperty() {
+		$Property = Property::newFromType( 'foo' );
+		$Property->setLabel( 'en', '~=[,,_,,]:3' );
+		$content = PropertyContent::newFromProperty( $Property );
+		$this->assertFalse( $content->isEmpty() );
+	}
+
+	public function testIsStub_stubProperty() {
+		$Property = Property::newFromType( 'foo' );
+		$Property->setLabel( 'en', '~=[,,_,,]:3' );
+		$content = PropertyContent::newFromProperty( $Property );
+		$this->assertTrue( $content->isStub() );
+	}
+
+	public function testIsStub_emptyProperty() {
+		$content = PropertyContent::newFromProperty( Property::newFromType( 'foo' ) );
+		$this->assertFalse( $content->isStub() );
+	}
+
+	public function testIsStub_nonStubProperty() {
+		$Property = Property::newFromType( 'foo' );
+		$Property->getStatements()->addNewStatement( new PropertyNoValueSnak( 42 ) );
+		$content = PropertyContent::newFromProperty( $Property );
+		$this->assertFalse( $content->isStub() );
+	}
+
 }

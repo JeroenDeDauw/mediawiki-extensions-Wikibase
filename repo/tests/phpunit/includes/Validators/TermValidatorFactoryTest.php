@@ -2,20 +2,21 @@
 
 namespace Wikibase\Test;
 
-use Wikibase\DataModel\Entity\BasicEntityIdParser;
 use Wikibase\DataModel\Entity\Item;
+use Wikibase\DataModel\Entity\ItemId;
 use Wikibase\DataModel\Entity\Property;
+use Wikibase\DataModel\Entity\BasicEntityIdParser;
 use Wikibase\DataModel\Term\AliasGroupList;
 use Wikibase\DataModel\Term\Fingerprint;
 use Wikibase\DataModel\Term\Term;
 use Wikibase\DataModel\Term\TermList;
-use Wikibase\Validators\TermValidatorFactory;
+use Wikibase\Repo\Validators\TermValidatorFactory;
 
 /**
- * @covers TermValidatorFactory
+ * @covers Wikibase\Repo\Validators\TermValidatorFactory
  *
- * @group WikibaseLib
  * @group Wikibase
+ * @group WikibaseRepo
  * @group WikibaseValidators
  *
  * @license GPL 2+
@@ -24,28 +25,27 @@ use Wikibase\Validators\TermValidatorFactory;
 class TermValidatorFactoryTest extends \PHPUnit_Framework_TestCase {
 
 	/**
-	 * @param $maxLength
-	 * @param $languages
+	 * @param int $maxLength
+	 * @param string[] $languageCodes
 	 *
 	 * @return TermValidatorFactory
 	 */
-	protected function newFactory( $maxLength, $languages ) {
+	private function newFactory( $maxLength, array $languageCodes ) {
 		$idParser = new BasicEntityIdParser();
 
 		$mockProvider = new ChangeOpTestMockProvider( $this );
 		$dupeDetector = $mockProvider->getMockLabelDescriptionDuplicateDetector();
-		$siteLinkLookup = $mockProvider->getMockSitelinkCache();
 
-		$builders = new TermValidatorFactory( $maxLength, $languages, $idParser, $dupeDetector, $siteLinkLookup );
+		$builders = new TermValidatorFactory( $maxLength, $languageCodes, $idParser, $dupeDetector );
 		return $builders;
 	}
 
-	public function testGetUniquenessValidator() {
+	public function testGetFingerprintValidator() {
 		$builders = $this->newFactory( 20, array( 'ja', 'ru' ) );
 
 		$validator = $builders->getFingerprintValidator( Item::ENTITY_TYPE );
 
-		$this->assertInstanceOf( 'Wikibase\Validators\FingerprintValidator', $validator );
+		$this->assertInstanceOf( 'Wikibase\Repo\Validators\FingerprintValidator', $validator );
 
 		$goodFingerprint = new Fingerprint(
 			new TermList( array(
@@ -54,7 +54,7 @@ class TermValidatorFactoryTest extends \PHPUnit_Framework_TestCase {
 			new TermList( array(
 				new Term( 'en', 'bla' ),
 			) ),
-			new AliasGroupList( array() )
+			new AliasGroupList()
 		);
 
 		$labelDupeFingerprint = new Fingerprint(
@@ -64,11 +64,13 @@ class TermValidatorFactoryTest extends \PHPUnit_Framework_TestCase {
 			new TermList( array(
 				new Term( 'en', 'DUPE' ),
 			) ),
-			new AliasGroupList( array() )
+			new AliasGroupList()
 		);
 
-		$this->assertTrue( $validator->validateFingerprint( $goodFingerprint )->isValid(), 'isValid(good)' );
-		$this->assertFalse( $validator->validateFingerprint( $labelDupeFingerprint )->isValid(), 'isValid(bad): label/description' );
+		$q99 = new ItemId( 'Q99' );
+
+		$this->assertTrue( $validator->validateFingerprint( $goodFingerprint, $q99 )->isValid(), 'isValid(good)' );
+		$this->assertFalse( $validator->validateFingerprint( $labelDupeFingerprint, $q99 )->isValid(), 'isValid(bad): label/description' );
 	}
 
 	public function testGetLanguageValidator() {
@@ -112,7 +114,7 @@ class TermValidatorFactoryTest extends \PHPUnit_Framework_TestCase {
 	public function testGetDescriptionValidator() {
 		$builders = $this->newFactory( 8, array( 'en' ) );
 
-		$validator = $builders->getDescriptionValidator( Item::ENTITY_TYPE );
+		$validator = $builders->getDescriptionValidator();
 
 		$this->assertInstanceOf( 'ValueValidators\ValueValidator', $validator );
 

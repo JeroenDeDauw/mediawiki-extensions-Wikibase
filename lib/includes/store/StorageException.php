@@ -1,13 +1,11 @@
 <?php
 
-namespace Wikibase;
+namespace Wikibase\Lib\Store;
 
 use Exception;
 use Status;
 
 /**
- * Copyright © 06.06.13 by the authors listed below.
- *
  * @license GPL 2+
  *
  * @author Daniel Kinzler
@@ -15,9 +13,9 @@ use Status;
 class StorageException extends \MWException {
 
 	/**
-	 * @var Status
+	 * @var Status|null
 	 */
-	private $status;
+	private $status = null;
 
 	/**
 	 * @param string|Status $status
@@ -25,7 +23,6 @@ class StorageException extends \MWException {
 	 * @param Exception $previous
 	 */
 	public function __construct( $status = "", $code = 0, Exception $previous = null ) {
-
 		if ( $status instanceof Status ) {
 			$message = $status->getWikiText();
 			$this->status = $status;
@@ -37,7 +34,7 @@ class StorageException extends \MWException {
 	}
 
 	/**
-	 * @return \Status
+	 * @return Status|null
 	 */
 	public function getStatus() {
 		return $this->status;

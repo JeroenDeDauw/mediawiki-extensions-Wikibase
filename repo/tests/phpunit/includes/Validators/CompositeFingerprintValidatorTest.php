@@ -1,16 +1,17 @@
 <?php
 
-namespace Wikibase\Validators\Test;
+namespace Wikibase\Test\Repo\Validators;
 
 use ValueValidators\Error;
 use ValueValidators\Result;
+use Wikibase\DataModel\Entity\ItemId;
 use Wikibase\DataModel\Term\AliasGroupList;
 use Wikibase\DataModel\Term\Fingerprint;
 use Wikibase\DataModel\Term\TermList;
-use Wikibase\Validators\CompositeFingerprintValidator;
+use Wikibase\Repo\Validators\CompositeFingerprintValidator;
 
 /**
- * @covers Wikibase\Validators\CompositeFingerprintValidator
+ * @covers Wikibase\Repo\Validators\CompositeFingerprintValidator
  *
  * @group Wikibase
  * @group WikibaseRepo
@@ -24,12 +25,12 @@ class CompositeFingerprintValidatorTest extends \PHPUnit_Framework_TestCase {
 		$success = Result::newSuccess();
 		$failure = Result::newError( array( Error::newError( 'Foo!' ) ) );
 
-		$good = $this->getMock( 'Wikibase\Validators\FingerprintValidator' );
+		$good = $this->getMock( 'Wikibase\Repo\Validators\FingerprintValidator' );
 		$good->expects( $this->any() )
 			->method( 'validateFingerprint' )
 			->will( $this->returnValue( $success ) );
 
-		$bad = $this->getMock( 'Wikibase\Validators\FingerprintValidator' );
+		$bad = $this->getMock( 'Wikibase\Repo\Validators\FingerprintValidator' );
 		$bad->expects( $this->any() )
 			->method( 'validateFingerprint' )
 			->will( $this->returnValue( $failure ) );
@@ -47,13 +48,13 @@ class CompositeFingerprintValidatorTest extends \PHPUnit_Framework_TestCase {
 	 */
 	public function testValidateFingerprint( $validators, $expected ) {
 		$fingerprint = new Fingerprint(
-			new TermList( array() ),
-			new TermList( array() ),
-			new AliasGroupList( array() )
+			new TermList(),
+			new TermList(),
+			new AliasGroupList()
 		);
 
 		$validator = new CompositeFingerprintValidator( $validators );
-		$result = $validator->validateFingerprint( $fingerprint );
+		$result = $validator->validateFingerprint( $fingerprint, new ItemId( 'Q99' ) );
 
 		$this->assertEquals( $expected, $result->isValid(), 'isValid' );
 	}

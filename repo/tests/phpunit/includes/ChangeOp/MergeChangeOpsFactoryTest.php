@@ -2,11 +2,11 @@
 
 namespace Wikibase\Test;
 
+use PHPUnit_Framework_TestCase;
 use Wikibase\ChangeOp\ChangeOpFactoryProvider;
 use Wikibase\ChangeOp\MergeChangeOpsFactory;
 use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\ItemId;
-use Wikibase\Validators\EntityConstraintProvider;
 
 /**
  * @covers Wikibase\ChangeOp\MergeChangeOpsFactory
@@ -18,7 +18,7 @@ use Wikibase\Validators\EntityConstraintProvider;
  * @licence GNU GPL v2+
  * @author Daniel Kinzler
  */
-class MergeChangeOpsFactoryTest extends \PHPUnit_Framework_TestCase {
+class MergeChangeOpsFactoryTest extends PHPUnit_Framework_TestCase {
 
 	/**
 	 * @return MergeChangeOpsFactory
@@ -28,29 +28,30 @@ class MergeChangeOpsFactoryTest extends \PHPUnit_Framework_TestCase {
 
 		$toItemId = new ItemId( 'Q3' );
 
-		$constraintProvider = new EntityConstraintProvider(
-			$mockProvider->getMockLabelDescriptionDuplicateDetector(),
-			$mockProvider->getMockSitelinkCache()
-		);
+		$constraintProvider = $this->getMockBuilder( 'Wikibase\Repo\Validators\EntityConstraintProvider' )
+			->disableOriginalConstructor()
+			->getMock();
 
-		$changeOpFactoryProvider =  new ChangeOpFactoryProvider(
+		$changeOpFactoryProvider = new ChangeOpFactoryProvider(
 			$constraintProvider,
 			$mockProvider->getMockGuidGenerator(),
 			$mockProvider->getMockGuidValidator(),
 			$mockProvider->getMockGuidParser( $toItemId ),
 			$mockProvider->getMockSnakValidator(),
-			$mockProvider->getMockTermValidatorFactory()
+			$mockProvider->getMockTermValidatorFactory(),
+			MockSiteStore::newFromTestSites()
 		);
 
 		return new MergeChangeOpsFactory(
 			$constraintProvider,
-			$changeOpFactoryProvider
+			$changeOpFactoryProvider,
+			MockSiteStore::newFromTestSites()
 		);
 	}
 
 	public function testNewMergeOps() {
-		$fromItem = Item::newEmpty();
-		$toItem = Item::newEmpty();
+		$fromItem = new Item();
+		$toItem = new Item();
 
 		$op = $this->newChangeOpFactory()->newMergeOps( $fromItem, $toItem );
 		$this->assertInstanceOf( 'Wikibase\ChangeOp\ChangeOpsMerge', $op );

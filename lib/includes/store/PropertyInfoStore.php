@@ -4,10 +4,12 @@ namespace Wikibase;
 
 use DBError;
 use Wikibase\DataModel\Entity\PropertyId;
+use Wikibase\Lib\Store\StorageException;
 
 /**
  * @license GPL 2+
  * @author Daniel Kinzler
+ * @author Bene* < benestar.wikimedia@gmail.com >
  */
 interface PropertyInfoStore {
 
@@ -15,6 +17,11 @@ interface PropertyInfoStore {
 	 * Key to use in the info array for the property's data type ID.
 	 */
 	const KEY_DATA_TYPE = 'type';
+
+	/**
+	 * Key to use in the info array for the property's formatter URL
+	 */
+	const KEY_FORMATTER_URL = 'formatterURL';
 
 	/**
 	 * Returns the property info for the given property ID.
@@ -32,11 +39,26 @@ interface PropertyInfoStore {
 	public function getPropertyInfo( PropertyId $propertyId );
 
 	/**
+	 * Returns the property info for all properties with the given data type.
+	 *
+	 * @note: There is no guarantee that an info array is returned for all existing properties.
+	 *        Also, it is not guaranteed that the info arrays will contain all well known fields.
+	 *
+	 * @param string $dataType
+	 *
+	 * @return array[] An associative array mapping property IDs to info arrays.
+	 *
+	 * @throws StorageException
+	 * @throws DBError
+	 */
+	public function getPropertyInfoForDataType( $dataType );
+
+	/**
 	 * Returns the property info for all properties.
 	 * The caller is responsible for avoiding calling this if there are too many properties.
 	 *
 	 * @note: There is no guarantee that an info array is returned for all existing properties.
-	 *        Also, it is not guaranteed that the ionfo arrays will contain all well known fields.
+	 *        Also, it is not guaranteed that the info arrays will contain all well known fields.
 	 *
 	 * @return array[] An associative array mapping property IDs to info arrays.
 	 *

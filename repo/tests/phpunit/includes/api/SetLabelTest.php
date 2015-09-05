@@ -1,9 +1,9 @@
 <?php
 
-namespace Wikibase\Test\Api;
+namespace Wikibase\Test\Repo\Api;
 
 /**
- * @covers Wikibase\Api\SetLabel
+ * @covers Wikibase\Repo\Api\SetLabel
  *
  * @group Database
  * @group medium
@@ -23,12 +23,12 @@ class SetLabelTest extends ModifyTermTestCase {
 
 	private static $hasSetup;
 
-	public function setUp() {
+	protected function setUp() {
 		parent::setUp();
 
 		self::$testAction = 'wbsetlabel';
 
-		if( !isset( self::$hasSetup ) ){
+		if ( !isset( self::$hasSetup ) ) {
 			$this->initTestEntities( array( 'Empty' ) );
 		}
 		self::$hasSetup = true;
@@ -37,14 +37,15 @@ class SetLabelTest extends ModifyTermTestCase {
 	/**
 	 * @dataProvider provideData
 	 */
-	public function testSetLabel( $params, $expected ){
-		self::doTestSetTerm( 'labels' ,$params, $expected );
+	public function testSetLabel( $params, $expected ) {
+		self::doTestSetTerm( 'labels', $params, $expected );
 	}
 
 	/**
 	 * @dataProvider provideExceptionData
 	 */
-	public function testSetLabelExceptions( $params, $expected ){
+	public function testSetLabelExceptions( $params, $expected ) {
 		self::doTestSetTermExceptions( $params, $expected );
 	}
+
 }

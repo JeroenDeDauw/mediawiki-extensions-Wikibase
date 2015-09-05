@@ -1,0 +1,125 @@
+/**
+ * @licence GNU GPL v2+
+ * @author H. Snater < mediawiki@snater.com >
+ */
+.wikibase-entitytermsforlanguagelistview {
+	border: 1px solid #C9C9C9;
+	border-spacing: 0;
+	display: table;
+	padding-bottom: 1em;
+	table-layout: fixed;
+	width: 100%;
+	word-wrap: break-word;
+}
+.wikibase-entitytermsforlanguagelistview.wb-edit {
+	border-color: #2779AA;
+}
+
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-header tr td {
+	padding: 0;
+}
+
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-header .wikibase-entitytermsforlanguagelistview-header-row .wikibase-entitytermsforlanguagelistview-cell {
+	background-color: #E8E8E8;
+	border-right: 1px solid white;
+	padding-left: 0.4em;
+	vertical-align: top;
+}
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-header .wikibase-entitytermsforlanguagelistview-header-row .wikibase-entitytermsforlanguagelistview-cell:last-child {
+	border-right: 0;
+}
+.wikibase-entitytermsforlanguagelistview.wb-edit .wikibase-entitytermsforlanguagelistview-header .wikibase-entitytermsforlanguagelistview-header-row .wikibase-entitytermsforlanguagelistview-cell {
+	background: #D6F3FF;
+}
+
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-header .wikibase-entitytermsforlanguagelistview-header-row .wikibase-entitytermsforlanguagelistview-language {
+	width: 15%;
+}
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-header .wikibase-entitytermsforlanguagelistview-header-row .wikibase-entitytermsforlanguagelistview-label {
+	width: 25%;
+}
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-header .wikibase-entitytermsforlanguagelistview-header-row .wikibase-entitytermsforlanguagelistview-description {
+	width: 35%;
+}
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-header .wikibase-entitytermsforlanguagelistview-header-row .wikibase-entitytermsforlanguagelistview-aliases {
+	width: 25%;
+}
+
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-language,
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-label,
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-description,
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-aliases {
+	line-height: 136%;
+	overflow: hidden;
+	padding-left: 0.4em;
+	padding-right: 0.4em;
+	padding-top: 0.8em;
+	text-overflow: ellipsis;
+	vertical-align: top;
+}
+
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-language {
+	width: 4%;
+	word-wrap: normal;
+}
+
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-aliases .wikibase-aliasesview .wikibase-aliasesview-list-item {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview textarea {
+	white-space: pre-wrap; /* IE implicitly inherits nowrap from container (.wikibase-*view-container) */
+}
+
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-label input,
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-description input,
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-label textarea,
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-description textarea {
+	border: 0;
+	border-bottom: 1px solid #C9C9C9;
+	outline: none;
+}
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-label input:focus,
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-description input:focus,
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-label textarea:focus,
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-description textarea:focus{
+	border-color: #0b0080;
+}
+
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-aliases li {
+	background: none;
+	border: 0;
+	clear: both;
+	margin: 0;
+	padding: 0;
+	width: 100%;
+}
+
+.wikibase-entitytermsview .wikibase-entitytermsview-entitytermsforlanguagelistview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-language {
+	word-wrap: normal;
+}
+
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-aliases .wikibase-aliasesview-list {
+	padding: 0;
+}
+
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-aliases .tagadata-label-text {
+	padding: 0;
+}
+
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-aliases .tagadata-close {
+	display: none;
+}
+
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-aliases .ui-state-default {
+	color: #000000;
+}
+
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-aliases input {
+	border-bottom: 1px solid #C9C9C9;
+}
+.wikibase-entitytermsforlanguagelistview .wikibase-entitytermsforlanguagelistview-listview .wikibase-entitytermsforlanguageview .wikibase-entitytermsforlanguageview-aliases input:focus {
+	border-color: #0b0080;
+}

@@ -3,13 +3,13 @@
 namespace Wikibase\Repo\Specials;
 
 use Html;
-use UserInputException;
 use Wikibase\ChangeOp\ChangeOp;
 use Wikibase\ChangeOp\ChangeOpException;
 use Wikibase\ChangeOp\ChangeOpValidationException;
 use Wikibase\CopyrightMessageBuilder;
 use Wikibase\DataModel\Entity\Entity;
 use Wikibase\EntityRevision;
+use Wikibase\Lib\UserInputException;
 use Wikibase\Repo\WikibaseRepo;
 use Wikibase\Summary;
 
@@ -26,23 +26,19 @@ abstract class SpecialModifyEntity extends SpecialWikibaseRepoPage {
 	/**
 	 * @since 0.5
 	 *
-	 * @var EntityRevision
+	 * @var EntityRevision|null
 	 */
-	protected $entityRevision;
+	protected $entityRevision = null;
 
 	/**
-	 * @since 0.5
-	 *
 	 * @var string
 	 */
-	protected $rightsUrl;
+	private $rightsUrl;
 
 	/**
-	 * @since 0.5
-	 *
 	 * @var string
 	 */
-	protected $rightsText;
+	private $rightsText;
 
 	/**
 	 * @since 0.4
@@ -60,18 +56,14 @@ abstract class SpecialModifyEntity extends SpecialWikibaseRepoPage {
 	}
 
 	/**
-	 * Main method
+	 * @see SpecialWikibasePage::execute
 	 *
 	 * @since 0.4
 	 *
-	 * @param string $subPage
-	 *
-	 * @return boolean
+	 * @param string|null $subPage
 	 */
 	public function execute( $subPage ) {
-		if ( !parent::execute( $subPage ) ) {
-			return false;
-		}
+		parent::execute( $subPage );
 
 		$this->checkPermissions();
 		$this->checkBlocked();
@@ -89,7 +81,7 @@ abstract class SpecialModifyEntity extends SpecialWikibaseRepoPage {
 
 		$summary = false;
 		$valid = $this->validateInput();
-		$entity = $this->entityRevision == null ? null : $this->entityRevision->getEntity();
+		$entity = $this->entityRevision === null ? null : $this->entityRevision->getEntity();
 
 		if ( $valid ) {
 			$summary = $this->modifyEntity( $entity );
@@ -108,14 +100,11 @@ abstract class SpecialModifyEntity extends SpecialWikibaseRepoPage {
 				$errors = $status->getErrorsArray();
 				$this->showErrorHTML( $this->msg( $errors[0][0], array_slice( $errors[0], 1 ) )->parse() );
 				$this->setForm( $entity );
-			}
-			else {
+			} else {
 				$entityUrl = $this->getEntityTitle( $entity->getId() )->getFullUrl();
 				$this->getOutput()->redirect( $entityUrl );
 			}
 		}
-
-		return true;
 	}
 
 	/**
@@ -126,40 +115,35 @@ abstract class SpecialModifyEntity extends SpecialWikibaseRepoPage {
 	 * @param string $subPage
 	 */
 	protected function prepareArguments( $subPage ) {
-		$parts = ( $subPage === '' ) ? array() : explode( '/', $subPage, 2 );
+		$parts = $subPage === '' ? array() : explode( '/', $subPage, 2 );
 
-		// Get id
-		$rawId = $this->getRequest()->getVal( 'id', isset( $parts[0] ) ? $parts[0] : null );
+		$idString = $this->getRequest()->getVal( 'id', isset( $parts[0] ) ? $parts[0] : null );
 
-		if ( !$rawId ) {
+		if ( !$idString ) {
 			return;
 		}
 
-		$id = $this->parseEntityId( $rawId );
-
-		$this->entityRevision = $this->loadEntity( $id );
+		$entityId = $this->parseEntityId( $idString );
+		$this->entityRevision = $this->loadEntity( $entityId );
 	}
-
 
 	/**
 	 * @todo could factor this out into a special page form builder and renderer
 	 */
-	protected function addCopyrightText() {
+	private function addCopyrightText() {
 		$copyrightView = new SpecialPageCopyrightView(
 			new CopyrightMessageBuilder(),
 			$this->rightsUrl,
 			$this->rightsText
 		);
 
-		$html = $copyrightView->getHtml( $this->getLanguage() );
-
+		$submitKey = 'wikibase-' . strtolower( $this->getName() ) . '-submit';
+		$html = $copyrightView->getHtml( $this->getLanguage(), $submitKey );
 		$this->getOutput()->addHTML( $html );
 	}
 
 	/**
 	 * Building the HTML form for modifying an entity.
-	 *
-	 * @since 0.5
 	 *
 	 * @param Entity $entity
 	 */
@@ -205,10 +189,11 @@ abstract class SpecialModifyEntity extends SpecialWikibaseRepoPage {
 		$this->getOutput()->addHTML( $this->getFormElements( $entity ) );
 
 		// Form body
+		$submitKey = 'wikibase-' . strtolower( $this->getName() ) . '-submit';
 		$this->getOutput()->addHTML(
 			Html::input(
-				'wikibase-' . strtolower( $this->getName() ) . '-submit',
-				$this->msg( 'wikibase-' . strtolower( $this->getName() ) . '-submit' )->text(),
+				$submitKey,
+				$this->msg( $submitKey )->text(),
 				'submit',
 				array(
 					'id' => 'wb-' . strtolower( $this->getName() ) . '-submit',
@@ -232,16 +217,15 @@ abstract class SpecialModifyEntity extends SpecialWikibaseRepoPage {
 	 *
 	 * @param Entity $entity
 	 *
-	 * @return string
+	 * @return string HTML
 	 */
 	protected function getFormElements( Entity $entity = null ) {
-		return Html::element(
-			'label',
-			array(
-				'for' => 'wb-modifyentity-id',
-				'class' => 'wb-label'
-			),
-			$this->msg( 'wikibase-modifyentity-id' )->text()
+		$id = 'wb-modifyentity-id';
+
+		return Html::label(
+			$this->msg( 'wikibase-modifyentity-id' )->text(),
+			$id,
+			array( 'class' => 'wb-label' )
 		)
 		. Html::input(
 			'id',
@@ -249,21 +233,9 @@ abstract class SpecialModifyEntity extends SpecialWikibaseRepoPage {
 			'text',
 			array(
 				'class' => 'wb-input',
-				'id' => 'wb-modifyentity-id'
+				'id' => $id
 			)
-		)
-		. Html::element( 'br' );
-	}
-
-	/**
-	 * Returns the summary for the given module.
-	 *
-	 * @param string|null $module
-	 *
-	 * @return Summary
-	 */
-	protected function getSummary( $module = null ) {
-		return new Summary( $module );
+		);
 	}
 
 	/**
@@ -278,13 +250,7 @@ abstract class SpecialModifyEntity extends SpecialWikibaseRepoPage {
 	 * continue by calling modifyEntity().
 	 */
 	protected function validateInput() {
-		$request = $this->getRequest();
-
-		if ( $this->entityRevision === null || !$request->wasPosted() ) {
-			return false;
-		}
-
-		return true;
+		return $this->entityRevision !== null && $this->getRequest()->wasPosted();
 	}
 
 	/**
@@ -296,7 +262,7 @@ abstract class SpecialModifyEntity extends SpecialWikibaseRepoPage {
 	 *
 	 * @return Summary|bool
 	 */
-	protected abstract function modifyEntity( Entity $entity );
+	abstract protected function modifyEntity( Entity $entity );
 
 	/**
 	 * Applies the given ChangeOp to the given Entity.
@@ -319,4 +285,5 @@ abstract class SpecialModifyEntity extends SpecialWikibaseRepoPage {
 
 		$changeOp->apply( $entity, $summary );
 	}
+
 }

@@ -1,25 +1,46 @@
 <?php
 
-namespace Wikibase;
+namespace Wikibase\Client;
 
+use Html;
 use Title;
+use Wikibase\DataModel\Entity\EntityId;
 use Wikibase\DataModel\Entity\EntityIdParser;
+use Wikibase\NamespaceChecker;
 
 /**
  * @since 0.4
  *
  * @licence GNU GPL v2+
  * @author Katie Filbert < aude.wiki@gmail.com >
+ * @author Marius Hoch < hoo@online.de >
  */
 class RepoItemLinkGenerator {
 
-	private $namespacesChecker;
+	/**
+	 * @var NamespaceChecker
+	 */
+	private $namespaceChecker;
 
+	/**
+	 * @var RepoLinker
+	 */
 	private $repoLinker;
 
+	/**
+	 * @var EntityIdParser
+	 */
 	private $entityIdParser;
 
-	private $siteGroup;
+	/**
+	 * @var string
+	 */
+	private $langLinkSiteGroup;
+
+	/**
+	 * @var string
+	 */
+	private $siteGlobalId;
 
 	/**
 	 * @since 0.4
@@ -27,15 +48,21 @@ class RepoItemLinkGenerator {
 	 * @param NamespaceChecker $namespaceChecker
 	 * @param RepoLinker       $repoLinker
 	 * @param EntityIdParser   $entityIdParser
-	 * @param string           $siteGroup
+	 * @param string           $langLinkSiteGroup
+	 * @param string           $siteGlobalId
 	 */
-	public function __construct( NamespaceChecker $namespaceChecker, RepoLinker $repoLinker,
-		EntityIdParser $entityIdParser, $siteGroup ) {
-
+	public function __construct(
+		NamespaceChecker $namespaceChecker,
+		RepoLinker $repoLinker,
+		EntityIdParser $entityIdParser,
+		$langLinkSiteGroup,
+		$siteGlobalId
+	) {
 		$this->namespaceChecker = $namespaceChecker;
 		$this->repoLinker = $repoLinker;
 		$this->entityIdParser = $entityIdParser;
-		$this->siteGroup = $siteGroup;
+		$this->langLinkSiteGroup = $langLinkSiteGroup;
+		$this->siteGlobalId = $siteGlobalId;
 	}
 
 	/**
@@ -43,98 +70,149 @@ class RepoItemLinkGenerator {
 	 *
 	 * @param Title $title
 	 * @param string $action
-	 * @param boolean $isAnon
-	 * @param array|null $noExternalLangLinks
+	 * @param bool $hasLangLinks
+	 * @param string[]|null $noExternalLangLinks
 	 * @param string|null $prefixedId
 	 *
-	 * @return array|null
+	 * @return string|null HTML or null for no link
 	 */
-	public function getLink( Title $title, $action, $isAnon, $noExternalLangLinks, $prefixedId ) {
-		$editLink = null;
-
+	public function getLink( Title $title, $action, $hasLangLinks, array $noExternalLangLinks = null, $prefixedId ) {
 		if ( $this->canHaveLink( $title, $action, $noExternalLangLinks ) ) {
+			$entityId = null;
+
 			if ( is_string( $prefixedId ) ) {
 				$entityId = $this->entityIdParser->parse( $prefixedId );
-
-				// link to the associated item on the repo
-				$editLink = $this->getEditLinksLink( $entityId );
-			} else {
-				if ( !$isAnon ) {
-					$editLink = $this->getAddLinksLink();
-				}
 			}
+
+			if ( $entityId && $hasLangLinks ) {
+				return $this->getEditLinksLink( $entityId );
+			}
+
+			return $this->getAddLinksLink( $title, $entityId );
 		}
 
-		return $editLink;
+		return null;
 	}
 
 	/**
 	 * @param Title $title
 	 * @param string $action
-	 * @param mixed $noExternalLangLinks
+	 * @param string[]|null $noExternalLangLinks
 	 *
-	 * @return boolean
+	 * @return bool
 	 */
-	private function canHaveLink( Title $title, $action, $noExternalLangLinks ) {
+	private function canHaveLink( Title $title, $action, array $noExternalLangLinks = null ) {
 		if ( $action !== 'view' ) {
 			return false;
 		}
 
-		if ( $this->namespaceChecker->isWikibaseEnabled( $title->getNamespace() ) && $title->exists() ) {
-
-			if ( ! $this->isSuppressed( $noExternalLangLinks ) ) {
-				return true;
-			}
+		if ( $this->namespaceChecker->isWikibaseEnabled( $title->getNamespace() )
+			&& $title->exists()
+			&& !$this->isSuppressed( $noExternalLangLinks )
+		) {
+			return true;
 		}
 
 		return false;
 	}
 
 	/**
-	 * @param mixed
+	 * @param string[]|null $noExternalLangLinks
 	 *
-	 * @return boolean
+	 * @return bool
 	 */
-	private function isSuppressed( $noExternalLangLinks ) {
-		if ( $noExternalLangLinks === null || !in_array( '*', $noExternalLangLinks ) ) {
-			return false;
-		}
-
-		return true;
+	private function isSuppressed( array $noExternalLangLinks = null ) {
+		return $noExternalLangLinks !== null && in_array( '*', $noExternalLangLinks );
 	}
 
 	/**
-	 * @param EntityId
+	 * @param EntityId $entityId
 	 *
-	 * @return array
+	 * @return string HTML
 	 */
 	private function getEditLinksLink( EntityId $entityId ) {
-		$fragment = '#sitelinks-' . htmlspecialchars( $this->siteGroup, ENT_QUOTES );
-
 		$link = array(
-			'action' => 'edit',
-			'href' => $this->repoLinker->getEntityUrl( $entityId ) . $fragment,
-			'text' => wfMessage( 'wikibase-editlinks' )->text(),
+			'href' => $this->getEntityUrl( $entityId ),
 			'title' => wfMessage( 'wikibase-editlinkstitle' )->text(),
 			'class' => 'wbc-editpage',
 		);
 
-		return $link;
+		$text = wfMessage( 'wikibase-editlinks' )->text();
+		return $this->formatLink( $link, 'edit', $text );
 	}
 
 	/**
-	 * Used by the LinkItem js widget
+	 * Links to the item or Special:NewItem on the repo. The link might get
+	 * overwritten by the JavaScript add links widget.
 	 *
-	 * @return array
+	 * @param Title $title
+	 * @param EntityId|null $entityId Entity which $title is linked to
+	 *
+	 * @return string HTML
 	 */
-	private function getAddLinksLink() {
+	private function getAddLinksLink( Title $title, EntityId $entityId = null ) {
+		if ( $entityId ) {
+			$href = $this->getEntityUrl( $entityId );
+		} else {
+			$href = $this->getNewItemUrl( $title );
+		}
+
 		$link = array(
-			'action' => 'add',
-			'text' => '',
-			'id' => 'wbc-linkToItem',
-			'class' => 'wbc-editpage wbc-nolanglinks',
+			'href' => $href,
+			'title' => wfMessage( 'wikibase-addlinkstitle' )->text(),
+			'class' => 'wbc-editpage',
 		);
 
-		return $link;
+		$text = wfMessage( 'wikibase-linkitem-addlinks' )->text();
+		return $this->formatLink( $link, 'add', $text );
 	}
+
+	/**
+	 * @param Title $title
+	 *
+	 * @return string
+	 */
+	private function getNewItemUrl( Title $title ) {
+		$params = array(
+			'site' => $this->siteGlobalId,
+			'page' => $title->getPrefixedText()
+		);
+
+		$url = $this->repoLinker->getPageUrl( 'Special:NewItem' );
+		$url = $this->repoLinker->addQueryParams( $url, $params );
+
+		return $url;
+	}
+
+	/**
+	 * @param EntityId $entityId
+	 *
+	 * @return string
+	 */
+	private function getEntityUrl( EntityId $entityId ) {
+		$fragment = '#sitelinks-' . htmlspecialchars( $this->langLinkSiteGroup, ENT_QUOTES );
+		return $this->repoLinker->getEntityUrl( $entityId ) . $fragment;
+	}
+
+	/**
+	 * @param array $link
+	 * @param string $action
+	 * @param string $text
+	 *
+	 * @return string HTML
+	 */
+	private function formatLink( array $link, $action, $text ) {
+		$link = Html::element( 'a', $link, $text );
+
+		$html = Html::rawElement(
+			'span',
+			array(
+				'class' => "wb-langlinks-$action wb-langlinks-link"
+			),
+			$link
+		);
+
+		return $html;
+	}
+
 }

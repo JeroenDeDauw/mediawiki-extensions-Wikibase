@@ -1,0 +1,69 @@
+.wikibase-rankselector {
+	border: none;
+	background: none transparent;
+	cursor: pointer;
+}
+
+.wikibase-rankselector.ui-state-disabled {
+	cursor: default;
+}
+
+.wikibase-rankselector .ui-icon.ui-icon-rankselector {
+	/* @embed */ background-image: url(images/rankselector.png);
+	width: 6px;
+	height: 20px;
+}
+
+.wikibase-rankselector .ui-icon.wikibase-rankselector-preferred {
+	background-position: 0;
+}
+
+.wikibase-rankselector .ui-icon.wikibase-rankselector-normal {
+	background-position: -7px;
+}
+
+.wikibase-rankselector .ui-icon.wikibase-rankselector-deprecated {
+	background-position: -14px;
+}
+
+.wikibase-rankselector.ui-state-disabled .ui-icon.wikibase-rankselector-preferred {
+	background-position: -21px;
+}
+
+.wikibase-rankselector.ui-state-disabled .ui-icon.wikibase-rankselector-normal {
+	background-position: -28px;
+}
+
+.wikibase-rankselector.ui-state-disabled .ui-icon.wikibase-rankselector-deprecated {
+	background-position: -35px;
+}
+
+.wikibase-rankselector.ui-state-default .ui-icon.wikibase-rankselector-preferred {
+	background-position: -42px;
+}
+
+.wikibase-rankselector.ui-state-default .ui-icon.wikibase-rankselector-normal {
+	background-position: -49px;
+}
+
+.wikibase-rankselector.ui-state-default .ui-icon.wikibase-rankselector-deprecated {
+	background-position: -56px;
+}
+
+.wikibase-rankselector.ui-state-hover .ui-icon.wikibase-rankselector-preferred {
+	background-position: -63px;
+}
+
+.wikibase-rankselector.ui-state-hover .ui-icon.wikibase-rankselector-normal {
+	background-position: -70px;
+}
+
+.wikibase-rankselector.ui-state-hover .ui-icon.wikibase-rankselector-deprecated {
+	background-position: -77px;
+}
+
+.wikibase-rankselector-menu {
+	cursor: pointer;
+	position: absolute;
+	z-index: 2; /* Monobook #content has 2 */
+}

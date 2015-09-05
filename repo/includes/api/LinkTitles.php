@@ -1,14 +1,19 @@
 <?php
 
-namespace Wikibase\Api;
+namespace Wikibase\Repo\Api;
 
 use ApiBase;
 use ApiMain;
+use Site;
+use SiteList;
 use Status;
+use Wikibase\DataModel\Entity\Entity;
 use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\SiteLink;
+use Wikibase\DataModel\SiteLinkList;
+use Wikibase\Lib\Store\EntityRevisionLookup;
+use Wikibase\Repo\SiteLinkTargetProvider;
 use Wikibase\Repo\WikibaseRepo;
-use Wikibase\StoreFactory;
 use Wikibase\Summary;
 
 /**
@@ -20,7 +25,7 @@ use Wikibase\Summary;
  * @author John Erling Blad < jeblad@gmail.com >
  * @author Adam Shorland
  */
-class LinkTitles extends ApiWikibase {
+class LinkTitles extends ApiBase {
 
 	/**
 	 * @var SiteLinkTargetProvider
@@ -28,11 +33,29 @@ class LinkTitles extends ApiWikibase {
 	private $siteLinkTargetProvider;
 
 	/**
-	 * @since 0.5
-	 *
-	 * @var array
+	 * @var ApiErrorReporter
 	 */
-	protected $siteLinkGroups;
+	private $errorReporter;
+
+	/**
+	 * @var string[]
+	 */
+	private $siteLinkGroups;
+
+	/**
+	 * @var EntityRevisionLookup
+	 */
+	private $revisionLookup;
+
+	/**
+	 * @var ResultBuilder
+	 */
+	private $resultBuilder;
+
+	/**
+	 * @var EntitySavingHelper
+	 */
+	private $entitySavingHelper;
 
 	/**
 	 * @param ApiMain $mainModule
@@ -44,9 +67,25 @@ class LinkTitles extends ApiWikibase {
 	public function __construct( ApiMain $mainModule, $moduleName, $modulePrefix = '' ) {
 		parent::__construct( $mainModule, $moduleName, $modulePrefix );
 		$wikibaseRepo = WikibaseRepo::getDefaultInstance();
+		$apiHelperFactory = $wikibaseRepo->getApiHelperFactory( $this->getContext() );
 
-		$this->siteLinkTargetProvider = new SiteLinkTargetProvider( $wikibaseRepo->getSiteStore() );
+		$this->revisionLookup = $wikibaseRepo->getEntityRevisionLookup( 'uncached' );
+		$this->errorReporter = $apiHelperFactory->getErrorReporter( $this );
+		$this->resultBuilder = $apiHelperFactory->getResultBuilder( $this );
+		$this->entitySavingHelper = $apiHelperFactory->getEntitySavingHelper( $this );
+		$this->siteLinkTargetProvider = new SiteLinkTargetProvider(
+			$wikibaseRepo->getSiteStore(),
+			$wikibaseRepo->getSettings()->getSetting( 'specialSiteLinkGroups' )
+		);
+
 		$this->siteLinkGroups = $wikibaseRepo->getSettings()->getSetting( 'siteLinkGroups' );
+	}
+
+	/**
+	 * @see EntitySavingHelper::attemptSaveEntity
+	 */
+	protected function attemptSaveEntity( Entity $entity, $summary, $flags = 0 ) {
+		return $this->entitySavingHelper->attemptSaveEntity( $entity, $summary, $flags );
 	}
 
 	/**
@@ -55,26 +94,32 @@ class LinkTitles extends ApiWikibase {
 	 * @since 0.1
 	 */
 	public function execute() {
-		wfProfileIn( __METHOD__ );
+		$lookup = $this->revisionLookup;
 
 		$params = $this->extractRequestParams();
 		$this->validateParameters( $params );
 
 		// Sites are already tested through allowed params ;)
 		$sites = $this->siteLinkTargetProvider->getSiteList( $this->siteLinkGroups );
-		$fromSite = $sites->getSite( $params['fromsite'] );
-		$toSite = $sites->getSite( $params['tosite'] );
 
-		$fromPage = $fromSite->normalizePageName( $params['fromtitle'] );
-		$this->validatePage( $fromPage, 'from' );
-		$toPage = $toSite->normalizePageName( $params['totitle'] );
-		$this->validatePage( $toPage, 'to' );
+		/** @var Site $fromSite */
+		list( $fromSite, $fromPage ) = $this->getSiteAndNormalizedPageName(
+			$sites,
+			$params['fromsite'],
+			$params['fromtitle']
+		);
+		/** @var Site $toSite */
+		list( $toSite, $toPage ) = $this->getSiteAndNormalizedPageName(
+			$sites,
+			$params['tosite'],
+			$params['totitle']
+		);
 
-		$siteLinkCache = StoreFactory::getStore()->newSiteLinkCache();
-		$fromId = $siteLinkCache->getItemIdForLink( $fromSite->getGlobalId(), $fromPage );
-		$toId = $siteLinkCache->getItemIdForLink( $toSite->getGlobalId(), $toPage );
+		$siteLinkStore = WikibaseRepo::getDefaultInstance()->getStore()->newSiteLinkStore();
+		$fromId = $siteLinkStore->getItemIdForLink( $fromSite->getGlobalId(), $fromPage );
+		$toId = $siteLinkStore->getItemIdForLink( $toSite->getGlobalId(), $toPage );
 
-		$return = array();
+		$siteLinkList = new SiteLinkList();
 		$flags = 0;
 		$item = null;
 
@@ -88,64 +133,61 @@ class LinkTitles extends ApiWikibase {
 		// Figure out which parts to use and what to create anew
 		if ( $fromId === null && $toId === null ) {
 			// create new item
-			$item = Item::newEmpty();
+			$item = new Item();
 			$toLink = new SiteLink( $toSite->getGlobalId(), $toPage );
 			$item->addSiteLink( $toLink );
-			$return[] = $toLink;
+			$siteLinkList->addSiteLink( $toLink );
 			$fromLink = new SiteLink( $fromSite->getGlobalId(), $fromPage );
 			$item->addSiteLink( $fromLink );
-			$return[] = $fromLink;
+			$siteLinkList->addSiteLink( $fromLink );
 
 			$flags |= EDIT_NEW;
 			$summary->setAction( 'create' );
-		}
-		elseif ( $fromId === null && $toId !== null ) {
+		} elseif ( $fromId === null && $toId !== null ) {
 			// reuse to-site's item
 			/** @var Item $item */
-			$item = $this->entityLookup->getEntity( $toId );
+			$itemRev = $lookup->getEntityRevision( $toId, EntityRevisionLookup::LATEST_FROM_MASTER );
+			$item = $itemRev->getEntity();
 			$fromLink = new SiteLink( $fromSite->getGlobalId(), $fromPage );
 			$item->addSiteLink( $fromLink );
-			$return[] = $fromLink;
+			$siteLinkList->addSiteLink( $fromLink );
 			$summary->setAction( 'connect' );
-		}
-		elseif ( $fromId !== null && $toId === null ) {
+		} elseif ( $fromId !== null && $toId === null ) {
 			// reuse from-site's item
 			/** @var Item $item */
-			$item = $this->entityLookup->getEntity( $fromId );
+			$itemRev = $lookup->getEntityRevision( $fromId, EntityRevisionLookup::LATEST_FROM_MASTER );
+			$item = $itemRev->getEntity();
 			$toLink = new SiteLink( $toSite->getGlobalId(), $toPage );
 			$item->addSiteLink( $toLink );
-			$return[] = $toLink;
+			$siteLinkList->addSiteLink( $toLink );
 			$summary->setAction( 'connect' );
-		}
-		// we can be sure that $fromId and $toId are not null here
-		elseif ( $fromId->equals( $toId ) ) {
+		} elseif ( $fromId->equals( $toId ) ) {
 			// no-op
-			wfProfileOut( __METHOD__ );
-			$this->dieUsage( 'Common item detected, sitelinks are both on the same item', 'common-item' );
-		}
-		else {
+			$this->errorReporter->dieError( 'Common item detected, sitelinks are both on the same item', 'common-item' );
+		} else {
 			// dissimilar items
-			wfProfileOut( __METHOD__ );
-			$this->dieUsage( 'No common item detected, unable to link titles' , 'no-common-item' );
+			$this->errorReporter->dieError( 'No common item detected, unable to link titles', 'no-common-item' );
 		}
 
-		$this->getResultBuilder()->addSiteLinks( $return, 'entity' );
+		$this->resultBuilder->addSiteLinkList( $siteLinkList, 'entity' );
 		$status = $this->getAttemptSaveStatus( $item, $summary, $flags );
 		$this->buildResult( $item, $status );
-		wfProfileOut( __METHOD__ );
 	}
 
 	/**
-	 * @param string $page
-	 * @param string $label
+	 * @param SiteList $sites
+	 * @param string $site
+	 * @param string $pageTitle
+	 *
+	 * @return array( Site $site, string $pageName )
 	 */
-	private function validatePage( $page, $label ) {
+	private function getSiteAndNormalizedPageName( SiteList $sites, $site, $pageTitle ) {
+		$siteObj = $sites->getSite( $site );
+		$page = $siteObj->normalizePageName( $pageTitle );
 		if ( $page === false ) {
-			$this->dieUsage(
-				"The external client site did not provide page information for the {$label} page" ,
-				'no-external-page'
-			);
+			$this->errorReporter->dieMessage( 'no-external-page', $site, $pageTitle );
 		}
+		return array( $siteObj, $page );
 	}
 
 	/**
@@ -158,8 +200,7 @@ class LinkTitles extends ApiWikibase {
 		if ( $item === null ) {
 			// to not have an Item isn't really bad at this point
 			return Status::newGood( true );
-		}
-		else {
+		} else {
 			// Do the actual save, or if it don't exist yet create it.
 			return $this->attemptSaveEntity( $item,
 				$summary,
@@ -169,68 +210,60 @@ class LinkTitles extends ApiWikibase {
 
 	private function buildResult( Item $item = null, Status $status ) {
 		if ( $item !== null ) {
-			$this->getResultBuilder()->addRevisionIdFromStatusToResult( $status, 'entity' );
-			//FIXME: breaking change, remove forced numeric ids!!!
-			$this->getResultBuilder()->addBasicEntityInformation( $item->getId(), 'entity', true );
+			$this->resultBuilder->addRevisionIdFromStatusToResult( $status, 'entity' );
+			$this->resultBuilder->addBasicEntityInformation( $item->getId(), 'entity' );
 		}
 
-		$this->getResultBuilder()->markSuccess( $status->isOK() );
+		$this->resultBuilder->markSuccess( $status->isOK() );
 	}
 
 	/**
-	 * @see \Wikibase\Api\ModifyEntity::validateParameters()
+	 * @see ModifyEntity::validateParameters
 	 */
 	protected function validateParameters( array $params ) {
 		if ( $params['fromsite'] === $params['tosite'] ) {
-			$this->dieUsage( 'The from site can not match the to site' , 'param-illegal' );
+			$this->errorReporter->dieError( 'The from site cannot match the to site', 'param-illegal' );
 		}
 
-		if( !( strlen( $params['fromtitle'] ) > 0) || !( strlen( $params['totitle'] ) > 0) ){
-			$this->dieUsage( 'The from title and to title must have a value' , 'param-illegal' );
+		if ( $params['fromtitle'] === '' || $params['totitle'] === '' ) {
+			$this->errorReporter->dieError( 'The from title and to title must have a value', 'param-illegal' );
 		}
 	}
 
 	/**
-	 * Returns a list of all possible errors returned by the module
-	 * @return array in the format of array( key, param1, param2, ... ) or array( 'code' => ..., 'info' => ... )
-	 */
-	public function getPossibleErrors() {
-		return array_merge( parent::getPossibleErrors(), array(
-			array( 'code' => 'param-illegal', 'info' => $this->msg( 'wikibase-api-param-illegal' )->text() ),
-			array( 'code' => 'no-external-page', 'info' => $this->msg( 'wikibase-api-no-external-page' )->text() ),
-			array( 'code' => 'common-item', 'info' => $this->msg( 'wikibase-api-common-item' )->text() ),
-			array( 'code' => 'no-common-item', 'info' => $this->msg( 'wikibase-api-no-common-item' )->text() ),
-		) );
-	}
-
-	/**
-	 * @see \ApiBase::isWriteMode()
+	 * @see ApiBase::isWriteMode
 	 */
 	public function isWriteMode() {
 		return true;
 	}
 
 	/**
-	 * Returns an array of allowed parameters (parameter name) => (default
-	 * value) or (parameter name) => (array with PARAM_* constants as keys)
-	 * Don't call this function directly: use getFinalParams() to allow
-	 * hooks to modify parameters as needed.
-	 * @return array|bool
+	 * @see ApiBase::needsToken
+	 *
+	 * @return string
 	 */
-	public function getAllowedParams() {
+	public function needsToken() {
+		return 'csrf';
+	}
+
+	/**
+	 * @see ApiBase::getAllowedParams
+	 */
+	protected function getAllowedParams() {
 		$sites = $this->siteLinkTargetProvider->getSiteList( $this->siteLinkGroups );
+
 		return array_merge( parent::getAllowedParams(), array(
 			'tosite' => array(
-				ApiBase::PARAM_TYPE => $sites->getGlobalIdentifiers(),
+				self::PARAM_TYPE => $sites->getGlobalIdentifiers(),
 			),
 			'totitle' => array(
-				ApiBase::PARAM_TYPE => 'string',
+				self::PARAM_TYPE => 'string',
 			),
 			'fromsite' => array(
-				ApiBase::PARAM_TYPE => $sites->getGlobalIdentifiers(),
+				self::PARAM_TYPE => $sites->getGlobalIdentifiers(),
 			),
 			'fromtitle' => array(
-				ApiBase::PARAM_TYPE => 'string',
+				self::PARAM_TYPE => 'string',
 			),
 			'token' => null,
 			'bot' => false,
@@ -238,54 +271,12 @@ class LinkTitles extends ApiWikibase {
 	}
 
 	/**
-	 * Get final parameter descriptions, after hooks have had a chance to tweak it as
-	 * needed.
-	 *
-	 * @return array|bool False on no parameter descriptions
+	 * @see ApiBase::getExamplesMessages
 	 */
-	public function getParamDescription() {
-		return array_merge( parent::getParamDescription(), array(
-			'tosite' => array( 'An identifier for the site on which the page resides.',
-				"Use together with 'totitle' to make a complete sitelink."
-			),
-			'totitle' => array( 'Title of the page to associate.',
-				"Use together with 'tosite' to make a complete sitelink."
-			),
-			'fromsite' => array( 'An identifier for the site on which the page resides.',
-				"Use together with 'fromtitle' to make a complete sitelink."
-			),
-			'fromtitle' => array( 'Title of the page to associate.',
-				"Use together with 'fromsite' to make a complete sitelink."
-			),
-			'token' => array( 'A "edittoken" token previously obtained through the token module (prop=info).',
-				'Later it can be implemented a mechanism where a token can be returned spontaneously',
-				'and the requester should then start using the new token from the next request, possibly when',
-				'repeating a failed request.'
-			),
-			'bot' => array( 'Mark this edit as bot',
-				'This URL flag will only be respected if the user belongs to the group "bot".'
-			),
-		) );
-	}
-
-	/**
-	 * Returns the description string for this module
-	 * @return mixed string or array of strings
-	 */
-	public function getDescription() {
+	protected function getExamplesMessages() {
 		return array(
-			'API module to associate two articles on two different wikis with a Wikibase item.'
-		);
-	}
-
-	/**
-	 * Returns usage examples for this module. Return false if no examples are available.
-	 * @return bool|string|array
-	 */
-	protected function getExamples() {
-		return array(
-			'api.php?action=wblinktitles&fromsite=enwiki&fromtitle=Hydrogen&tosite=dewiki&totitle=Wasserstoff'
-			=> 'Add a link "Hydrogen" from the English page to "Wasserstoff" at the German page',
+			'action=wblinktitles&fromsite=enwiki&fromtitle=Hydrogen&tosite=dewiki&totitle=Wasserstoff'
+			=> 'apihelp-wblinktitles-example-1',
 		);
 	}
 

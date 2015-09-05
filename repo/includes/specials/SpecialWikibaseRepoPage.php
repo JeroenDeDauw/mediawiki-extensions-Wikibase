@@ -7,18 +7,18 @@ use RuntimeException;
 use SiteStore;
 use Status;
 use Title;
-use UserInputException;
 use Wikibase\DataModel\Entity\Entity;
 use Wikibase\DataModel\Entity\EntityId;
-use Wikibase\EditEntity;
 use Wikibase\DataModel\Entity\ItemId;
-use Wikibase\EntityPermissionChecker;
+use Wikibase\EditEntityFactory;
 use Wikibase\EntityRevision;
-use Wikibase\EntityRevisionLookup;
-use Wikibase\EntityTitleLookup;
-use Wikibase\Lib\Specials\SpecialWikibasePage;
+use Wikibase\Lib\MessageException;
+use Wikibase\Lib\Store\EntityRevisionLookup;
+use Wikibase\Lib\Store\EntityTitleLookup;
+use Wikibase\Lib\Store\StorageException;
+use Wikibase\Lib\Store\UnresolvedRedirectException;
+use Wikibase\Lib\UserInputException;
 use Wikibase\Repo\WikibaseRepo;
-use Wikibase\store\EntityStore;
 use Wikibase\Summary;
 use Wikibase\SummaryFormatter;
 
@@ -39,27 +39,22 @@ abstract class SpecialWikibaseRepoPage extends SpecialWikibasePage {
 	/**
 	 * @var EntityRevisionLookup
 	 */
-	private $entityLookup;
+	private $entityRevisionLookup;
 
 	/**
 	 * @var EntityTitleLookup
 	 */
-	private $titleLookup;
-
-	/**
-	 * @var EntityStore
-	 */
-	private $entityStore;
-
-	/**
-	 * @var EntityPermissionChecker
-	 */
-	private $permissionChecker;
+	private $entityTitleLookup;
 
 	/**
 	 * @var SiteStore
 	 */
 	protected $siteStore;
+
+	/**
+	 * @var EditEntityFactory
+	 */
+	private $editEntityFactory;
 
 	/**
 	 * @since 0.5
@@ -71,13 +66,36 @@ abstract class SpecialWikibaseRepoPage extends SpecialWikibasePage {
 		parent::__construct( $title, $restriction );
 		$wikibaseRepo = WikibaseRepo::getDefaultInstance();
 
-		//TODO: allow overriding services for testing
-		$this->summaryFormatter = $wikibaseRepo->getSummaryFormatter();
-		$this->entityLookup = $wikibaseRepo->getEntityRevisionLookup( 'uncached' );
-		$this->titleLookup = $wikibaseRepo->getEntityTitleLookup();
-		$this->entityStore = $wikibaseRepo->getEntityStore();
-		$this->permissionChecker = $wikibaseRepo->getEntityPermissionChecker();
-		$this->siteStore = $wikibaseRepo->getSiteStore();
+		$this->setSpecialWikibaseRepoPageServices(
+			$wikibaseRepo->getSummaryFormatter(),
+			$wikibaseRepo->getEntityRevisionLookup( 'uncached' ),
+			$wikibaseRepo->getEntityTitleLookup(),
+			$wikibaseRepo->getSiteStore(),
+			$wikibaseRepo->newEditEntityFactory( $this->getContext() )
+		);
+	}
+
+	/**
+	 * Override services (for testing).
+	 *
+	 * @param SummaryFormatter $summaryFormatter
+	 * @param EntityRevisionLookup $entityRevisionLookup
+	 * @param EntityTitleLookup $entityTitleLookup
+	 * @param SiteStore $siteStore
+	 * @param EditEntityFactory $editEntityFactory
+	 */
+	public function setSpecialWikibaseRepoPageServices(
+		SummaryFormatter $summaryFormatter,
+		EntityRevisionLookup $entityRevisionLookup,
+		EntityTitleLookup $entityTitleLookup,
+		SiteStore $siteStore,
+		EditEntityFactory $editEntityFactory
+	) {
+		$this->summaryFormatter = $summaryFormatter;
+		$this->entityRevisionLookup = $entityRevisionLookup;
+		$this->entityTitleLookup = $entityTitleLookup;
+		$this->siteStore = $siteStore;
+		$this->editEntityFactory = $editEntityFactory;
 	}
 
 	/**
@@ -133,19 +151,35 @@ abstract class SpecialWikibaseRepoPage extends SpecialWikibasePage {
 	 * @since 0.5
 	 *
 	 * @param EntityId $id
+	 * @param int|string $revisionId
 	 *
+	 * @throws MessageException
+	 * @throws UserInputException
 	 * @return EntityRevision
 	 *
-	 * @throws UserInputException
 	 */
-	protected function loadEntity( EntityId $id ) {
-		$entity = $this->entityLookup->getEntityRevision( $id );
+	protected function loadEntity( EntityId $id, $revisionId = EntityRevisionLookup::LATEST_FROM_MASTER ) {
+		try {
+			$entity = $this->entityRevisionLookup->getEntityRevision( $id, $revisionId );
 
-		if ( $entity === null ) {
+			if ( $entity === null ) {
+				throw new UserInputException(
+					'wikibase-wikibaserepopage-invalid-id',
+					array( $id->getSerialization() ),
+					'Entity id is unknown'
+				);
+			}
+		} catch ( UnresolvedRedirectException $ex ) {
 			throw new UserInputException(
-				'wikibase-wikibaserepopage-invalid-id',
+				'wikibase-wikibaserepopage-unresolved-redirect',
 				array( $id->getSerialization() ),
-				'Entity id is unknown'
+				'Entity id refers to a redirect'
+			);
+		} catch ( StorageException $ex ) {
+			throw new MessageException(
+				'wikibase-wikibaserepopage-storage-exception',
+				array( $id->getSerialization(), $ex->getMessage() ),
+				'Entity could not be loaded'
 			);
 		}
 
@@ -161,7 +195,7 @@ abstract class SpecialWikibaseRepoPage extends SpecialWikibasePage {
 	 * @return null|Title
 	 */
 	protected function getEntityTitle( EntityId $id ) {
-		return $this->titleLookup->getTitleForId( $id );
+		return $this->entityTitleLookup->getTitleForId( $id );
 	}
 
 	/**
@@ -175,16 +209,17 @@ abstract class SpecialWikibaseRepoPage extends SpecialWikibasePage {
 	 *
 	 * @return Status
 	 */
-	protected function saveEntity( Entity $entity, Summary $summary, $token, $flags = EDIT_UPDATE, $baseRev = false ) {
-		$editEntity = new EditEntity(
-			$this->titleLookup,
-			$this->entityLookup,
-			$this->entityStore,
-			$this->permissionChecker,
-			$entity,
+	protected function saveEntity(
+		Entity $entity,
+		Summary $summary,
+		$token,
+		$flags = EDIT_UPDATE,
+		$baseRev = false
+	) {
+		$editEntity = $this->editEntityFactory->newEditEntity(
 			$this->getUser(),
-			$baseRev,
-			$this->getContext()
+			$entity,
+			$baseRev
 		);
 
 		$status = $editEntity->attemptSave(
@@ -195,4 +230,5 @@ abstract class SpecialWikibaseRepoPage extends SpecialWikibasePage {
 
 		return $status;
 	}
+
 }

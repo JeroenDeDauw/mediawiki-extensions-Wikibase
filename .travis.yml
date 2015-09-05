@@ -1,26 +1,30 @@
 language: php
 
-env:
-  - THENEEDFORTHIS=FAIL
-
 matrix:
+  fast_finish: true
   include:
+<<<<<<< HEAD
     - env: DBTYPE=mysql LANG=de; MW=1.23.0-rc.1 WB=client
       php: 5.3
     - env: DBTYPE=sqlite LANG=de; MW=1.23.0-rc.1 WB=repo
+=======
+    - env: DBTYPE=mysql LANG=de MW=master WB=client
       php: 5.3
-    - env: DBTYPE=sqlite LANG=de; MW=master WB=both
+    - env: DBTYPE=sqlite LANG=ar MW=master WB=both
+>>>>>>> b1b010dd81d334b5bbdf79d0bac9391695cb83b3
+      php: 5.3
+    - env: DBTYPE=sqlite LANG=ru MW=master WB=both
       php: 5.4
-    - env: DBTYPE=sqlite LANG=en; MW=master WB=client
+    - env: DBTYPE=sqlite LANG=en MW=master WB=client
       php: 5.5
-    - env: DBTYPE=sqlite LANG=en; MW=master WB=repo
+    - env: DBTYPE=mysql LANG=en MW=master WB=repo
       php: 5.6
+<<<<<<< HEAD
     - env: DBTYPE=sqlite LANG=en; MW=1.23.0-rc.1 WB=both
+=======
+    - env: DBTYPE=sqlite LANG=en MW=master WB=both
+>>>>>>> b1b010dd81d334b5bbdf79d0bac9391695cb83b3
       php: hhvm
-  allow_failures:
-    - php: hhvm
-  exclude:
-    - env: THENEEDFORTHIS=FAIL
 
 before_script:
     - bash ./build/travis/install.sh
@@ -39,7 +43,7 @@ notifications:
     on_failure: always
   irc:
     channels:
-      - "chat.freenode.net#wikidata"
+      - "chat.freenode.net#wikidata-feed"
     on_success: change
     on_failure: always
     template:

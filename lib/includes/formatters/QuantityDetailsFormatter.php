@@ -2,13 +2,16 @@
 
 namespace Wikibase\Lib;
 
+use DataValues\DecimalValue;
 use DataValues\QuantityValue;
 use Html;
 use InvalidArgumentException;
 use Message;
 use ValueFormatters\DecimalFormatter;
 use ValueFormatters\FormatterOptions;
+use ValueFormatters\NumberLocalizer;
 use ValueFormatters\QuantityFormatter;
+use ValueFormatters\QuantityUnitFormatter;
 use ValueFormatters\ValueFormatter;
 use ValueFormatters\ValueFormatterBase;
 
@@ -33,13 +36,21 @@ class QuantityDetailsFormatter extends ValueFormatterBase {
 	protected $quantityFormatter;
 
 	/**
-	 * @param FormatterOptions $options
+	 * @var QuantityUnitFormatter
 	 */
-	public function __construct( FormatterOptions $options ) {
+	protected $unitFormatter;
+
+	/**
+	 * @param NumberLocalizer $numberLocalizer
+	 * @param QuantityUnitFormatter $unitFormatter
+	 * @param FormatterOptions|null $options
+	 */
+	public function __construct( NumberLocalizer $numberLocalizer, QuantityUnitFormatter $unitFormatter, FormatterOptions $options = null ) {
 		parent::__construct( $options );
 
-		$this->decimalFormatter = new DecimalFormatter( $options );
-		$this->quantityFormatter = new QuantityFormatter( $this->decimalFormatter, $options );
+		$this->unitFormatter = $unitFormatter;
+		$this->decimalFormatter = new DecimalFormatter( $this->options, $numberLocalizer );
+		$this->quantityFormatter = new QuantityFormatter( $this->decimalFormatter, $unitFormatter, $this->options );
 	}
 
 	/**
@@ -48,14 +59,14 @@ class QuantityDetailsFormatter extends ValueFormatterBase {
 	 *
 	 * @since 0.5
 	 *
-	 * @param QuantityValue $value The ID to format
+	 * @param QuantityValue $value
 	 *
 	 * @throws InvalidArgumentException
-	 * @return string
+	 * @return string HTML
 	 */
 	public function format( $value ) {
 		if ( !( $value instanceof QuantityValue ) ) {
-			throw new InvalidArgumentException( 'Data value type mismatch. Expected an QuantityValue.' );
+			throw new InvalidArgumentException( 'Data value type mismatch. Expected a QuantityValue.' );
 		}
 
 		$html = '';
@@ -68,16 +79,22 @@ class QuantityDetailsFormatter extends ValueFormatterBase {
 			array( 'class' => 'wb-details wb-quantity-details' ) );
 
 		$html .= $this->renderLabelValuePair( 'amount',
-			htmlspecialchars( $this->decimalFormatter->format( $value->getAmount() ) ) );
+			$this->formatNumber( $value->getAmount(), $value->getUnit() ) );
 		$html .= $this->renderLabelValuePair( 'upperBound',
-			htmlspecialchars( $this->decimalFormatter->format( $value->getUpperBound() ) ) );
+			$this->formatNumber( $value->getUpperBound(), $value->getUnit() ) );
 		$html .= $this->renderLabelValuePair( 'lowerBound',
-			htmlspecialchars( $this->decimalFormatter->format( $value->getLowerBound() ) ) );
+			$this->formatNumber( $value->getLowerBound(), $value->getUnit() ) );
 		$html .= $this->renderLabelValuePair( 'unit', htmlspecialchars( $value->getUnit() ) );
 
 		$html .= Html::closeElement( 'table' );
 
 		return $html;
+	}
+
+	private function formatNumber( DecimalValue $number, $unit ) {
+		$text = $this->decimalFormatter->format( $number );
+		$text = $this->unitFormatter->applyUnit( $unit, $text );
+		return htmlspecialchars( $text );
 	}
 
 	/**
@@ -106,8 +123,11 @@ class QuantityDetailsFormatter extends ValueFormatterBase {
 	protected function getFieldLabel( $fieldName ) {
 		$lang = $this->getOption( ValueFormatter::OPT_LANG );
 
-		// Messages: wb-quantitydetails-amount, wb-quantitydetails-upperbound,
-		// wb-quantitydetails-lowerbound, wb-quantitydetails-unit
+		// Messages:
+		// wikibase-quantitydetails-amount
+		// wikibase-quantitydetails-upperbound
+		// wikibase-quantitydetails-lowerbound
+		// wikibase-quantitydetails-unit
 		$key = 'wikibase-quantitydetails-' . strtolower( $fieldName );
 		$msg = wfMessage( $key )->inLanguage( $lang );
 

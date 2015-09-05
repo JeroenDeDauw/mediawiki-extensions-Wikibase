@@ -2,9 +2,11 @@
 
 namespace Wikibase\Lib;
 
+use Html;
 use InvalidArgumentException;
 use Message;
-use Wikibase\Snak;
+use RuntimeException;
+use Wikibase\DataModel\Snak\Snak;
 
 /**
  * MessageSnakFormatter returns the same (localized) message for all snaks.
@@ -13,11 +15,20 @@ use Wikibase\Snak;
  *
  * @license GPL 2+
  * @author Daniel Kinzler
+ * @author Thiemo Mättig
  */
 class MessageSnakFormatter implements SnakFormatter {
 
 	/**
-	 * @var string
+	 * @var string[]
+	 */
+	private static $snakTypeCssClasses = array(
+		'somevalue' => 'wikibase-snakview-variation-somevaluesnak',
+		'novalue' => 'wikibase-snakview-variation-novaluesnak',
+	);
+
+	/**
+	 * @var string One of the SnakFormatter::FORMAT_... constants.
 	 */
 	private $format;
 
@@ -27,18 +38,18 @@ class MessageSnakFormatter implements SnakFormatter {
 	private $message;
 
 	/**
-	 * @var String
+	 * @var string
 	 */
 	private $snakType;
 
 	/**
-	 * @param string $snakType
+	 * @param string $snakType Type of the snak, usually "value", "somevalue" or "novalue".
 	 * @param Message $message
-	 * @param string $format
+	 * @param string $format One of the SnakFormatter::FORMAT_... constants.
 	 *
-	 * @throws \InvalidArgumentException
+	 * @throws InvalidArgumentException
 	 */
-	function __construct( $snakType, Message $message, $format ) {
+	public function __construct( $snakType, Message $message, $format ) {
 		if ( !is_string( $snakType ) ) {
 			throw new InvalidArgumentException( '$snakType must be a string' );
 		}
@@ -53,10 +64,9 @@ class MessageSnakFormatter implements SnakFormatter {
 	}
 
 	/**
-	 * Returns the format ID of the format this formatter generates.
-	 * This uses the FORMAT_XXX constants defined in OutputFormatSnakFormatterFactory.
+	 * @see SnakFormatter::getFormat
 	 *
-	 * @return string
+	 * @return string One of the SnakFormatter::FORMAT_... constants.
 	 */
 	public function getFormat() {
 		return $this->format;
@@ -64,31 +74,44 @@ class MessageSnakFormatter implements SnakFormatter {
 
 	/**
 	 * Returns a string from the message provided to the constructor.
-	 * Depending on the desired format, the text is returned as HTML or wikitext.
+	 * Depending on the desired format, the text is returned as plain, wikitext or HTML.
 	 *
 	 * Note that this method does not look at the snak given. It simply returns the same
 	 * message always.
 	 *
-	 * @param Snak $snak
+	 * @see SnakFormatter::formatSnak
 	 *
-	 * @return string
+	 * @param Snak $snak Unused in this implementation.
+	 *
+	 * @throws RuntimeException If the requested output format is not known.
+	 * @return string Plain, wikitext or HTML
 	 */
 	public function formatSnak( Snak $snak ) {
-		if ( $this->format === SnakFormatter::FORMAT_HTML
-			|| $this->format === SnakFormatter::FORMAT_HTML_WIDGET
-		) {
-			$text = $this->message->parse();
-		} else {
-			$text = $this->message->text();
+		if ( $this->format === SnakFormatter::FORMAT_PLAIN ) {
+			return $this->message->plain();
+		} elseif ( $this->format === SnakFormatter::FORMAT_WIKI ) {
+			return $this->message->text();
+		} elseif ( strpos( $this->format, SnakFormatter::FORMAT_HTML ) === 0 ) {
+			$html = $this->message->parse();
+
+			if ( array_key_exists( $this->snakType, self::$snakTypeCssClasses ) ) {
+				$html = Html::rawElement(
+					'span',
+					array( 'class' => self::$snakTypeCssClasses[$this->snakType] ),
+					$html
+				);
+			}
+
+			return $html;
 		}
 
-		return $text;
+		throw new RuntimeException( 'Unknown format' );
 	}
 
 	/**
 	 * Checks whether the snak type supplied to the constructor matches the given snak.
 	 *
-	 * @see SnakFormatter::canFormatSnak()
+	 * @see SnakFormatter::canFormatSnak
 	 *
 	 * @param Snak $snak
 	 *

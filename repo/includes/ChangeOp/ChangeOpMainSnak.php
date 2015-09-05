@@ -4,12 +4,14 @@ namespace Wikibase\ChangeOp;
 
 use InvalidArgumentException;
 use ValueValidators\Result;
-use Wikibase\DataModel\Claim\Claims;
 use Wikibase\DataModel\Entity\Entity;
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Services\Statement\GuidGenerator;
 use Wikibase\DataModel\Snak\Snak;
-use Wikibase\Lib\ClaimGuidGenerator;
+use Wikibase\DataModel\Statement\StatementList;
+use Wikibase\DataModel\Statement\StatementListHolder;
+use Wikibase\Repo\Validators\SnakValidator;
 use Wikibase\Summary;
-use Wikibase\Validators\SnakValidator;
 
 /**
  * Class for mainsnak change operation
@@ -18,6 +20,7 @@ use Wikibase\Validators\SnakValidator;
  * @licence GNU GPL v2+
  * @author Tobias Gritschacher < tobias.gritschacher@wikimedia.de >
  * @author Daniel Kinzler
+ * @author Bene* < benestar.wikimedia@gmail.com >
  */
 class ChangeOpMainSnak extends ChangeOpBase {
 
@@ -26,7 +29,7 @@ class ChangeOpMainSnak extends ChangeOpBase {
 	 *
 	 * @var string
 	 */
-	protected $claimGuid;
+	protected $statementGuid;
 
 	/**
 	 * @since 0.4
@@ -45,24 +48,24 @@ class ChangeOpMainSnak extends ChangeOpBase {
 	 *
 	 * @since 0.4
 	 *
-	 * @param string $claimGuid
+	 * @param string $statementGuid
 	 * @param Snak $snak
-	 * @param ClaimGuidGenerator $guidGenerator
+	 * @param GuidGenerator $guidGenerator
 	 * @param SnakValidator $snakValidator
 	 *
 	 * @throws InvalidArgumentException
 	 */
 	public function __construct(
-		$claimGuid,
+		$statementGuid,
 		Snak $snak,
-		ClaimGuidGenerator $guidGenerator,
+		GuidGenerator $guidGenerator,
 		SnakValidator $snakValidator
 	) {
-		if ( !is_string( $claimGuid ) ) {
-			throw new InvalidArgumentException( '$claimGuid needs to be a string' );
+		if ( !is_string( $statementGuid ) ) {
+			throw new InvalidArgumentException( '$statementGuid needs to be a string' );
 		}
 
-		$this->claimGuid = $claimGuid;
+		$this->statementGuid = $statementGuid;
 		$this->snak = $snak;
 		$this->guidGenerator = $guidGenerator;
 		$this->snakValidator = $snakValidator;
@@ -71,8 +74,8 @@ class ChangeOpMainSnak extends ChangeOpBase {
 	/**
 	 * @return string
 	 */
-	public function getClaimGuid() {
-		return $this->claimGuid;
+	public function getStatementGuid() {
+		return $this->statementGuid;
 	}
 
 	/**
@@ -81,59 +84,57 @@ class ChangeOpMainSnak extends ChangeOpBase {
 	 * - the claim's mainsnak gets set to $snak when $claimGuid and $snak are set
 	 */
 	public function apply( Entity $entity, Summary $summary = null ) {
-		$claims = new Claims( $entity->getClaims() );
-
-		if ( is_null( $this->claimGuid ) || empty( $this->claimGuid ) ) {
-			$this->addClaim( $entity, $claims, $summary );
-		} else {
-			$this->setClaim( $claims, $summary );
+		if ( !( $entity instanceof StatementListHolder ) ) {
+			throw new InvalidArgumentException( '$entity must be a StatementListHolder' );
 		}
 
-		$entity->setClaims( $claims );
+		$statements = $entity->getStatements();
+
+		if ( empty( $this->statementGuid ) ) {
+			$this->addStatement( $statements, $entity->getId(), $summary );
+		} else {
+			$this->setStatement( $statements, $summary );
+		}
+
+		$entity->setStatements( $statements );
 
 		return true;
 	}
 
 	/**
-	 * @since 0.4
-	 *
-	 * @param Entity $entity
-	 * @param Claims $claims
-	 * @param Summary $summary
+	 * @param StatementList $statements
+	 * @param EntityId $entityId
+	 * @param Summary|null $summary
 	 */
-	protected function addClaim( Entity $entity, Claims $claims, Summary $summary = null ) {
-		//TODO: check for claim uniqueness?
-		$claim = $entity->newClaim( $this->snak );
-		$claim->setGuid( $this->guidGenerator->newGuid( $entity->getId() ) );
-		$claims->addClaim( $claim );
+	private function addStatement( StatementList $statements, EntityId $entityId, Summary $summary = null ) {
+		$this->statementGuid = $this->guidGenerator->newGuid( $entityId );
+		$statements->addNewStatement( $this->snak, null, null, $this->statementGuid );
 		$this->updateSummary( $summary, 'create', '', $this->getClaimSummaryArgs( $this->snak ) );
-		$this->claimGuid = $claim->getGuid();
 	}
 
 	/**
-	 * @since 0.4
-	 *
-	 * @param Claims $claims
-	 * @param Summary $summary
+	 * @param StatementList $statements
+	 * @param Summary|null $summary
 	 *
 	 * @throws ChangeOpException
 	 */
-	protected function setClaim( Claims $claims, Summary $summary = null ) {
-		if( !$claims->hasClaimWithGuid( $this->claimGuid ) ) {
-			throw new ChangeOpException( "Entity does not have claim with GUID " . $this->claimGuid );
+	private function setStatement( StatementList $statements, Summary $summary = null ) {
+		$statement = $statements->getFirstStatementWithGuid( $this->statementGuid );
+
+		if ( $statement === null ) {
+			throw new ChangeOpException( "Entity does not have a statement with GUID " . $this->statementGuid );
 		}
 
-		$claim = $claims->getClaimWithGuid( $this->claimGuid );
-		$propertyId = $claim->getMainSnak()->getPropertyId();
+		$propertyId = $statement->getMainSnak()->getPropertyId();
 
 		if ( !$propertyId->equals( $this->snak->getPropertyId() ) ) {
 			throw new ChangeOpException( "Claim with GUID "
-				. $this->claimGuid . " uses property "
+				. $this->statementGuid . " uses property "
 				. $propertyId . ", can't change to "
 				. $this->snak->getPropertyId() );
 		}
 
-		$claim->setMainSnak( $this->snak );
+		$statement->setMainSnak( $this->snak );
 		$this->updateSummary( $summary, null, '', $this->getClaimSummaryArgs( $this->snak ) );
 	}
 
@@ -146,7 +147,7 @@ class ChangeOpMainSnak extends ChangeOpBase {
 	 */
 	protected function getClaimSummaryArgs( Snak $mainSnak ) {
 		$propertyId = $mainSnak->getPropertyId();
-		return array( array( $propertyId->getPrefixedId() => $mainSnak ) );
+		return array( array( $propertyId->getSerialization() => $mainSnak ) );
 	}
 
 	/**
@@ -163,4 +164,5 @@ class ChangeOpMainSnak extends ChangeOpBase {
 	public function validate( Entity $entity ) {
 		return $this->snakValidator->validate( $this->snak );
 	}
+
 }

@@ -3,6 +3,7 @@
 namespace Wikibase\Repo\Specials;
 
 use Wikibase\DataModel\Entity\Entity;
+use Wikibase\DataModel\Term\Fingerprint;
 use Wikibase\Summary;
 
 /**
@@ -15,8 +16,6 @@ use Wikibase\Summary;
 class SpecialSetLabel extends SpecialModifyTerm {
 
 	/**
-	 * Constructor
-	 *
 	 * @since 0.4
 	 */
 	public function __construct() {
@@ -39,13 +38,15 @@ class SpecialSetLabel extends SpecialModifyTerm {
 	 *
 	 * @since 0.4
 	 *
-	 * @param Entity $entity
-	 * @param string $language
+	 * @param Fingerprint $fingerprint
+	 * @param string $languageCode
 	 *
 	 * @return string
 	 */
-	protected function getValue( $entity, $language ) {
-		return $entity === null ? '' : $entity->getLabel( $language );
+	protected function getValue( Fingerprint $fingerprint, $languageCode ) {
+		return $fingerprint->hasLabel( $languageCode )
+			? $fingerprint->getLabel( $languageCode )->getText()
+			: '';
 	}
 
 	/**
@@ -54,23 +55,24 @@ class SpecialSetLabel extends SpecialModifyTerm {
 	 * @since 0.4
 	 *
 	 * @param Entity $entity
-	 * @param string $language
+	 * @param string $languageCode
 	 * @param string $value
 	 *
 	 * @return Summary
 	 */
-	protected function setValue( $entity, $language, $value ) {
+	protected function setValue( $entity, $languageCode, $value ) {
 		$value = $value === '' ? null : $value;
-		$summary = $this->getSummary( 'wbsetlabel' );
+		$summary = new Summary( 'wbsetlabel' );
 
 		if ( $value === null ) {
-			$changeOp = $this->termChangeOpFactory->newRemoveLabelOp( $language );
+			$changeOp = $this->termChangeOpFactory->newRemoveLabelOp( $languageCode );
 		} else {
-			$changeOp = $this->termChangeOpFactory->newSetLabelOp( $language, $value );
+			$changeOp = $this->termChangeOpFactory->newSetLabelOp( $languageCode, $value );
 		}
 
 		$this->applyChangeOp( $changeOp, $entity, $summary );
 
 		return $summary;
 	}
+
 }

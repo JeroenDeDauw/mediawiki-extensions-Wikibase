@@ -2,9 +2,6 @@
 
 namespace Wikibase;
 
-use Language;
-use LogicException;
-
 /**
  * A Summary object can be used to build complex, translatable summaries.
  *
@@ -18,59 +15,54 @@ use LogicException;
 class Summary {
 
 	/**
-	 * @var string
+	 * @var string|null
 	 */
-	protected $moduleName;
+	private $moduleName;
 
 	/**
-	 * @var string
+	 * @var string|null
 	 */
-	protected $actionName;
+	private $actionName;
 
 	/**
-	 * @var Language
+	 * @var string|null
 	 */
-	protected $language;
-
-	/**
-	 * @var array
-	 */
-	protected $commentArgs;
+	private $languageCode;
 
 	/**
 	 * @var array
 	 */
-	protected $summaryArgs;
+	private $commentArgs;
+
+	/**
+	 * @var array
+	 */
+	private $summaryArgs;
 
 	/**
 	 * @var string
 	 */
-	protected $userSummary;
+	private $userSummary;
 
 	/**
-	 * Indicates a specific type of formatting
-	 */
-	const USE_COMMENT = 2;
-	const USE_SUMMARY = 4;
-	const USE_ALL = 6;
-
-	/**
-	 * Constructs a new Summary
-	 *
 	 * @since 0.4
 	 *
-	 * @param string $moduleName The module part of the auto comment
-	 * @param string $actionName The action part of the auto comment
-	 * @param string $language   The language to use as the second auto comment argument
+	 * @param string|null $moduleName The module part of the auto comment
+	 * @param string|null $actionName The action part of the auto comment
+	 * @param string|null $languageCode The language code to use as the second auto comment argument
 	 * @param array $commentArgs The arguments to the auto comment
 	 * @param array $summaryArgs The arguments to the auto summary
 	 */
-	public function __construct( $moduleName = null, $actionName = null, $language = null,
-		$commentArgs = array(), $summaryArgs = array()
+	public function __construct(
+		$moduleName = null,
+		$actionName = null,
+		$languageCode = null,
+		$commentArgs = array(),
+		$summaryArgs = array()
 	) {
 		$this->moduleName = $moduleName;
 		$this->actionName = $actionName;
-		$this->language = $language === null ? null : (string)$language;
+		$this->languageCode = $languageCode === null ? null : (string)$languageCode;
 		$this->commentArgs = $commentArgs;
 		$this->summaryArgs = $summaryArgs;
 	}
@@ -80,7 +72,7 @@ class Summary {
 	 *
 	 * @since 0.4
 	 *
-	 * @param string $summary edit summary provided by the user
+	 * @param string|null $summary edit summary provided by the user
 	 */
 	public function setUserSummary( $summary = null ) {
 		$this->userSummary = $summary === null ? null : (string)$summary;
@@ -91,10 +83,10 @@ class Summary {
 	 *
 	 * @since 0.4
 	 *
-	 * @param string $lang the language code
+	 * @param string|null $languageCode
 	 */
-	public function setLanguage( $lang = null ) {
-		$this->language = $lang === null ? null : (string)$lang;
+	public function setLanguage( $languageCode = null ) {
+		$this->languageCode = $languageCode === null ? null : (string)$languageCode;
 	}
 
 	/**
@@ -113,7 +105,7 @@ class Summary {
 	 *
 	 * @since 0.4
 	 *
-	 * @return string
+	 * @return string|null
 	 */
 	public function getModuleName() {
 		return $this->moduleName;
@@ -124,7 +116,7 @@ class Summary {
 	 *
 	 * @since 0.4
 	 *
-	 * @param string $name
+	 * @param string|null $name
 	 */
 	public function setAction( $name ) {
 		$this->actionName = $name === null ? null : (string)$name;
@@ -160,7 +152,7 @@ class Summary {
 	 * @return string|null
 	 */
 	public function getLanguageCode() {
-		return $this->language;
+		return $this->languageCode;
 	}
 
 	/**
@@ -185,13 +177,11 @@ class Summary {
 	 *
 	 * @since 0.4
 	 *
-	 * @param mixed [$args,...] Parts to be stringed together
+	 * @param mixed $args,... Parts to be stringed together
 	 */
-	public function addAutoCommentArgs( /*...*/ ) {
-		$args = func_get_args();
-
-		if ( isset( $args[0] ) && is_array( $args[0] ) ) {
-			$args = $args[0];
+	public function addAutoCommentArgs( $args /*...*/ ) {
+		if ( !is_array( $args ) ) {
+			$args = func_get_args();
 		}
 
 		$this->commentArgs = array_merge( $this->commentArgs, $args );
@@ -202,13 +192,11 @@ class Summary {
 	 *
 	 * @since 0.4
 	 *
-	 * @param mixed [$args,...] Parts to be stringed together
+	 * @param mixed $args,... Parts to be stringed together
 	 */
-	public function addAutoSummaryArgs( /*...*/ ) {
-		$args = func_get_args();
-
-		if ( isset( $args[0] ) && is_array( $args[0] ) ) {
-			$args = $args[0];
+	public function addAutoSummaryArgs( $args /*...*/ ) {
+		if ( !is_array( $args ) ) {
+			$args = func_get_args();
 		}
 
 		$this->summaryArgs = array_merge( $this->summaryArgs, $args );
@@ -226,14 +214,6 @@ class Summary {
 	 */
 	public function getAutoSummaryArgs() {
 		return $this->summaryArgs;
-	}
-
-	/**
-	 * @deprecated Use SummaryFormatter instead
-	 * @throws LogicException
-	 */
-	public function toString() {
-		throw new LogicException( 'toString() is no longer supported, use SummaryFormatter instead' );
 	}
 
 }

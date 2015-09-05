@@ -30,39 +30,55 @@ class SpecialNewItemTest extends SpecialPageTestBase {
 		//TODO: Verify that more of the output is correct.
 		//TODO: Verify that item creation works via a faux post request
 
+		$this->setMwGlobals( 'wgGroupPermissions', array( '*' => array( 'createpage' => true ) ) );
+
 		$matchers['label'] = array(
-			'tag' => 'input',
+			'tag' => 'div',
 			'attributes' => array(
 				'id' => 'wb-newentity-label',
 				'class' => 'wb-input',
-				'name' => 'label',
+			),
+			'child' => array(
+				'tag' => 'input',
+				'attributes' => array(
+					'name' => 'label',
+				)
 			) );
 		$matchers['description'] = array(
-			'tag' => 'input',
+			'tag' => 'div',
 			'attributes' => array(
 				'id' => 'wb-newentity-description',
 				'class' => 'wb-input',
-				'name' => 'description',
+			),
+			'child' => array(
+				'tag' => 'input',
+				'attributes' => array(
+					'name' => 'description',
+				)
 			) );
 		$matchers['submit'] = array(
-			'tag' => 'input',
+			'tag' => 'div',
 			'attributes' => array(
 				'id' => 'wb-newentity-submit',
-				'class' => 'wb-button',
-				'type' => 'submit',
-				'name' => 'submit',
+			),
+			'child' => array(
+				'tag' => 'button',
+				'attributes' => array(
+					'type' => 'submit',
+					'name' => 'submit',
+				)
 			) );
 
 		list( $output, ) = $this->executeSpecialPage( '' );
-		foreach( $matchers as $key => $matcher ) {
+		foreach ( $matchers as $key => $matcher ) {
 			$this->assertTag( $matcher, $output, "Failed to match html output with tag '{$key}''" );
 		}
 
 		list( $output, ) = $this->executeSpecialPage( 'LabelText/DescriptionText' );
-		$matchers['label']['attributes']['value'] = 'LabelText';
-		$matchers['description']['attributes']['value'] = 'DescriptionText';
+		$matchers['label']['child'][0]['attributes']['value'] = 'LabelText';
+		$matchers['description']['child'][0]['attributes']['value'] = 'DescriptionText';
 
-		foreach( $matchers as $key => $matcher ) {
+		foreach ( $matchers as $key => $matcher ) {
 			$this->assertTag( $matcher, $output, "Failed to match html output with tag '{$key}''" );
 		}
 

@@ -16,41 +16,20 @@ class NoBadDependencyUsageTest extends \PHPUnit_Framework_TestCase {
 
 	public function testNoRepoUsageInLib() {
 		// Increasing this allowance is forbidden
-		$this->assertStringNotInLib( 'WikibaseRepo' . '::', 3 );
-		$this->assertStringNotInLib( 'Wikibase\\Repo\\', 3 );
+		$this->assertStringNotInLib( 'WikibaseRepo' . '::', 4 );
+		$this->assertStringNotInLib( 'Wikibase\\Repo\\', 4 );
 	}
 
 	public function testNoClientUsageInLib() {
 		// Increasing this allowance is forbidden
-		$this->assertStringNotInLib( 'WikibaseClient' . '::', 2 );
-		$this->assertStringNotInLib( 'Wikibase\\Client\\', 2 );
-	}
-
-	public function testNoSettingsUsageOutsideLib() {
-		// Increasing this allowance is forbidden
-		$this->assertStringNotInRepo( 'Settings::', 1 );
-		$this->assertStringNotInClient( 'Settings::', 1 );
+		$this->assertStringNotInLib( 'WikibaseClient' . '::', 3 );
+		$this->assertStringNotInLib( 'Wikibase\\Client\\', 3 );
 	}
 
 	private function assertStringNotInLib( $string, $maxAllowance ) {
 		$this->assertStringNotInDir(
 			$string,
 			__DIR__ . '/../../',
-			$maxAllowance
-		);
-	}
-	private function assertStringNotInClient( $string, $maxAllowance ) {
-		$this->assertStringNotInDir(
-			$string,
-			__DIR__ . '/../../../client/',
-			$maxAllowance
-		);
-	}
-
-	private function assertStringNotInRepo( $string, $maxAllowance ) {
-		$this->assertStringNotInDir(
-			$string,
-			__DIR__ . '/../../../repo/',
 			$maxAllowance
 		);
 	}
@@ -76,7 +55,10 @@ class NoBadDependencyUsageTest extends \PHPUnit_Framework_TestCase {
 		 */
 		foreach ( new RecursiveIteratorIterator( $directoryIterator ) as $fileInfo ) {
 			if ( $fileInfo->isFile() && substr( $fileInfo->getFilename(), -4 ) === '.php' ) {
-				if ( stripos( file_get_contents( $fileInfo->getPathname() ), $string ) !== false ) {
+				$text = file_get_contents( $fileInfo->getPathname() );
+				$text = preg_replace( '@/\*.*?\*/@s', '', $text );
+
+				if ( stripos( $text, $string ) !== false ) {
 					$count++;
 				}
 			}

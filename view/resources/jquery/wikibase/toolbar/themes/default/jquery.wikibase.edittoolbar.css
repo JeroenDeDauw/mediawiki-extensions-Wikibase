@@ -1,0 +1,7 @@
+/**
+ * @license GNU GPL v2+
+ * @author H. Snater < mediawiki@snater.com >
+ */
+.wikibase-edittoolbar-container > .wikibase-toolbar {
+	padding-left: 0;
+}

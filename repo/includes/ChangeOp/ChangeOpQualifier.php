@@ -4,12 +4,12 @@ namespace Wikibase\ChangeOp;
 
 use InvalidArgumentException;
 use ValueValidators\Result;
-use Wikibase\DataModel\Claim\Claims;
 use Wikibase\DataModel\Entity\Entity;
 use Wikibase\DataModel\Snak\Snak;
-use Wikibase\DataModel\Snak\Snaks;
+use Wikibase\DataModel\Snak\SnakList;
+use Wikibase\DataModel\Statement\StatementListHolder;
+use Wikibase\Repo\Validators\SnakValidator;
 use Wikibase\Summary;
-use Wikibase\Validators\SnakValidator;
 
 /**
  * Class for qualifier change operation
@@ -26,7 +26,7 @@ class ChangeOpQualifier extends ChangeOpBase {
 	 *
 	 * @var string
 	 */
-	protected $claimGuid;
+	protected $statementGuid;
 
 	/**
 	 * @since 0.4
@@ -52,23 +52,23 @@ class ChangeOpQualifier extends ChangeOpBase {
 	 *
 	 * @since 0.4
 	 *
-	 * @param string $claimGuid
+	 * @param string $statementGuid
 	 * @param Snak $snak
 	 * @param string $snakHash
 	 * @param SnakValidator $snakValidator
 	 *
 	 * @throws InvalidArgumentException
 	 */
-	public function __construct( $claimGuid, Snak $snak, $snakHash, SnakValidator $snakValidator ) {
-		if ( !is_string( $claimGuid ) || $claimGuid === '' ) {
-			throw new InvalidArgumentException( '$claimGuid needs to be a string and must not be empty' );
+	public function __construct( $statementGuid, Snak $snak, $snakHash, SnakValidator $snakValidator ) {
+		if ( !is_string( $statementGuid ) || $statementGuid === '' ) {
+			throw new InvalidArgumentException( '$statementGuid needs to be a string and must not be empty' );
 		}
 
 		if ( !is_string( $snakHash ) ) {
 			throw new InvalidArgumentException( '$snakHash needs to be a string' );
 		}
 
-		$this->claimGuid = $claimGuid;
+		$this->statementGuid = $statementGuid;
 		$this->snak = $snak;
 		$this->snakHash = $snakHash;
 		$this->snakValidator = $snakValidator;
@@ -80,14 +80,18 @@ class ChangeOpQualifier extends ChangeOpBase {
 	 * - the qualifier gets set to $snak when $snakHash and $snak are set
 	 */
 	public function apply( Entity $entity, Summary $summary = null ) {
-		$claims = new Claims( $entity->getClaims() );
-
-		if( !$claims->hasClaimWithGuid( $this->claimGuid ) ) {
-			throw new ChangeOpException( "Entity does not have claim with GUID $this->claimGuid" );
+		if ( !( $entity instanceof StatementListHolder ) ) {
+			throw new InvalidArgumentException( '$entity must be a StatementListHolder' );
 		}
 
-		$claim = $claims->getClaimWithGuid( $this->claimGuid );
-		$qualifiers = $claim->getQualifiers();
+		$statements = $entity->getStatements();
+		$statement = $statements->getFirstStatementWithGuid( $this->statementGuid );
+
+		if ( $statement === null ) {
+			throw new ChangeOpException( "Entity does not have a statement with GUID $this->statementGuid" );
+		}
+
+		$qualifiers = $statement->getQualifiers();
 
 		if ( $this->snakHash === '' ) {
 			$this->addQualifier( $qualifiers, $summary );
@@ -95,8 +99,8 @@ class ChangeOpQualifier extends ChangeOpBase {
 			$this->setQualifier( $qualifiers, $summary );
 		}
 
-		$claim->setQualifiers( $qualifiers );
-		$entity->setClaims( $claims );
+		$statement->setQualifiers( $qualifiers );
+		$entity->setStatements( $statements );
 
 		return true;
 	}
@@ -104,14 +108,14 @@ class ChangeOpQualifier extends ChangeOpBase {
 	/**
 	 * @since 0.4
 	 *
-	 * @param Snaks $qualifiers
+	 * @param SnakList $qualifiers
 	 * @param Summary $summary
 	 *
 	 * @throws ChangeOpException
 	 */
-	protected function addQualifier( Snaks $qualifiers, Summary $summary = null ) {
+	protected function addQualifier( SnakList $qualifiers, Summary $summary = null ) {
 		if ( $qualifiers->hasSnak( $this->snak ) ) {
-			throw new ChangeOpException( "Claim has already a qualifier with hash {$this->snak->getHash()}" );
+			throw new ChangeOpException( 'The statement has already a qualifier with hash ' . $this->snak->getHash() );
 		}
 		$qualifiers->addSnak( $this->snak );
 		//TODO: add the mainsnak as autocomment-arg & change messages
@@ -121,17 +125,17 @@ class ChangeOpQualifier extends ChangeOpBase {
 	/**
 	 * @since 0.4
 	 *
-	 * @param Snaks $qualifiers
+	 * @param SnakList $qualifiers
 	 * @param Summary $summary
 	 *
 	 * @throws ChangeOpException
 	 */
-	protected function setQualifier( Snaks $qualifiers, Summary $summary = null ) {
+	protected function setQualifier( SnakList $qualifiers, Summary $summary = null ) {
 		if ( !$qualifiers->hasSnakHash( $this->snakHash ) ) {
 			throw new ChangeOpException( "Qualifier with hash $this->snakHash does not exist" );
 		}
 		if ( $qualifiers->hasSnak( $this->snak ) ) {
-			throw new ChangeOpException( "Claim has already a qualifier with hash {$this->snak->getHash()}" );
+			throw new ChangeOpException( 'The statement has already a qualifier with hash ' . $this->snak->getHash() );
 		}
 		$qualifiers->removeSnakHash( $this->snakHash );
 		$qualifiers->addSnak( $this->snak );
@@ -147,7 +151,7 @@ class ChangeOpQualifier extends ChangeOpBase {
 	 */
 	protected function getSnakSummaryArgs( Snak $snak ) {
 		$propertyId = $snak->getPropertyId();
-		return array( array( $propertyId->getPrefixedId() => $snak ) );
+		return array( array( $propertyId->getSerialization() => $snak ) );
 	}
 
 	/**
@@ -164,4 +168,5 @@ class ChangeOpQualifier extends ChangeOpBase {
 	public function validate( Entity $entity ) {
 		return $this->snakValidator->validate( $this->snak );
 	}
+
 }

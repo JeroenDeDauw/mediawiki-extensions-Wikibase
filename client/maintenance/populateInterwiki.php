@@ -1,5 +1,17 @@
 <?php
 
+namespace Wikibase;
+
+use BagOStuff;
+use Http;
+use Maintenance;
+
+$basePath = getenv( 'MW_INSTALL_PATH' ) !== false
+	? getenv( 'MW_INSTALL_PATH' )
+	: __DIR__ . '/../../../..';
+
+require_once $basePath . '/maintenance/Maintenance.php';
+
 /**
  * Maintenance script that populates the interwiki table with list of sites
  * as exists on Wikipedia, so interwiki links render properly.
@@ -9,17 +21,17 @@
  * @licence GNU GPL v2+
  * @author Katie Filbert < aude.wiki@gmail.com >
  */
-$basePath = getenv( 'MW_INSTALL_PATH' ) !== false ? getenv( 'MW_INSTALL_PATH' )
-	: __DIR__ . '/../../../..';
-
-require_once $basePath . '/maintenance/Maintenance.php';
-
 class PopulateInterwiki extends Maintenance {
 
 	/**
 	 * @var string
 	 */
 	private $source;
+
+	/**
+	 * @var BagOStuff
+	 */
+	private $cache;
 
 	public function __construct() {
 		$this->mDescription = <<<TEXT
@@ -46,6 +58,8 @@ TEXT;
 		$force = $this->getOption( 'force', false );
 		$this->source = $this->getOption( 'source', 'https://en.wikipedia.org/w/api.php' );
 
+		$this->cache = wfGetMainCache();
+
 		$data = $this->fetchLinks();
 
 		if ( $data === false ) {
@@ -55,38 +69,39 @@ TEXT;
 		}
 	}
 
+	/**
+	 * @return array[]|bool The 'interwikimap' sub-array or false on failure.
+	 */
 	protected function fetchLinks() {
-		$params = array(
+		$url = wfArrayToCgi( array(
 			'action' => 'query',
 			'meta' => 'siteinfo',
 			'siprop' => 'interwikimap',
 			'sifilteriw' => 'local',
 			'format' => 'json'
-		);
+		) );
 
-		// todo: is valid
-		if ( !empty ( $this->source ) ) {
-			try {
-				// make sure this has the '?'
-				$baseUrl = rtrim( $this->source, '?' ) . '?';
-			} catch( Exception $e ) {
-				$this->error( "Error: Invalid api source" );
-			}
+		if ( !empty( $this->source ) ) {
+			$url = rtrim( $this->source, '?' ) . '?' . $url;
 		}
 
-		$url = $baseUrl . wfArrayToCgi( $params );
-
 		$json = Http::get( $url );
-		$data = FormatJson::decode( $json, true );
+		$data = json_decode( $json, true );
 
-		if ( $data ) {
+		if ( is_array( $data ) ) {
 			return $data['query']['interwikimap'];
 		} else {
 			return false;
 		}
 	}
 
-	protected function doPopulate( $data, $force ) {
+	/**
+	 * @param array[] $data
+	 * @param bool $force
+	 *
+	 * @return bool
+	 */
+	protected function doPopulate( array $data, $force ) {
 		$dbw = wfGetDB( DB_MASTER );
 
 		if ( !$force ) {
@@ -105,18 +120,21 @@ TEXT;
 			}
 		}
 
-		foreach( $data as $d ) {
+		foreach ( $data as $d ) {
+			$prefix = $d['prefix'];
+
 			$row = $dbw->selectRow(
 				'interwiki',
 				'1',
-				array( 'iw_prefix' => $d['prefix'] ),
+				array( 'iw_prefix' => $prefix ),
 				__METHOD__
 			);
 
 			if ( ! $row ) {
 				$dbw->insert(
 					'interwiki',
-					array( 'iw_prefix' => $d['prefix'],
+					array(
+						'iw_prefix' => $prefix,
 						'iw_url' => $d['url'],
 						'iw_local' => 1
 					),
@@ -124,13 +142,24 @@ TEXT;
 					'IGNORE'
 				);
 			}
+
+			$this->clearCacheEntry( $prefix );
 		}
 
 		$this->output( "Interwiki links are populated.\n" );
 
 		return true;
 	}
+
+	/**
+	 * @param string $prefix
+	 */
+	private function clearCacheEntry( $prefix ) {
+		$key = wfMemcKey( 'interwiki', $prefix );
+		$this->cache->delete( $key );
+	}
+
 }
 
-$maintClass = 'PopulateInterwiki';
-require_once( RUN_MAINTENANCE_IF_MAIN );
+$maintClass = 'Wikibase\PopulateInterwiki';
+require_once RUN_MAINTENANCE_IF_MAIN;

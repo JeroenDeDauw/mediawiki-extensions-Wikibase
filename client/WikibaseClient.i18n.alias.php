@@ -15,6 +15,7 @@ $specialPageAliases = array();
 /** English (English) */
 $specialPageAliases['en'] = array(
 	'UnconnectedPages' => array( 'UnconnectedPages', 'WithoutConnection', 'WithoutSitelinks' ),
+	'PagesWithBadges' => array( 'PagesWithBadges', 'QueryBadges' ),
 );
 
 /** Arabic (العربية) */
@@ -22,14 +23,24 @@ $specialPageAliases['ar'] = array(
 	'UnconnectedPages' => array( 'صفحات_غير_متصلة', 'بدون_اتصال', 'بدون_وصلات_موقع' ),
 );
 
-/** Egyptian Spoken Arabic (مصرى) */
+/** Egyptian Arabic (مصرى) */
 $specialPageAliases['arz'] = array(
 	'UnconnectedPages' => array( 'صفحات_مش_متوصله', 'من_غير_وصله', 'من_غير_وصلات_موقع' ),
+);
+
+/** Western Balochi (بلوچی رخشانی) */
+$specialPageAliases['bgn'] = array(
+	'UnconnectedPages' => array( 'وسل_نه_بوته_ئین_تاکدیمان' ),
 );
 
 /** German (Deutsch) */
 $specialPageAliases['de'] = array(
 	'UnconnectedPages' => array( 'Nicht_verbundene_Seiten' ),
+);
+
+/** Spanish (español) */
+$specialPageAliases['es'] = array(
+	'UnconnectedPages' => array( 'PáginasSinConexión' ),
 );
 
 /** Estonian (eesti) */
@@ -49,7 +60,7 @@ $specialPageAliases['fi'] = array(
 
 /** Hebrew (עברית) */
 $specialPageAliases['he'] = array(
-	'UnconnectedPages' => array( 'דפים_שלא_מקושרים_לפריטים' ),
+	'UnconnectedPages' => array( 'דפים_שאינם_מקושרים_לפריטים', 'דפים_שלא_מקושרים_לפריטים' ),
 );
 
 /** Italian (italiano) */
@@ -80,6 +91,11 @@ $specialPageAliases['mk'] = array(
 /** Dutch (Nederlands) */
 $specialPageAliases['nl'] = array(
 	'UnconnectedPages' => array( 'OngekoppeldePaginas', 'OngekoppeldePagina\'s' ),
+);
+
+/** Portuguese (português) */
+$specialPageAliases['pt'] = array(
+	'UnconnectedPages' => array( 'Páginas_sem_conexões' ),
 );
 
 /** Turkish (Türkçe) */

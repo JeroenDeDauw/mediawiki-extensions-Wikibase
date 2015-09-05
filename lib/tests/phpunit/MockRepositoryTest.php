@@ -3,13 +3,15 @@
 namespace Wikibase\Test;
 
 use User;
-use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Entity\Entity;
+use Wikibase\DataModel\Entity\EntityRedirect;
+use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\ItemId;
+use Wikibase\DataModel\Entity\Property;
 use Wikibase\DataModel\Entity\PropertyId;
-use Wikibase\DataModel\SimpleSiteLink;
-use Wikibase\Entity;
-use Wikibase\Item;
-use Wikibase\Property;
+use Wikibase\DataModel\Entity\BasicEntityIdParser;
+use Wikibase\DataModel\SiteLink;
+use Wikibase\Lib\Store\UnresolvedRedirectException;
 
 /**
  * @covers Wikibase\Test\MockRepository
@@ -23,11 +25,14 @@ use Wikibase\Property;
  */
 class MockRepositoryTest extends \MediaWikiTestCase {
 
-	/* @var MockRepository */
-	protected $repo;
+	/**
+	 * @var MockRepository|null
+	 */
+	private $repo = null;
 
-	public function setUp() {
+	protected function setUp() {
 		parent::setUp();
+
 		$this->repo = new MockRepository();
 	}
 
@@ -38,11 +43,10 @@ class MockRepositoryTest extends \MediaWikiTestCase {
 		$p23 = new PropertyId( 'p23' );
 		$p42 = new PropertyId( 'p42' );
 
-		$item = Item::newEmpty();
-		$item->setId( $q23 );
+		$item = new Item( $q23 );
 		$this->repo->putEntity( $item );
 
-		$prop = Property::newEmpty();
+		$prop = Property::newFromType( 'string' );
 		$prop->setId( $p23 );
 		$this->repo->putEntity( $prop );
 
@@ -56,7 +60,7 @@ class MockRepositoryTest extends \MediaWikiTestCase {
 	}
 
 	public function testGetEntity() {
-		$item = new Item( array() );
+		$item = new Item();
 		$item->setLabel( 'en', 'foo' );
 
 		// set up a data Item
@@ -68,7 +72,7 @@ class MockRepositoryTest extends \MediaWikiTestCase {
 		$this->repo->putEntity( $item, 24 );
 
 		// set up a property
-		$prop = new Property( array() );
+		$prop = Property::newFromType( 'string' );
 		$prop->setLabel( 'en', 'foo' );
 		$prop->setId( $itemId->getNumericId() ); // same numeric id, different prefix
 
@@ -76,32 +80,26 @@ class MockRepositoryTest extends \MediaWikiTestCase {
 		$this->repo->putEntity( $prop );
 
 		// test latest item
+		/** @var Item $item */
 		$item = $this->repo->getEntity( $itemId );
 		$this->assertNotNull( $item, "Entity " . $itemId );
-		$this->assertInstanceOf( '\Wikibase\Item', $item, "Entity " . $itemId );
-		$this->assertEquals( 'foo', $item->getLabel( 'en' ) );
-		$this->assertEquals( 'bar', $item->getLabel( 'de' ) );
+		$this->assertInstanceOf( 'Wikibase\DataModel\Entity\Item', $item, "Entity " . $itemId );
+		$this->assertEquals( 'foo', $item->getFingerprint()->getLabel( 'en' )->getText() );
+		$this->assertEquals( 'bar', $item->getFingerprint()->getLabel( 'de' )->getText() );
 
 		// test we can't mess with entities in the repo
 		$item->setLabel( 'en', 'STRANGE' );
 		$item = $this->repo->getEntity( $itemId );
-		$this->assertEquals( 'foo', $item->getLabel( 'en' ) );
-
-		// test item by rev id
-		$item = $this->repo->getEntity( $itemId, 23 );
-		$this->assertNotNull( $item, "Entity " . $itemId . "@23" );
-		$this->assertInstanceOf( '\Wikibase\Item', $item, "Entity " . $itemId );
-		$this->assertEquals( 'foo', $item->getLabel( 'en' ) );
-		$this->assertEquals( null, $item->getLabel( 'de' ) );
+		$this->assertEquals( 'foo', $item->getFingerprint()->getLabel( 'en' )->getText() );
 
 		// test latest prop
 		$prop = $this->repo->getEntity( $propId );
 		$this->assertNotNull( $prop, "Entity " . $propId );
-		$this->assertInstanceOf( '\Wikibase\Property', $prop, "Entity " . $propId );
+		$this->assertInstanceOf( 'Wikibase\DataModel\Entity\Property', $prop, "Entity " . $propId );
 	}
 
 	public function testGetEntityRevision() {
-		$item = new Item( array() );
+		$item = new Item();
 		$item->setLabel( 'en', 'foo' );
 
 		// set up a data Item
@@ -113,7 +111,7 @@ class MockRepositoryTest extends \MediaWikiTestCase {
 		$this->repo->putEntity( $item, 24 );
 
 		// set up a property
-		$prop = new Property( array() );
+		$prop = Property::newFromType( 'string' );
 		$prop->setLabel( 'en', 'foo' );
 		$prop->setId( $itemId->getNumericId() ); // same numeric id, different prefix
 
@@ -124,27 +122,27 @@ class MockRepositoryTest extends \MediaWikiTestCase {
 		$itemRev = $this->repo->getEntityRevision( $itemId );
 		$this->assertNotNull( $item, "Entity " . $itemId );
 		$this->assertInstanceOf( '\Wikibase\EntityRevision', $itemRev, "Entity " . $itemId );
-		$this->assertInstanceOf( '\Wikibase\Item', $itemRev->getEntity(), "Entity " . $itemId );
-		$this->assertEquals( 24, $itemRev->getRevision() );
+		$this->assertInstanceOf( 'Wikibase\DataModel\Entity\Item', $itemRev->getEntity(), "Entity " . $itemId );
+		$this->assertEquals( 24, $itemRev->getRevisionId() );
 
 		// test item by rev id
 		$itemRev = $this->repo->getEntityRevision( $itemId, 23 );
 		$this->assertNotNull( $item, "Entity " . $itemId . "@23" );
 		$this->assertInstanceOf( '\Wikibase\EntityRevision', $itemRev, "Entity " . $itemId );
-		$this->assertInstanceOf( '\Wikibase\Item', $itemRev->getEntity(), "Entity " . $itemId );
-		$this->assertEquals( 23, $itemRev->getRevision() );
+		$this->assertInstanceOf( 'Wikibase\DataModel\Entity\Item', $itemRev->getEntity(), "Entity " . $itemId );
+		$this->assertEquals( 23, $itemRev->getRevisionId() );
 		$this->assertEquals( "20130101000000", $itemRev->getTimestamp() );
 
 		// test latest prop
 		$propRev = $this->repo->getEntityRevision( $propId );
 		$this->assertNotNull( $propRev, "Entity " . $propId );
 		$this->assertInstanceOf( '\Wikibase\EntityRevision', $propRev, "Entity " . $propId );
-		$this->assertInstanceOf( '\Wikibase\Property', $propRev->getEntity(), "Entity " . $propId );
+		$this->assertInstanceOf( 'Wikibase\DataModel\Entity\Property', $propRev->getEntity(), "Entity " . $propId );
 	}
 
 	public function testGetItemIdForLink() {
-		$item = new Item( array() );
-		$item->addSiteLink( new SimpleSiteLink( 'enwiki', 'Foo' ) );
+		$item = new Item();
+		$item->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Foo' );
 
 		// test item lookup
 		$this->repo->putEntity( $item );
@@ -154,7 +152,7 @@ class MockRepositoryTest extends \MediaWikiTestCase {
 		$this->assertEquals( null, $this->repo->getItemIdForLink( 'xywiki', 'Foo' ) );
 
 		// test lookup after item modification
-		$item->addSiteLink( new SimpleSiteLink( 'enwiki', 'Bar' ), 'set' );
+		$item->getSiteLinkList()->setNewSiteLink( 'enwiki', 'Bar' );
 		$this->repo->putEntity( $item );
 
 		$this->assertEquals( null, $this->repo->getItemIdForLink( 'enwiki', 'Foo' ) );
@@ -167,41 +165,41 @@ class MockRepositoryTest extends \MediaWikiTestCase {
 		$this->assertEquals( null, $this->repo->getItemIdForLink( 'enwiki', 'Bar' ) );
 	}
 
-	public static function provideGetConflictsForItem() {
+	public function provideGetConflictsForItem() {
 		$cases = array();
 
 		// #0: same link ---------
-		$a = new Item( array( 'entity' => 'Q1' ) );
-		$a->addSiteLink( new SimpleSiteLink( 'enwiki', 'Foo' ) );
-		$a->addSiteLink( new SimpleSiteLink( 'dewiki', 'Foo' ) );
+		$a = new Item( new ItemId( 'Q1' ) );
+		$a->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Foo' );
+		$a->getSiteLinkList()->addNewSiteLink( 'dewiki', 'Foo' );
 
-		$b = new Item( array( 'entity' => 'Q2' ) );
-		$b->addSiteLink( new SimpleSiteLink( 'enwiki', 'Foo' ) );
-		$b->addSiteLink( new SimpleSiteLink( 'dewiki', 'Bar' ) );
+		$b = new Item( new ItemId( 'Q2' ) );
+		$b->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Foo' );
+		$b->getSiteLinkList()->addNewSiteLink( 'dewiki', 'Bar' );
 
 		$cases[] = array( $a, $b, array( array( 'enwiki', 'Foo', 1 ) ) );
 
 		// #1: same site ---------
-		$a = new Item( array( 'entity' => 'Q1' ) );
-		$a->addSiteLink( new SimpleSiteLink( 'enwiki', 'Foo' ) );
+		$a = new Item( new ItemId( 'Q1' ) );
+		$a->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Foo' );
 
-		$b = new Item( array( 'entity' => 'Q2' ) );
-		$b->addSiteLink( new SimpleSiteLink( 'enwiki', 'Bar' ) );
+		$b = new Item( new ItemId( 'Q2' ) );
+		$b->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Bar' );
 
 		$cases[] = array( $a, $b, array() );
 
 		// #2: same page ---------
-		$a = new Item( array( 'entity' => 'Q1' ) );
-		$a->addSiteLink( new SimpleSiteLink( 'enwiki', 'Foo' ) );
+		$a = new Item( new ItemId( 'Q1' ) );
+		$a->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Foo' );
 
-		$b = new Item( array( 'entity' => 'Q2' ) );
-		$b->addSiteLink( new SimpleSiteLink( 'dewiki', 'Foo' ) );
+		$b = new Item( new ItemId( 'Q2' ) );
+		$b->getSiteLinkList()->addNewSiteLink( 'dewiki', 'Foo' );
 
 		$cases[] = array( $a, $b, array() );
 
 		// #3: same item ---------
-		$a = new Item( array( 'entity' => 'Q1' ) );
-		$a->addSiteLink( new SimpleSiteLink( 'enwiki', 'Foo' ) );
+		$a = new Item( new ItemId( 'Q1' ) );
+		$a->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Foo' );
 
 		$cases[] = array( $a, $a, array() );
 
@@ -218,16 +216,16 @@ class MockRepositoryTest extends \MediaWikiTestCase {
 		$this->assertArrayEquals( $expectedConflicts, $conflicts );
 	}
 
-	public static function provideGetLinks() {
+	public function provideGetLinks() {
 		$cases = array();
 
-		$a = new Item( array( 'entity' => 'Q1' ) );
-		$a->addSiteLink( new SimpleSiteLink( 'enwiki', 'Foo' ) );
-		$a->addSiteLink( new SimpleSiteLink( 'dewiki', 'Bar' ) );
+		$a = new Item( new ItemId( 'Q1' ) );
+		$a->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Foo' );
+		$a->getSiteLinkList()->addNewSiteLink( 'dewiki', 'Bar' );
 
-		$b = new Item( array( 'entity' => 'Q2' ) );
-		$b->addSiteLink( new SimpleSiteLink( 'enwiki', 'Bar' ) );
-		$b->addSiteLink( new SimpleSiteLink( 'dewiki', 'Xoo' ) );
+		$b = new Item( new ItemId( 'Q2' ) );
+		$b->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Bar' );
+		$b->getSiteLinkList()->addNewSiteLink( 'dewiki', 'Xoo' );
 
 		$items = array( $a, $b );
 
@@ -236,7 +234,7 @@ class MockRepositoryTest extends \MediaWikiTestCase {
 			array(), // items
 			array(), // sites
 			array(), // pages
-			array(  // expected
+			array( // expected
 				array( 'enwiki', 'Foo', 1 ),
 				array( 'dewiki', 'Bar', 1 ),
 				array( 'enwiki', 'Bar', 2 ),
@@ -311,20 +309,7 @@ class MockRepositoryTest extends \MediaWikiTestCase {
 		$this->assertArrayEquals( $expectedLinks, $links );
 	}
 
-	/**
-	 * @dataProvider provideGetLinks
-	 */
-	public function testCountLinks( array $items, array $itemIds, array $sites, array $pages, array $expectedLinks ) {
-		foreach ( $items as $item ) {
-			$this->repo->putEntity( $item );
-		}
-
-		$n = $this->repo->countLinks( $itemIds, $sites, $pages );
-
-		$this->assertEquals( count( $expectedLinks ), $n );
-	}
-
-	public static function provideGetEntities() {
+	public function provideGetEntities() {
 		return array(
 			array( // #0: empty
 				array(), // ids
@@ -361,10 +346,20 @@ class MockRepositoryTest extends \MediaWikiTestCase {
 	}
 
 	protected function setupGetEntities() {
-		$one = new Item( array( 'entity' => 'Q1', 'label' => array( 'en' => 'one' ) ) );
-		$two = new Item( array( 'entity' => 'Q2', 'label' => array( 'en' => 'two' ) ) );
-		$three = new Item( array( 'entity' => 'Q3', 'label' => array( 'en' => 'three', 'de' => 'drei' ), 'description' => array( 'en' => 'the third' ) ) );
-		$prop = new Property( array( 'entity' => 'P4', 'label' => array( 'en' => 'property!' ), 'datatype' => 'string' ) );
+		$one = new Item( new ItemId( 'Q1' ) );
+		$one->setLabel( 'en', 'one' );
+
+		$two = new Item( new ItemId( 'Q2' ) );
+		$two->setLabel( 'en', 'two' );
+
+		$three = new Item( new ItemId( 'Q3' ) );
+		$three->setLabel( 'en', 'three' );
+		$three->setLabel( 'de', 'drei' );
+		$three->setDescription( 'en', 'the third' );
+
+		$prop = Property::newFromType( 'string' );
+		$prop->setId( 4 );
+		$prop->setLabel( 'en', 'property!' );
 
 		$this->repo->putEntity( $one, 1001 );
 		$this->repo->putEntity( $two, 1002 );
@@ -381,10 +376,12 @@ class MockRepositoryTest extends \MediaWikiTestCase {
 	public function testGetEntities( $ids, $expected, $expectedError = false ) {
 		$this->setupGetEntities();
 
+		$idParser = new BasicEntityIdParser();
+
 		// convert string IDs to EntityId objects
 		foreach ( $ids as $i => $id ) {
 			if ( is_string( $id ) ) {
-				$ids[ $i ] = EntityId::newFromPrefixedId( $id );
+				$ids[ $i ] = $idParser->parse( $id );
 			}
 		}
 
@@ -394,7 +391,7 @@ class MockRepositoryTest extends \MediaWikiTestCase {
 		try {
 			$entities = $this->repo->getEntities( $ids );
 
-			if ( $expectedError !== false  ) {
+			if ( $expectedError !== false ) {
 				$this->fail( "expected error: " . $expectedError );
 			}
 		} catch ( \MWException $ex ) {
@@ -418,7 +415,7 @@ class MockRepositoryTest extends \MediaWikiTestCase {
 		$actual = array();
 		foreach ( $entities as $key => $e ) {
 			if ( is_object( $e ) ) {
-				$actual[ $e->getId()->getPrefixedId() ] = $e->getLabels();
+				$actual[ $e->getId()->getSerialization() ] = $e->getFingerprint()->getLabels()->toTextArray();
 			} else {
 				$actual[ $key ] = $e;
 			}
@@ -443,18 +440,18 @@ class MockRepositoryTest extends \MediaWikiTestCase {
 	}
 
 	public function testGetSiteLinksForItem() {
-		$one = new Item( array( 'entity' => 'Q1' ) );
+		$one = new Item( new ItemId( 'Q1' ) );
 
-		$one->addSiteLink( new SimpleSiteLink( 'dewiki', 'Xoo' ) );
-		$one->addSiteLink( new SimpleSiteLink( 'enwiki', 'Foo' ) );
+		$one->getSiteLinkList()->addNewSiteLink( 'dewiki', 'Xoo' );
+		$one->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Foo' );
 
 		$this->repo->putEntity( $one );
 
 		// check link retrieval
 		$this->assertEquals(
 			array(
-				new SimpleSiteLink( 'dewiki', 'Xoo' ),
-				new SimpleSiteLink( 'enwiki', 'Foo' ),
+				new SiteLink( 'dewiki', 'Xoo' ),
+				new SiteLink( 'enwiki', 'Foo' ),
 			),
 			$this->repo->getSiteLinksForItem( $one->getId() )
 		);
@@ -463,231 +460,57 @@ class MockRepositoryTest extends \MediaWikiTestCase {
 		$this->assertEmpty( $this->repo->getSiteLinksForItem( new ItemId( 'q123' ) ) );
 	}
 
-	public function provideBuildEntityInfo() {
-		return array(
-			array(
-				array(),
-				array()
-			),
-
-			array(
-				array(
-					new ItemId( 'Q1' ),
-					new PropertyId( 'P3' )
-				),
-				array(
-					'Q1' => array( 'id' => 'Q1', 'type' => Item::ENTITY_TYPE ),
-					'P3' => array( 'id' => 'P3', 'type' => Property::ENTITY_TYPE ),
-				)
-			),
-
-			array(
-				array(
-					new ItemId( 'Q1' ),
-					new ItemId( 'Q1' ),
-				),
-				array(
-					'Q1' => array( 'id' => 'Q1', 'type' => Item::ENTITY_TYPE ),
-				)
-			),
-		);
-	}
-
-	/**
-	 * @dataProvider provideBuildEntityInfo
-	 */
-	public function testBuildEntityInfo( array $ids, array $expected ) {
-		$actual = $this->repo->buildEntityInfo( $ids );
-
-		$this->assertArrayEquals( $expected, $actual, false, true );
-	}
-
-	public function provideAddTerms() {
-		return array(
-			array(
-				array(
-					'Q1' => array( 'id' => 'Q1', 'type' => Item::ENTITY_TYPE ),
-					'Q3' => array( 'id' => 'Q3', 'type' => Item::ENTITY_TYPE ),
-					'Q7' => array( 'id' => 'Q7', 'type' => Item::ENTITY_TYPE ),
-				),
-				null,
-				null,
-				array(
-					'Q1' => array( 'id' => 'Q1', 'type' => Item::ENTITY_TYPE,
-						'labels' => array( 'en' => array( 'language' => 'en', 'value' => 'one' ),
-											'de' => array( 'language' => 'de', 'value' => 'eins' ), ),
-						'descriptions' => array(),
-						'aliases' => array(),
-					),
-					'Q3' => array( 'id' => 'Q3', 'type' => Item::ENTITY_TYPE,
-						'labels' => array( 'en' => array( 'language' => 'en', 'value' => 'three' ),
-											'de' => array( 'language' => 'de', 'value' => 'drei' ) ),
-						'descriptions' => array( 'en' => array( 'language' => 'en', 'value' => 'the third' ) ),
-						'aliases' => array(),
-					),
-					'Q7' => array( 'id' => 'Q7', 'type' => Item::ENTITY_TYPE,
-						'labels' => array(),
-						'descriptions' => array(),
-						'aliases' => array() ),
-				)
-			),
-
-			array(
-				array(
-					'Q3' => array( 'id' => 'Q3', 'type' => Item::ENTITY_TYPE ),
-				),
-				array( 'label' ),
-				array( 'de' ),
-				array(
-					'Q3' => array( 'id' => 'Q3', 'type' => Item::ENTITY_TYPE,
-						'labels' => array( 'de' => array( 'language' => 'de', 'value' => 'drei' ) ),
-					),
-				)
-			),
-		);
-	}
-
-	/**
-	 * @dataProvider provideAddTerms
-	 */
-	public function testAddTerms( array $entityInfo, array $types = null, array $languages = null, array $expected = null ) {
-		$this->setupGetEntities();
-		$this->repo->addTerms( $entityInfo, $types, $languages );
-
-		foreach ( $expected as $id => $expectedRecord ) {
-			$this->assertArrayHasKey( $id, $entityInfo );
-			$actualRecord = $entityInfo[$id];
-
-			$this->assertArrayEquals( $expectedRecord, $actualRecord, false, true );
-		}
-	}
-
-	public function provideAddDataTypes() {
-		return array(
-			array(
-				array(
-					'P4' => array( 'id' => 'P4', 'type' => Property::ENTITY_TYPE ),
-					'P7' => array( 'id' => 'P7', 'type' => Property::ENTITY_TYPE ),
-					'Q7' => array( 'id' => 'Q7', 'type' => Item::ENTITY_TYPE ),
-				),
-				array(
-					'P4' => array( 'id' => 'P4', 'type' => Property::ENTITY_TYPE, 'datatype' => 'string' ),
-					'P7' => array( 'id' => 'P7', 'type' => Property::ENTITY_TYPE, 'datatype' => null ),
-					'Q7' => array( 'id' => 'Q7', 'type' => Item::ENTITY_TYPE ),
-				)
-			),
-		);
-	}
-
-	/**
-	 * @dataProvider provideAddDataTypes
-	 */
-	public function testAddDataTypes( array $entityInfo, array $expected = null ) {
-		$this->setupGetEntities();
-		$this->repo->addDataTypes( $entityInfo );
-
-		foreach ( $expected as $id => $expectedRecord ) {
-			$this->assertArrayHasKey( $id, $entityInfo );
-			$actualRecord = $entityInfo[$id];
-
-			$this->assertArrayEquals( $expectedRecord, $actualRecord, false, true );
-		}
-	}
-
-	/**
-	 * @dataProvider provideAddDataTypes
-	 */
-	public function testGetDataTypeIdForProperty() {
-		$property = Property::newEmpty();
-		$property->setId( new PropertyId( 'P4' ) );
-		$property->setDataTypeId( 'url' );
-
-		$this->repo->putEntity( $property );
-		$this->assertEquals( 'url', $this->repo->getDataTypeIdForProperty( new PropertyId( 'P4' ) ) );
-
-		$this->setExpectedException( 'Wikibase\Lib\PropertyNotFoundException' );
-		$this->repo->getDataTypeIdForProperty( new PropertyId( 'P3645' ) );
-	}
-
-	public function provideRemoveMissing() {
-		return array(
-			array(
-				array(),
-				array()
-			),
-
-			array(
-				array(
-					'Q2' => array( 'id' => 'Q2', 'type' => Item::ENTITY_TYPE ),
-				),
-				array(
-					'Q2' => array( 'id' => 'Q2', 'type' => Item::ENTITY_TYPE ),
-				),
-			),
-
-			array(
-				array(
-					'Q7' => array( 'id' => 'Q7', 'type' => Item::ENTITY_TYPE ),
-				),
-				array()
-			),
-
-			array(
-				array(
-					'Q7' => array( 'id' => 'Q7', 'type' => Item::ENTITY_TYPE ),
-					'P7' => array( 'id' => 'P7', 'type' => Property::ENTITY_TYPE ),
-					'Q2' => array( 'id' => 'Q2', 'type' => Item::ENTITY_TYPE ),
-				),
-				array(
-					'Q2' => array( 'id' => 'Q2', 'type' => Item::ENTITY_TYPE ),
-				)
-			),
-		);
-	}
-
-	/**
-	 * @dataProvider provideRemoveMissing
-	 */
-	public function testRemoveMissing( array $entityInfo, array $expected = null ) {
-		$this->setupGetEntities();
-		$this->repo->removeMissing( $entityInfo );
-
-		$this->assertArrayEquals( array_keys( $expected ), array_keys( $entityInfo ) );
-	}
-
 	public function provideSaveEntity() {
+		$item = new Item();
+		$item->setLabel( 'en', 'one' );
+
+		$secondItem = new Item( new ItemId( 'Q1' ) );
+		$secondItem->setLabel( 'en', 'one' );
+		$secondItem->setLabel( 'it', 'uno' );
+
+		$thirdItem = new Item( new ItemId( 'Q1' ) );
+		$thirdItem->setLabel( 'en', 'one' );
+
+		$fourthItem = new Item( new ItemId( 'Q123' ) );
+		$fourthItem->setLabel( 'en', 'one two three' );
+		$fourthItem->setLabel( 'de', 'eins zwei drei' );
+
+		$fifthItem = new Item( new ItemId( 'Q1' ) );
+		$fifthItem->setLabel( 'en', 'one' );
+		$fifthItem->setLabel( 'de', 'eins' );
+
 		return array(
 			'fresh' => array(
-				'entity' => new Item( array( 'label' => array( 'en' => 'one' ) ) ),
+				'entity' => $item,
 				'flags' => EDIT_NEW,
 				'baseRevid' => false,
 			),
 
 			'update' => array(
-				'entity' => new Item( array( 'entity' => 'Q1', 'label' => array( 'en' => 'one', 'it' => 'uno',  ) ) ),
+				'entity' => $secondItem,
 				'flags' => EDIT_UPDATE,
 				'baseRevid' => 1011,
 			),
 
 			'not fresh' => array(
-				'entity' => new Item( array( 'entity' => 'Q1', 'label' => array( 'en' => 'one' ) ) ),
+				'entity' => $thirdItem,
 				'flags' => EDIT_NEW,
 				'baseRevid' => false,
-				'error' => 'Wikibase\StorageException'
+				'error' => 'Wikibase\Lib\Store\StorageException'
 			),
 
 			'not exists' => array(
-				'entity' => new Item( array( 'entity' => 'Q123', 'label' => array( 'en' => 'one two three', 'de' => 'eins zwei drei' ) ) ),
+				'entity' => $fourthItem,
 				'flags' => EDIT_UPDATE,
 				'baseRevid' => false,
-				'error' => 'Wikibase\StorageException'
+				'error' => 'Wikibase\Lib\Store\\StorageException'
 			),
 
 			'bad base' => array(
-				'entity' => new Item( array( 'entity' => 'Q1', 'label' => array( 'en' => 'one', 'de' => 'eins' ) ) ),
+				'entity' => $fifthItem,
 				'flags' => EDIT_UPDATE,
 				'baseRevid' => 1234,
-				'error' => 'Wikibase\StorageException'
+				'error' => 'Wikibase\Lib\Store\\StorageException'
 			),
 		);
 	}
@@ -702,39 +525,147 @@ class MockRepositoryTest extends \MediaWikiTestCase {
 			$this->setExpectedException( $error );
 		}
 
-		$rev = $this->repo->saveEntity( $entity, '', $GLOBALS['wgUser'], $flags, $baseRevId );
+		$rev = $this->repo->saveEntity( $entity, 'f00', $GLOBALS['wgUser'], $flags, $baseRevId );
 
-		$this->assertEquals( $entity->getLabels(), $rev->getEntity()->getLabels() );
-		$this->assertEquals( $entity->getLabels(), $this->repo->getEntity( $entity->getId() )->getLabels() );
+		$logEntry = $this->repo->getLogEntry( $rev->getRevisionId() );
+		$this->assertNotNull( $logEntry );
+		$this->assertEquals( $rev->getRevisionId(), $logEntry['revision'] );
+		$this->assertEquals( $entity->getId()->getSerialization(), $logEntry['entity'] );
+		$this->assertEquals( 'f00', $logEntry['summary'] );
+
+		$savedEntity = $this->repo->getEntity( $entity->getId() );
+
+		$this->assertTrue( $entity->getFingerprint()->equals( $rev->getEntity()->getFingerprint() ) );
+		$this->assertTrue( $entity->getFingerprint()->equals( $savedEntity->getFingerprint() ) );
 
 		// test we can't mess with entities in the repo
-		$entity->setLabel( 'en', 'STRANGE' );
+		$entity->getFingerprint()->setLabel( 'en', 'STRANGE' );
 		$entity = $this->repo->getEntity( $entity->getId() );
-		$this->assertNotEquals( 'STRANGE', $entity->getLabel( 'en' ) );
+		$this->assertNotNull( $entity );
+		$this->assertNotEquals( 'STRANGE', $entity->getFingerprint()->getLabel( 'en' )->getText() );
 	}
 
-	public function testDeleteEntity( ) {
-		$q23 = new ItemId( 'q23' );
-		$item = Item::newEmpty();
-		$item->setId( $q23 );
+	public function testSaveRedirect() {
+		$this->setupGetEntities();
+
+		$q10 = new ItemId( 'Q10' );
+		$q1 = new ItemId( 'Q1' );
+
+		$redirect = new EntityRedirect( $q10, $q1 );
+		$revId = $this->repo->saveRedirect( $redirect, 'redirected Q10 to Q1', $GLOBALS['wgUser'] );
+
+		$this->assertGreaterThan( 0, $revId );
+
+		$logEntry = $this->repo->getLogEntry( $revId );
+		$this->assertNotNull( $logEntry );
+		$this->assertEquals( $revId, $logEntry['revision'] );
+		$this->assertEquals( $redirect->getEntityId()->getSerialization(), $logEntry['entity'] );
+		$this->assertEquals( 'redirected Q10 to Q1', $logEntry['summary'] );
+
+		$this->setExpectedException( 'Wikibase\Lib\Store\UnresolvedRedirectException' );
+		$this->repo->getEntity( $q10 );
+	}
+
+	public function testGetLogEntry() {
+		$this->setupGetEntities();
+
+		$q10 = new ItemId( 'Q10' );
+		$q11 = new ItemId( 'Q11' );
+
+		$redirect = new EntityRedirect( $q10, $q11 );
+		$revId = $this->repo->saveRedirect( $redirect, 'foo', $GLOBALS['wgUser'], EDIT_NEW );
+
+		$logEntry = $this->repo->getLogEntry( $revId );
+
+		$this->assertNotNull( $logEntry );
+		$this->assertEquals( $revId, $logEntry['revision'] );
+		$this->assertEquals( 'Q10', $logEntry['entity'] );
+		$this->assertEquals( 'foo', $logEntry['summary'] );
+	}
+
+	public function testGetLatestLogEntryFor() {
+		$this->setupGetEntities();
+
+		$q10 = new ItemId( 'Q10' );
+		$q11 = new ItemId( 'Q11' );
+		$q12 = new ItemId( 'Q12' );
+
+		// first entry
+		$redirect = new EntityRedirect( $q10, $q11 );
+		$revId = $this->repo->saveRedirect( $redirect, 'foo', $GLOBALS['wgUser'], EDIT_NEW );
+
+		$logEntry = $this->repo->getLatestLogEntryFor( $q10 );
+
+		$this->assertNotNull( $logEntry );
+		$this->assertEquals( $revId, $logEntry['revision'] );
+		$this->assertEquals( 'Q10', $logEntry['entity'] );
+		$this->assertEquals( 'foo', $logEntry['summary'] );
+
+		// second entry
+		$redirect = new EntityRedirect( $q10, $q12 );
+		$revId = $this->repo->saveRedirect( $redirect, 'bar', $GLOBALS['wgUser'], EDIT_NEW );
+
+		$logEntry = $this->repo->getLatestLogEntryFor( $q10 );
+
+		$this->assertNotNull( $logEntry );
+		$this->assertEquals( $revId, $logEntry['revision'] );
+		$this->assertEquals( 'Q10', $logEntry['entity'] );
+		$this->assertEquals( 'bar', $logEntry['summary'] );
+	}
+
+	public function testDeleteEntity() {
+		$item = new Item( new ItemId( 'Q23' ) );
 		$this->repo->putEntity( $item );
 
 		$this->repo->deleteEntity( $item->getId(), 'testing', $GLOBALS['wgUser'] );
 		$this->assertFalse( $this->repo->hasEntity( $item->getId() ) );
 	}
 
+	public function testPutRedirect() {
+		$redirect = new EntityRedirect( new ItemId( 'Q11' ), new ItemId( 'Q1' ) );
+		$this->repo->putRedirect( $redirect );
+
+		try {
+			$this->repo->getEntityRevision( new ItemId( 'Q11' ) );
+			$this->fail( 'getEntityRevision() should fail for redirects' );
+		} catch ( UnresolvedRedirectException $ex ) {
+			$this->assertEquals( 'Q1', $ex->getRedirectTargetId()->getSerialization() );
+			$this->assertGreaterThan( 0, $ex->getRevisionId() );
+			$this->assertNotEmpty( $ex->getRevisionTimestamp() );
+		}
+
+		$this->repo->putRedirect( $redirect, 117, '20150505000000' );
+
+		try {
+			$this->repo->getEntityRevision( new ItemId( 'Q11' ) );
+			$this->fail( 'getEntityRevision() should fail for redirects' );
+		} catch ( UnresolvedRedirectException $ex ) {
+			$this->assertEquals( 'Q1', $ex->getRedirectTargetId()->getSerialization() );
+			$this->assertEquals( 117, $ex->getRevisionId() );
+			$this->assertEquals( '20150505000000', $ex->getRevisionTimestamp() );
+		}
+	}
+
+	public function testDeleteRedirect() {
+		$redirect = new EntityRedirect( new ItemId( 'Q11' ), new ItemId( 'Q1' ) );
+		$this->repo->putRedirect( $redirect );
+
+		$this->setExpectedException( 'Wikibase\Lib\Store\UnresolvedRedirectException' );
+		$this->repo->deleteEntity( $redirect->getEntityId(), 'testing', $GLOBALS['wgUser'] );
+	}
+
 	public function testUpdateWatchlist() {
 		$user = User::newFromName( "WikiPageEntityStoreTestUser2" );
 
-		$item = Item::newEmpty();
+		$item = new Item();
 		$this->repo->saveEntity( $item, 'testing', $user, EDIT_NEW );
 		$itemId = $item->getId();
 
 		$this->repo->updateWatchlist( $user, $itemId, true );
-		$this->assertTrue(  $this->repo->isWatching( $user, $itemId ) );
+		$this->assertTrue( $this->repo->isWatching( $user, $itemId ) );
 
 		$this->repo->updateWatchlist( $user, $itemId, false );
-		$this->assertFalse(  $this->repo->isWatching( $user, $itemId ) );
+		$this->assertFalse( $this->repo->isWatching( $user, $itemId ) );
 	}
 
 	public function testUserWasLastToEdit() {
@@ -742,29 +673,65 @@ class MockRepositoryTest extends \MediaWikiTestCase {
 		$user2 = User::newFromName( "WikiPageEntityStoreTestUserWasLastToEdit2" );
 
 		// initial revision
-		$item = Item::newEmpty();
+		$item = new Item( new ItemId( 'Q42' ) );
 		$item->setLabel( 'en', 'one' );
 		$rev1 = $this->repo->saveEntity( $item, 'testing 1', $user1, EDIT_NEW );
 		$itemId = $item->getId();
 
-		$this->assertTrue( $this->repo->userWasLastToEdit( $user1, $itemId, $rev1->getRevision() ), 'user was first and last to edit' );
-		$this->assertFalse( $this->repo->userWasLastToEdit( $user2, $itemId, $rev1->getRevision() ), 'user has not edited yet' );
+		$this->assertTrue( $this->repo->userWasLastToEdit( $user1, $itemId, $rev1->getRevisionId() ), 'user was first and last to edit' );
+		$this->assertFalse( $this->repo->userWasLastToEdit( $user2, $itemId, $rev1->getRevisionId() ), 'user has not edited yet' );
 
 		// second edit by another user
-		$item = $item->copy();
+		$item = new Item( new ItemId( 'Q42' ) );
 		$item->setLabel( 'en', 'two' );
 		$rev2 = $this->repo->saveEntity( $item, 'testing 2', $user2, EDIT_UPDATE );
 
-		$this->assertFalse( $this->repo->userWasLastToEdit( $user1, $itemId, $rev1->getRevision() ), 'original user was no longer last to edit' );
-		$this->assertTrue( $this->repo->userWasLastToEdit( $user2, $itemId, $rev2->getRevision() ), 'second user has just edited' );
+		$this->assertFalse(
+			$this->repo->userWasLastToEdit( $user1, $itemId, $rev1->getRevisionId() ),
+			'original user was no longer last to edit'
+		);
+		$this->assertTrue(
+			$this->repo->userWasLastToEdit( $user2, $itemId, $rev2->getRevisionId() ),
+			'second user has just edited'
+		);
 
 		// subsequent edit by the original user
-		$item = $item->copy();
+		$item = new Item( new ItemId( 'Q42' ) );
 		$item->setLabel( 'en', 'three' );
 		$rev3 = $this->repo->saveEntity( $item, 'testing 3', $user1, EDIT_UPDATE );
 
-		$this->assertFalse( $this->repo->userWasLastToEdit( $user1, $itemId, $rev1->getRevision() ), 'another user had edited at some point' );
-		$this->assertTrue( $this->repo->userWasLastToEdit( $user1, $itemId, $rev3->getRevision() ), 'original user was last to edit' );
-		$this->assertFalse( $this->repo->userWasLastToEdit( $user2, $itemId, $rev2->getRevision() ), 'other user was no longer last to edit' );
+		$this->assertFalse( $this->repo->userWasLastToEdit( $user1, $itemId, $rev1->getRevisionId() ), 'another user had edited at some point' );
+		$this->assertTrue( $this->repo->userWasLastToEdit( $user1, $itemId, $rev3->getRevisionId() ), 'original user was last to edit' );
+		$this->assertFalse( $this->repo->userWasLastToEdit( $user2, $itemId, $rev2->getRevisionId() ), 'other user was no longer last to edit' );
 	}
+
+	public function testGetRedirectIds() {
+		$mock = new MockRepository();
+
+		$q5 = new ItemId( 'Q5' );
+		$q55 = new ItemId( 'Q55' );
+		$q555 = new ItemId( 'Q555' );
+
+		$mock->putRedirect( new EntityRedirect( $q55, $q5 ) );
+		$mock->putRedirect( new EntityRedirect( $q555, $q5 ) );
+
+		$this->assertEmpty( $mock->getRedirectIds( $q55 ), 'no redirects to redirect' );
+		$this->assertEquals( array( $q55, $q555 ), $mock->getRedirectIds( $q5 ), 'two redirects' );
+	}
+
+	public function testGetRedirectForEntityId() {
+		$mock = new MockRepository();
+
+		$q5 = new ItemId( 'Q5' );
+		$q55 = new ItemId( 'Q55' );
+		$q77 = new ItemId( 'Q77' );
+
+		$mock->putEntity( new Item( $q5 ) );
+		$mock->putRedirect( new EntityRedirect( $q55, $q5 ) );
+
+		$this->assertFalse( $mock->getRedirectForEntityId( $q77 ), 'unknown id' );
+		$this->assertNull( $mock->getRedirectForEntityId( $q5 ), 'not a redirect' );
+		$this->assertEquals( $q5, $mock->getRedirectForEntityId( $q55 ) );
+	}
+
 }

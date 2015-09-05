@@ -2,6 +2,7 @@
 
 namespace Wikibase\Test;
 
+use Wikibase\Repo\WikibaseRepo;
 use Wikibase\SqlStore;
 use Wikibase\Store;
 
@@ -21,7 +22,16 @@ use Wikibase\Store;
 class StoreTest extends \MediaWikiTestCase {
 
 	public function instanceProvider() {
-		$instances = array( new SqlStore() );
+		$wikibaseRepo = WikibaseRepo::getDefaultInstance();
+
+		$instances = array(
+			new SqlStore(
+				$wikibaseRepo->getEntityContentDataCodec(),
+				$wikibaseRepo->getEntityIdParser(),
+				$this->getMock( 'Wikibase\Store\EntityIdLookup' ),
+				$this->getMock( 'Wikibase\Lib\Store\EntityTitleLookup' )
+			)
+		);
 
 		return array( $instances );
 	}
@@ -39,8 +49,8 @@ class StoreTest extends \MediaWikiTestCase {
 	 * @dataProvider instanceProvider
 	 * @param Store $store
 	 */
-	public function testNewSiteLinkCache( Store $store ) {
-		$this->assertInstanceOf( '\Wikibase\SiteLinkLookup', $store->newSiteLinkCache() );
+	public function testNewSiteLinkStore( Store $store ) {
+		$this->assertInstanceOf( '\Wikibase\Lib\Store\SiteLinkLookup', $store->newSiteLinkStore() );
 	}
 
 	/**
@@ -49,6 +59,14 @@ class StoreTest extends \MediaWikiTestCase {
 	 */
 	public function testNewTermCache( Store $store ) {
 		$this->assertInstanceOf( '\Wikibase\TermIndex', $store->getTermIndex() );
+	}
+
+	/**
+	 * @dataProvider instanceProvider
+	 * @param Store $store
+	 */
+	public function testGetLabelConflictFinder( Store $store ) {
+		$this->assertInstanceOf( '\Wikibase\Lib\Store\LabelConflictFinder', $store->getLabelConflictFinder() );
 	}
 
 	/**

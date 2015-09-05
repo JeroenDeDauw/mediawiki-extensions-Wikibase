@@ -10,28 +10,30 @@
  * @constructor
  * @since 0.5
  *
+ * @param {wikibase.api.RepoApi} repoApi
  * @param {string} firstSiteId
  * @param {string} firstPageName
  * @param {string} secondSiteId
  * @param {string} secondPageName
  */
 wb.PageConnector = function PageConnector(
+	repoApi,
 	firstSiteId,
 	firstPageName,
 	secondSiteId,
 	secondPageName
 ) {
+	this._repoApi = repoApi;
+
 	this._firstSiteId = firstSiteId;
 	this._firstPageName = firstPageName;
 	this._secondSiteId = secondSiteId;
 	this._secondPageName = secondPageName;
-
-	this._repoApi = new wb.RepoApi();
 };
 
 $.extend( wb.PageConnector.prototype, {
 	/**
-	 * @type wikibase.RepoApi
+	 * @type wikibase.api.RepoApi
 	 */
 	_repoApi: null,
 
@@ -81,7 +83,7 @@ $.extend( wb.PageConnector.prototype, {
 			// Count site links
 			siteLinkCount = self._countSiteLinks( entity );
 
-			deferred.resolve( ( siteLinkCount ? entity : {} ) );
+			deferred.resolve( siteLinkCount ? entity : {} );
 		} );
 
 		return deferred.promise();
@@ -112,10 +114,10 @@ $.extend( wb.PageConnector.prototype, {
 	 *
 	 * @param {object} apiResult
 	 *
-	 * @return {Object} Entity as returned by the API
+	 * @return {object|undefined} Entity as returned by the API
 	 */
 	_extractEntity: function( apiResult ) {
-		for ( var i in apiResult.entities ) {
+		for( var i in apiResult.entities ) {
 			if ( apiResult.entities[ i ].sitelinks ) {
 				return apiResult.entities[ i ];
 			}
@@ -133,7 +135,7 @@ $.extend( wb.PageConnector.prototype, {
 		var siteLinkCount = 0,
 			i;
 
-		for ( i in entity.sitelinks ) {
+		for( i in entity.sitelinks ) {
 			if ( entity.sitelinks[ i ].site ) {
 				siteLinkCount += 1;
 			}
@@ -154,7 +156,8 @@ $.extend( wb.PageConnector.prototype, {
 
 		this._getEntityForPage( self._firstSiteId, self._firstPageName )
 		.done( function( data ) {
-			// Use the normalized title from now on (eg. for creating a new item with proper titles)
+			// Use the normalized title from now on (e.g. for creating a new item with proper
+			// titles).
 			if ( data.normalized ) {
 				self._firstPageName = data.normalized.n.to;
 			}
@@ -193,8 +196,8 @@ $.extend( wb.PageConnector.prototype, {
 		this._getEntityForPage( self._secondSiteId, self._secondPageName )
 		.done( function( data ) {
 			if ( data.normalized ) {
-				// Use the normalized title from now on (eg. for creating a new item with proper
-				// titles)
+				// Use the normalized title from now on (e.g. for creating a new item with proper
+				// titles).
 				self._secondPageName = data.normalized.n.to;
 			}
 
@@ -228,7 +231,8 @@ $.extend( wb.PageConnector.prototype, {
 		this._getEntityForPage( self._secondSiteId, self._secondPageName )
 		.fail( deferred.reject )
 		.done( function( data ) {
-			// Use the normalized title from now on (eg. for creating a new item with proper titles)
+			// Use the normalized title from now on (e.g. for creating a new item with proper
+			// titles).
 			if ( data.normalized ) {
 				self._secondPageName = data.normalized.n.to;
 			}
@@ -290,7 +294,7 @@ $.extend( wb.PageConnector.prototype, {
 			toId;
 
 		// XXX: We could get all properties above and then use a more complete
-		// comparison, maybe by abusing $.JSON to get real item sizes. That
+		// comparison, maybe by abusing JSON.stringify to get real item sizes. That
 		// *might* be a better estimate?!
 		if ( firstSiteLinkCount <= secondSiteLinkCount ) {
 			fromId = firstEntity.id;
@@ -324,11 +328,11 @@ $.extend( wb.PageConnector.prototype, {
 				labels: {},
 				sitelinks: {}
 			},
-			firstSite = wb.getSite( firstSiteId ),
-			secondSite = wb.getSite( secondSiteId );
+			firstSite = wb.sites.getSite( firstSiteId ),
+			secondSite = wb.sites.getSite( secondSiteId );
 
 		// Labels (page titles)
-		// FIXME: Remove this after bug 57564 has been solved!
+		// FIXME: Remove this after bug T59564 has been solved!
 		entityData.labels[ firstSite.getLanguageCode() ] = {
 			language: firstSite.getLanguageCode(),
 			value: firstPageName
@@ -339,12 +343,12 @@ $.extend( wb.PageConnector.prototype, {
 		};
 
 		// Sitelinks
-		entityData.sitelinks[ firstSite.getGlobalSiteId() ] = {
-			site: firstSite.getGlobalSiteId(),
+		entityData.sitelinks[ firstSite.getId() ] = {
+			site: firstSite.getId(),
 			title: firstPageName
 		};
-		entityData.sitelinks[ secondSite.getGlobalSiteId() ] = {
-			site: secondSite.getGlobalSiteId(),
+		entityData.sitelinks[ secondSite.getId() ] = {
+			site: secondSite.getId(),
 			title: secondPageName
 		};
 

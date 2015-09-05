@@ -1,17 +1,17 @@
 <?php
 
-namespace Wikibase\Test;
+namespace Wikibase\Test\Repo\Api;
 
 use MediaWikiSite;
 use Title;
-use Wikibase\Api\ItemByTitleHelper;
-use Wikibase\Api\ResultBuilder;
 use Wikibase\DataModel\Entity\ItemId;
-use Wikibase\SiteLinkCache;
+use Wikibase\Lib\Store\SiteLinkLookup;
+use Wikibase\Repo\Api\ItemByTitleHelper;
+use Wikibase\Repo\Api\ResultBuilder;
 use Wikibase\StringNormalizer;
 
 /**
- * @covers Wikibase\Api\ItemByTitleHelper
+ * @covers Wikibase\Repo\Api\ItemByTitleHelper
  *
  * @group Wikibase
  * @group WikibaseAPI
@@ -43,7 +43,7 @@ class ItemByTitleHelperTest extends \PHPUnit_Framework_TestCase {
 	 * @return ResultBuilder
 	 */
 	public function getResultBuilderMock( $expectedNormalizedTitle = 0 ) {
-		$apiResultBuilderMock = $this->getMockBuilder( 'Wikibase\Api\ResultBuilder' )
+		$apiResultBuilderMock = $this->getMockBuilder( 'Wikibase\Repo\Api\ResultBuilder' )
 			->disableOriginalConstructor()
 			->getMock();
 		$apiResultBuilderMock->expects( $this->exactly( $expectedNormalizedTitle ) )
@@ -53,19 +53,19 @@ class ItemByTitleHelperTest extends \PHPUnit_Framework_TestCase {
 	}
 
 	/**
-	 * @param ItemId|null $itemId
-	 * @return SiteLinkCache
+	 * @param mixed $itemId
+	 * @return SiteLinkLookup
 	 */
-	public function getSiteLinkCacheMock( $itemId = null ) {
-		$siteLinkCacheMock = $this->getMockBuilder( '\Wikibase\SiteLinkCache' )
+	public function getSiteLinkLookupMock( $itemId = null ) {
+		$siteLinkLookupMock = $this->getMockBuilder( '\Wikibase\Lib\Store\SiteLinkLookup' )
 			->disableOriginalConstructor()
 			->getMock();
 
-		$siteLinkCacheMock->expects( $this->any() )
+		$siteLinkLookupMock->expects( $this->any() )
 			->method( 'getItemIdForLink' )
 				->will( $this->returnValue( $itemId ) );
 
-		return $siteLinkCacheMock;
+		return $siteLinkLookupMock;
 	}
 
 	public function testGetEntityIdsSuccess() {
@@ -74,7 +74,7 @@ class ItemByTitleHelperTest extends \PHPUnit_Framework_TestCase {
 
 		$itemByTitleHelper = new ItemByTitleHelper(
 			$this->getResultBuilderMock(),
-			$this->getSiteLinkCacheMock( new ItemId( 'Q123' ) ),
+			$this->getSiteLinkLookupMock( new ItemId( 'Q123' ) ),
 			$this->getSiteStoreMock(),
 			new StringNormalizer()
 		);
@@ -84,7 +84,7 @@ class ItemByTitleHelperTest extends \PHPUnit_Framework_TestCase {
 
 		list( $entityIds, ) = $itemByTitleHelper->getItemIds( $sites, $titles, false );
 
-		foreach( $entityIds as $entityId ) {
+		foreach ( $entityIds as $entityId ) {
 			$this->assertEquals( $expectedEntityId, $entityId );
 		}
 	}
@@ -96,7 +96,7 @@ class ItemByTitleHelperTest extends \PHPUnit_Framework_TestCase {
 		$itemByTitleHelper = new ItemByTitleHelper(
 		// Two values should be added: The normalization and the failure to find an entity
 			$this->getResultBuilderMock( 1 ),
-			$this->getSiteLinkCacheMock( null ),
+			$this->getSiteLinkLookupMock( null ),
 			$this->getSiteStoreMock(),
 			new StringNormalizer()
 		);
@@ -118,7 +118,7 @@ class ItemByTitleHelperTest extends \PHPUnit_Framework_TestCase {
 		$itemByTitleHelper = new ItemByTitleHelper(
 		// Two result values should be added (for both titles which wont be found)
 			$this->getResultBuilderMock(),
-			$this->getSiteLinkCacheMock( false ),
+			$this->getSiteLinkLookupMock( false ),
 			$this->getSiteStoreMock(),
 			new StringNormalizer()
 		);
@@ -137,7 +137,7 @@ class ItemByTitleHelperTest extends \PHPUnit_Framework_TestCase {
 
 		$itemByTitleHelper = new ItemByTitleHelper(
 			$this->getResultBuilderMock(),
-			$this->getSiteLinkCacheMock( 1 ),
+			$this->getSiteLinkLookupMock( 1 ),
 			$this->getSiteStoreMock(),
 			new StringNormalizer()
 		);
@@ -173,7 +173,7 @@ class ItemByTitleHelperTest extends \PHPUnit_Framework_TestCase {
 
 		$itemByTitleHelper = new ItemByTitleHelper(
 			$this->getResultBuilderMock( $expectedAddNormalizedCalls ),
-			$this->getSiteLinkCacheMock( $expectedEntityId ),
+			$this->getSiteLinkLookupMock( $expectedEntityId ),
 			$this->getSiteStoreMock(),
 			new StringNormalizer()
 		);
@@ -189,14 +189,14 @@ class ItemByTitleHelperTest extends \PHPUnit_Framework_TestCase {
 		return array(
 			array(
 				// Request with no sites
-				array( ),
+				array(),
 				array( 'barfoo' ),
 				false
 			),
 			array(
 				// Request with no titles
 				array( 'enwiki' ),
-				array( ),
+				array(),
 				false
 			),
 		);
@@ -205,16 +205,17 @@ class ItemByTitleHelperTest extends \PHPUnit_Framework_TestCase {
 	/**
 	 * @dataProvider notEnoughInputProvider
 	 */
-	public function testNotEnoughInput( $sites, $titles, $normalize ) {
+	public function testNotEnoughInput( array $sites, array $titles, $normalize ) {
 		$this->setExpectedException( 'UsageException' );
 
 		$itemByTitleHelper = new ItemByTitleHelper(
 			$this->getResultBuilderMock(),
-			$this->getSiteLinkCacheMock( new ItemId( 'Q123' ) ),
+			$this->getSiteLinkLookupMock( new ItemId( 'Q123' ) ),
 			$this->getSiteStoreMock(),
 			new StringNormalizer()
 		);
 
 		$itemByTitleHelper->getItemIds( $sites, $titles, $normalize );
 	}
+
 }

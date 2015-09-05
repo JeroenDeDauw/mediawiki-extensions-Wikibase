@@ -1,35 +1,52 @@
 <?php
 
-namespace Wikibase\Api;
+namespace Wikibase\Repo\Api;
 
 use ApiBase;
 use ApiMain;
+use Exception;
 use InvalidArgumentException;
-use Status;
-use Wikibase\ChangeOp\ChangeOpException;
-use Wikibase\ChangeOp\SiteLinkChangeOpFactory;
-use Wikibase\DataModel\Entity\Entity;
-use Wikibase\DataModel\Entity\EntityIdParsingException;
-use Wikibase\DataModel\Entity\Item;
+use LogicException;
+use UsageException;
+use Wikibase\ChangeOp\ChangeOpsMerge;
 use Wikibase\DataModel\Entity\ItemId;
+use Wikibase\DataModel\Entity\EntityIdParser;
+use Wikibase\DataModel\Entity\EntityIdParsingException;
+use Wikibase\EntityRevision;
+use Wikibase\Repo\Interactors\ItemMergeException;
+use Wikibase\Repo\Interactors\ItemMergeInteractor;
+use Wikibase\Repo\Interactors\RedirectCreationException;
 use Wikibase\Repo\WikibaseRepo;
-use Wikibase\Summary;
 
 /**
  * @since 0.5
  *
  * @licence GNU GPL v2+
  * @author Adam Shorland
- *
- * @todo allow merging of specific parts of an item only (eg. sitelinks,aliases,claims)
- * @todo allow optional deletion after merging (for admins)
+ * @author Daniel Kinzler
+ * @author Lucie-Aimée Kaffee
  */
-class MergeItems extends ApiWikibase {
+class MergeItems extends ApiBase {
 
 	/**
-	 * @var SiteLinkChangeOpFactory
+	 * @var EntityIdParser
 	 */
-	protected $changeOpFactory;
+	private $idParser;
+
+	/**
+	 * @var ApiErrorReporter
+	 */
+	private $errorReporter;
+
+	/**
+	 * @var ItemMergeInteractor
+	 */
+	private $interactor;
+
+	/**
+	 * @var ResultBuilder
+	 */
+	private $resultBuilder;
 
 	/**
 	 * @param ApiMain $mainModule
@@ -41,256 +58,193 @@ class MergeItems extends ApiWikibase {
 	public function __construct( ApiMain $mainModule, $moduleName, $modulePrefix = '' ) {
 		parent::__construct( $mainModule, $moduleName, $modulePrefix );
 
-		$factoryProvider = WikibaseRepo::getDefaultInstance()->getChangeOpFactoryProvider();
-		$this->changeOpFactory = $factoryProvider->getMergeChangeOpFactory();
+		$wikibaseRepo = WikibaseRepo::getDefaultInstance();
+		$apiHelperFactory = $wikibaseRepo->getApiHelperFactory( $this->getContext() );
+
+		$this->setServices(
+			$wikibaseRepo->getEntityIdParser(),
+			$apiHelperFactory->getErrorReporter( $this ),
+			$apiHelperFactory->getResultBuilder( $this ),
+			new ItemMergeInteractor(
+				$wikibaseRepo->getChangeOpFactoryProvider()->getMergeChangeOpFactory(),
+				$wikibaseRepo->getEntityRevisionLookup( 'uncached' ),
+				$wikibaseRepo->getEntityStore(),
+				$wikibaseRepo->getEntityPermissionChecker(),
+				$wikibaseRepo->getSummaryFormatter(),
+				$this->getUser(),
+				$wikibaseRepo->newRedirectCreationInteractor( $this->getUser(), $this->getContext() )
+			)
+		);
+	}
+
+	public function setServices(
+		EntityIdParser $idParser,
+		ApiErrorReporter $errorReporter,
+		ResultBuilder $resultBuilder,
+		ItemMergeInteractor $interactor
+	) {
+		$this->idParser = $idParser;
+		$this->errorReporter = $errorReporter;
+		$this->resultBuilder = $resultBuilder;
+		$this->interactor = $interactor;
 	}
 
 	/**
-	 * @see \Wikibase\Api\Api::getRequiredPermissions()
+	 * @param array $parameters
+	 * @param string $name
 	 *
-	 * @param Entity $entity
-	 * @param array $params
+	 * @return ItemId
 	 *
-	 * @return array|\Status
+	 * @throws UsageException if the given parameter is not a valiue ItemId
+	 * @throws LogicException
 	 */
-	protected function getRequiredPermissions( Entity $entity, array $params ) {
-		$permissions = parent::getRequiredPermissions( $entity, $params );
-		$permissions[] = 'item-merge';
-		return $permissions;
+	private function getItemIdParam( $parameters, $name ) {
+		if ( !isset( $parameters[$name] ) ) {
+			$this->errorReporter->dieError( 'Missing parameter: ' . $name, 'param-missing' );
+		}
+
+		$value = $parameters[$name];
+
+		try {
+			return new ItemId( $value );
+		} catch ( InvalidArgumentException $ex ) {
+			$this->errorReporter->dieError( $ex->getMessage(), 'invalid-entity-id' );
+			throw new LogicException( 'ApiErrorReporter::dieError did not throw an exception' );
+		}
 	}
 
 	/**
-	 * @see \ApiBase::execute()
+	 * @see ApiBase::execute()
 	 */
 	public function execute() {
-		$user = $this->getUser();
 		$params = $this->extractRequestParams();
-		$this->validateParams( $params );
 
-		$fromEntityRevision = $this->getEntityRevisionFromIdString( $params['fromid'] );
-		$toEntityRevision = $this->getEntityRevisionFromIdString( $params['toid'] );
+		try {
+			$fromId = $this->getItemIdParam( $params, 'fromid' );
+			$toId = $this->getItemIdParam( $params, 'toid' );
 
-		$fromEntity = $fromEntityRevision->getEntity();
-		$toEntity = $toEntityRevision->getEntity();
+			$ignoreConflicts = $params['ignoreconflicts'];
+			$summary = $params['summary'];
 
-		$this->validateEntity( $fromEntity, $toEntity );
+			if ( $ignoreConflicts === null ) {
+				$ignoreConflicts = array();
+			}
 
-		$status = Status::newGood();
-		$status->merge( $this->checkPermissions( $fromEntity, $user, $params ) );
-		$status->merge( $this->checkPermissions( $toEntity, $user, $params ) );
-		if( !$status->isGood() ){
-			$this->dieUsage( $status->getMessage(), 'permissiondenied');
-		}
-
-		$ignoreConflicts = $this->getIgnoreConflicts( $params );
-
-		/**
-		 * @var Item $fromEntity
-		 * @var Item $toEntity
-		 */
-		try{
-			$changeOps = $this->changeOpFactory->newMergeOps(
-				$fromEntity,
-				$toEntity,
-				$ignoreConflicts
-			);
-
-			$changeOps->apply();
-		}
-		catch( InvalidArgumentException $e ) {
-			$this->dieUsage( $e->getMessage(), 'param-invalid' );
-		}
-		catch( ChangeOpException $e ) {
-			$this->dieUsage( $e->getMessage(), 'failed-save' ); //FIXME: change to modification-failed
-		}
-
-		$this->attemptSaveMerge( $fromEntity, $toEntity, $params );
-	}
-
-	protected function getIgnoreConflicts( $params ) {
-		if( isset( $params['ignoreconflicts'] ) ){
-			return $params['ignoreconflicts'];
-		}
-		return array();
-	}
-
-	protected function addEntityToOutput( Entity $entity, Status $status, $name ) {
-		$this->getResultBuilder()->addBasicEntityInformation( $entity->getId(), $name );
-		$this->getResultBuilder()->addRevisionIdFromStatusToResult( $status, $name );
-	}
-
-	private function getEntityRevisionFromIdString( $idString ) {
-		try{
-			$entityId = $this->idParser->parse( $idString );
-			return $this->entityLookup->getEntityRevision( $entityId );
-		}
-		catch ( EntityIdParsingException $e ){
-			$this->dieUsage( 'You must provide valid ids' , 'param-invalid' );
-		}
-		return null;
-	}
-
-	/**
-	 * @param Entity|null $fromEntity
-	 * @param Entity|null $toEntity
-	 */
-	private function validateEntity( $fromEntity, $toEntity) {
-		if( $fromEntity === null || $toEntity === null ){
-			$this->dieUsage( 'One of more of the ids provided do not exist' , 'no-such-entity-id' );
-		}
-
-		if ( !( $fromEntity instanceof Item && $toEntity instanceof Item ) ) {
-			$this->dieUsage( 'One or more of the entities are not items', 'not-item' );
-		}
-
-		if( $toEntity->getId()->equals( $fromEntity->getId() ) ){
-			$this->dieUsage( 'You must provide unique ids' , 'param-invalid' );
+			$this->mergeItems( $fromId, $toId, $ignoreConflicts, $summary, $params['bot'] );
+		} catch ( EntityIdParsingException $ex ) {
+			$this->errorReporter->dieException( $ex, 'invalid-entity-id' );
+		} catch ( ItemMergeException $ex ) {
+			$this->handleException( $ex );
+		} catch ( RedirectCreationException $ex ) {
+			$this->handleException( $ex );
 		}
 	}
 
 	/**
-	 * @param string[] $params
+	 * @param ItemId $fromId
+	 * @param ItemId $toId
+	 * @param string[] $ignoreConflicts
+	 * @param string $summary
+	 * @param bool $bot
 	 */
-	private function validateParams( array $params ) {
-		if ( empty( $params['fromid'] ) || empty( $params['toid'] ) ){
-			$this->dieUsage( 'You must provide a fromid and a toid' , 'param-missing' );
-		}
+	private function mergeItems( ItemId $fromId, ItemId $toId, array $ignoreConflicts, $summary, $bot ) {
+		list( $newRevisionFrom, $newRevisionTo, $redirected )
+			= $this->interactor->mergeItems( $fromId, $toId, $ignoreConflicts, $summary, $bot );
+
+		$this->resultBuilder->setValue( null, 'success', 1 );
+		$this->resultBuilder->setValue( null, 'redirected', (int) $redirected );
+
+		$this->addEntityToOutput( $newRevisionFrom, 'from' );
+		$this->addEntityToOutput( $newRevisionTo, 'to' );
 	}
 
 	/**
-	 * @param string $direction either 'from' or 'to'
-	 * @param ItemId $getId
-	 * @param array $params
-	 * @return Summary
+	 * @param ItemMergeException|RedirectCreationException $ex
+	 *
+	 * @throws UsageException always
 	 */
-	private function getSummary( $direction, $getId, $params ) {
-		$summary = new Summary( $this->getModuleName(), $direction, null, array( $getId->getSerialization() ) );
-		if ( !is_null( $params['summary'] ) ) {
-			$summary->setUserSummary( $params['summary'] );
-		}
-		return $summary;
-	}
+	private function handleException( Exception $ex ) {
+		$cause = $ex->getPrevious();
 
-	/**
-	 * @param Item $fromItem
-	 * @param Item $toItem
-	 * @param $params
-	 */
-	private function attemptSaveMerge( Item $fromItem, Item $toItem, $params ) {
-		$toSummary = $this->getSummary( 'to', $toItem->getId(), $params );
-
-		$fromStatus = $this->attemptSaveEntity(
-			$fromItem,
-			$this->formatSummary( $toSummary )
-		);
-
-		$this->handleSaveStatus( $fromStatus );
-		$this->addEntityToOutput( $fromItem, $fromStatus, 'from' );
-
-		if( $fromStatus->isGood() ) {
-			$fromSummary = $this->getSummary( 'from', $fromItem->getId(), $params );
-
-			$toStatus = $this->attemptSaveEntity(
-				$toItem,
-				$this->formatSummary( $fromSummary )
-			);
-			$this->handleSaveStatus( $toStatus );
-			$this->addEntityToOutput( $toItem, $toStatus, 'to' );
-
-			$this->getResultBuilder()->markSuccess( 1 );
+		if ( $cause ) {
+			$this->errorReporter->dieException( $cause, $ex->getErrorCode() );
 		} else {
-			$this->getResultBuilder()->markSuccess( 0 );
+			$this->errorReporter->dieError( $ex->getMessage(), $ex->getErrorCode() );
 		}
 	}
 
-	/**
-	 * @see \ApiBase::getPossibleErrors()
-	 */
-	public function getPossibleErrors() {
-		return array_merge( parent::getPossibleErrors(), array(
-			array( 'code' => 'not-item', 'info' => $this->msg( 'wikibase-api-not-item' )->text() ),
-			array( 'code' => 'no-such-entity-id', 'info' => $this->msg( 'wikibase-api-no-such-entity-id' )->text() ),
-		) );
+	private function addEntityToOutput( EntityRevision $entityRevision, $name ) {
+		$entityId = $entityRevision->getEntity()->getId();
+		$revisionId = $entityRevision->getRevisionId();
+
+		$this->resultBuilder->addBasicEntityInformation( $entityId, $name );
+
+		$this->resultBuilder->setValue(
+			$name,
+			'lastrevid',
+			(int)$revisionId
+		);
 	}
 
 	/**
-	 * @see \ApiBase::getAllowedParams()
+	 * @see ApiBase::needsToken
+	 *
+	 * @return string
 	 */
-	public function getAllowedParams() {
-		return array_merge(
-			parent::getAllowedParams(),
-			array(
-				'fromid' => array(
-					ApiBase::PARAM_TYPE => 'string',
-				),
-				'toid' => array(
-					ApiBase::PARAM_TYPE => 'string',
-				),
-				'ignoreconflicts' => array(
-					ApiBase::PARAM_ISMULTI => true,
-					ApiBase::PARAM_TYPE => 'string',
-					ApiBase::PARAM_REQUIRED => false,
-				),
-				'summary' => array(
-					ApiBase::PARAM_TYPE => 'string',
-				),
-				'token' => null,
-				'bot' => false
+	public function needsToken() {
+		return 'csrf';
+	}
+
+	/**
+	 * @see ApiBase::getAllowedParams
+	 */
+	protected function getAllowedParams() {
+		return array(
+			'fromid' => array(
+				self::PARAM_TYPE => 'string',
+			),
+			'toid' => array(
+				self::PARAM_TYPE => 'string',
+			),
+			'ignoreconflicts' => array(
+				self::PARAM_ISMULTI => true,
+				self::PARAM_TYPE => ChangeOpsMerge::$conflictTypes,
+				self::PARAM_REQUIRED => false,
+			),
+			'summary' => array(
+				self::PARAM_TYPE => 'string',
+			),
+			'bot' => array(
+				self::PARAM_TYPE => 'boolean',
+				self::PARAM_DFLT => false,
+			),
+			'token' => array(
+				self::PARAM_TYPE => 'string',
+				self::PARAM_REQUIRED => true,
 			)
 		);
 	}
 
 	/**
-	 * @see \ApiBase::getParamDescription()
+	 * @see ApiBase::getExamplesMessages
 	 */
-	public function getParamDescription() {
-		return array_merge(
-			parent::getParamDescription(),
-			array(
-				'fromid' => array( 'The id to merge from' ),
-				'toid' => array( 'The id to merge to' ),
-				'ignoreconflicts' => array( 'Array of elements of the item to ignore conflicts for, can only contain values of "label" and or "description" and or "sitelink"' ),
-				'token' => 'An "edittoken" token previously obtained through the token module (prop=info).',
-				'summary' => array( 'Summary for the edit.',
-					"Will be prepended by an automatically generated comment. The length limit of the
-					autocomment together with the summary is 260 characters. Be aware that everything above that
-					limit will be cut off."
-				),
-				'bot' => array( 'Mark this edit as bot',
-					'This URL flag will only be respected if the user belongs to the group "bot".'
-				),
-			)
-		);
-	}
-
-	/**
-	 * @see \ApiBase::getDescription()
-	 */
-	public function getDescription() {
+	protected function getExamplesMessages() {
 		return array(
-			'API module to merge multiple items.'
-		);
-	}
-
-	/**
-	 * @see \ApiBase::getExamples()
-	 */
-	protected function getExamples() {
-		return array(
-			'api.php?action=wbmergeitems&fromid=Q42&toid=Q222' =>
-				'Merges data from Q42 into Q222',
-			'api.php?action=wbmergeitems&fromid=Q555&toid=Q3' =>
-				'Merges data from Q555 into Q3',
-			'api.php?action=wbmergeitems&fromid=Q66&toid=Q99&ignoreconflicts=label' =>
-				'Merges data from Q66 into Q99 ignoring any conflicting labels',
-			'api.php?action=wbmergeitems&fromid=Q66&toid=Q99&ignoreconflicts=label|description' =>
-				'Merges data from Q66 into Q99 ignoring any conflicting labels and descriptions',
+			'action=wbmergeitems&fromid=Q42&toid=Q222' =>
+				'apihelp-wbmergeitems-example-1',
+			'action=wbmergeitems&fromid=Q555&toid=Q3' =>
+				'apihelp-wbmergeitems-example-2',
+			'action=wbmergeitems&fromid=Q66&toid=Q99&ignoreconflicts=sitelink' =>
+				'apihelp-wbmergeitems-example-3',
+			'action=wbmergeitems&fromid=Q66&toid=Q99&ignoreconflicts=sitelink|description' =>
+				'apihelp-wbmergeitems-example-4',
 		);
 	}
 
 	/**
 	 * @see ApiBase::isWriteMode
-	 * @return bool true
+	 *
+	 * @return bool Always true.
 	 */
 	public function isWriteMode() {
 		return true;

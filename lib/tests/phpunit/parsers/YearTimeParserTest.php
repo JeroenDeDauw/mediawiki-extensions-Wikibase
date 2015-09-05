@@ -3,10 +3,8 @@
 namespace Wikibase\Lib\Parsers\Test;
 
 use DataValues\TimeValue;
-use ValueFormatters\TimeFormatter;
 use ValueParsers\Test\StringValueParserTest;
-use Wikibase\Lib\Parsers\EraParser;
-use Wikibase\Lib\Parsers\MWTimeIsoParser;
+use Wikibase\Lib\Parsers\YearTimeParser;
 
 /**
  * @covers Wikibase\Lib\Parsers\YearTimeParser
@@ -22,15 +20,23 @@ use Wikibase\Lib\Parsers\MWTimeIsoParser;
 class YearTimeParserTest extends StringValueParserTest {
 
 	/**
-	 * @return MWTimeIsoParser
+	 * @deprecated since 0.3, just use getInstance.
+	 */
+	protected function getParserClass() {
+		throw new \LogicException( 'Should not be called, use getInstance' );
+	}
+
+	/**
+	 * @see ValueParserTestBase::getInstance
+	 *
+	 * @return YearTimeParser
 	 */
 	protected function getInstance() {
-		$class = $this->getParserClass();
-		return new $class( $this->getMockEraParser(), $this->newParserOptions() );
+		return new YearTimeParser( $this->getMockEraParser() );
 	}
 
 	private function getMockEraParser() {
-		$mock = $this->getMockBuilder( 'Wikibase\Lib\Parsers\EraParser' )
+		$mock = $this->getMockBuilder( 'ValueParsers\EraParser' )
 			->disableOriginalConstructor()
 			->getMock();
 		$mock->expects( $this->any() )
@@ -38,59 +44,74 @@ class YearTimeParserTest extends StringValueParserTest {
 			->with( $this->isType( 'string' ) )
 			->will( $this->returnCallback(
 				function( $value ) {
-					return array( EraParser::CURRENT_ERA, $value ) ;
+					$sign = '+';
+					// Tiny parser that supports a single negative sign only
+					if ( $value[0] === '-' ) {
+						$sign = '-';
+						$value = substr( $value, 1 );
+					}
+					return array( $sign, $value );
 				}
 			) );
 		return $mock;
 	}
 
 	/**
-	 * @return string
-	 */
-	protected function getParserClass() {
-		return 'Wikibase\Lib\Parsers\YearTimeParser';
-	}
-
-	/**
 	 * @see ValueParserTestBase::validInputProvider
-	 *
-	 * @return array
 	 */
 	public function validInputProvider() {
+		$gregorian = 'http://www.wikidata.org/entity/Q1985727';
+		$julian = 'http://www.wikidata.org/entity/Q1985786';
+
 		$argLists = array();
 
 		$valid = array(
 			'1999' =>
-				array( '+0000000000001999-00-00T00:00:00Z', 0 , 0 , 0 , TimeValue::PRECISION_YEAR , TimeFormatter::CALENDAR_GREGORIAN ),
+				array( '+1999-00-00T00:00:00Z' ),
 			'2000' =>
-				array( '+0000000000002000-00-00T00:00:00Z', 0 , 0 , 0 , TimeValue::PRECISION_YEAR , TimeFormatter::CALENDAR_GREGORIAN ),
+				array( '+2000-00-00T00:00:00Z' ),
 			'2010' =>
-				array( '+0000000000002010-00-00T00:00:00Z', 0 , 0 , 0 , TimeValue::PRECISION_YEAR , TimeFormatter::CALENDAR_GREGORIAN ),
+				array( '+2010-00-00T00:00:00Z' ),
 			'2000000' =>
-				array( '+0000000002000000-00-00T00:00:00Z', 0 , 0 , 0 , TimeValue::PRECISION_Ma , TimeFormatter::CALENDAR_GREGORIAN ),
+				array( '+2000000-00-00T00:00:00Z', TimeValue::PRECISION_YEAR1M ),
 			'2000000000' =>
-				array( '+0000002000000000-00-00T00:00:00Z', 0 , 0 , 0 , TimeValue::PRECISION_Ga , TimeFormatter::CALENDAR_GREGORIAN ),
+				array( '+2000000000-00-00T00:00:00Z', TimeValue::PRECISION_YEAR1G ),
 			'2000020000' =>
-				array( '+0000002000020000-00-00T00:00:00Z', 0 , 0 , 0 , TimeValue::PRECISION_10ka , TimeFormatter::CALENDAR_GREGORIAN ),
+				array( '+2000020000-00-00T00:00:00Z', TimeValue::PRECISION_YEAR10K ),
 			'2000001' =>
-				array( '+0000000002000001-00-00T00:00:00Z', 0 , 0 , 0 , TimeValue::PRECISION_YEAR , TimeFormatter::CALENDAR_GREGORIAN ),
+				array( '+2000001-00-00T00:00:00Z' ),
 			'02000001' =>
-				array( '+0000000002000001-00-00T00:00:00Z', 0 , 0 , 0 , TimeValue::PRECISION_YEAR , TimeFormatter::CALENDAR_GREGORIAN ),
+				array( '+2000001-00-00T00:00:00Z' ),
 			'1' =>
-				array( '+0000000000000001-00-00T00:00:00Z', 0 , 0 , 0 , TimeValue::PRECISION_YEAR , TimeFormatter::CALENDAR_GREGORIAN ),
+				array( '+0001-00-00T00:00:00Z', TimeValue::PRECISION_YEAR, $julian ),
 			'000000001' =>
-				array( '+0000000000000001-00-00T00:00:00Z', 0 , 0 , 0 , TimeValue::PRECISION_YEAR , TimeFormatter::CALENDAR_GREGORIAN ),
+				array( '+0001-00-00T00:00:00Z', TimeValue::PRECISION_YEAR, $julian ),
+			'-1000000' =>
+				array( '-1000000-00-00T00:00:00Z', TimeValue::PRECISION_YEAR1M, $julian ),
+			'-1 000 000' =>
+				array( '-1000000-00-00T00:00:00Z', TimeValue::PRECISION_YEAR1M, $julian ),
+			// Digit grouping in the Indian numbering system
+			'-1,99,999' =>
+				array( '-199999-00-00T00:00:00Z', TimeValue::PRECISION_YEAR, $julian ),
 		);
 
 		foreach ( $valid as $value => $expected ) {
-			// $time, $timezone, $before, $after, $precision, $calendarModel
-			$expected = new TimeValue( $expected[0], $expected[1], $expected[2], $expected[3], $expected[4], $expected[5]  );
-			$argLists[] = array( (string)$value, $expected );
+			$timestamp = $expected[0];
+			$precision = isset( $expected[1] ) ? $expected[1] : TimeValue::PRECISION_YEAR;
+			$calendarModel = isset( $expected[2] ) ? $expected[2] : $gregorian;
+
+			$argLists[] = array(
+				(string)$value,
+				new TimeValue( $timestamp, 0, 0, 0, $precision, $calendarModel )
+			);
 		}
 
 		return $argLists;
 	}
 
+	/**
+	 * @see StringValueParserTest::invalidInputProvider
+	 */
 	public function invalidInputProvider() {
 		$argLists = parent::invalidInputProvider();
 
@@ -110,6 +131,13 @@ class YearTimeParserTest extends StringValueParserTest {
 			'+100 BC',
 			'+100 BCE',
 			'+100BCE',
+
+			// Invalid thousands separator
+			'-1/000/000',
+
+			// Positive years are unlikely to have thousands separators, it's more likely a date
+			'1 000 000',
+			'1,99,999',
 		);
 
 		foreach ( $invalid as $value ) {
@@ -124,7 +152,8 @@ class YearTimeParserTest extends StringValueParserTest {
 	 * @expectedExceptionMessage Failed to parse year
 	 */
 	public function testParseExceptionMessage() {
-		$this->getInstance()->parse( 'ju5t 1nval1d' );
+		$parser = $this->getInstance();
+		$parser->parse( 'ju5t 1nval1d' );
 	}
 
 }

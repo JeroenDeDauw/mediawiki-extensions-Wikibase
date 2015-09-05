@@ -2,24 +2,16 @@
 
 namespace Wikibase;
 
-use Content;
-use DatabaseBase;
-use DataUpdate;
-use IContextSource;
-use Message;
-use ParserOutput;
-use SiteSQLStore;
-use Status;
+use Hooks;
+use InvalidArgumentException;
+use LogicException;
+use MWException;
 use Title;
-use User;
-use Wikibase\DataModel\Entity\EntityIdParser;
-use Wikibase\DataModel\Entity\ItemId;
-use Wikibase\Lib\PropertyDataTypeLookup;
-use Wikibase\Lib\Serializers\SerializationOptions;
-use Wikibase\Lib\SnakFormatter;
+use Wikibase\Content\EntityHolder;
+use Wikibase\Content\EntityInstanceHolder;
+use Wikibase\DataModel\Entity\EntityRedirect;
+use Wikibase\DataModel\Entity\Item;
 use Wikibase\Repo\ItemSearchTextGenerator;
-use Wikibase\Repo\WikibaseRepo;
-use WikiPage;
 
 /**
  * Content object for articles representing Wikibase items.
@@ -27,7 +19,8 @@ use WikiPage;
  * @since 0.1
  *
  * @licence GNU GPL v2+
- * @author Jeroen De Dauw < jeroendedauw@gmail.com >
+ * @author Daniel Kinzler
+ * @author Bene* < benestar.wikimedia@gmail.com >
  */
 class ItemContent extends EntityContent {
 
@@ -40,10 +33,19 @@ class ItemContent extends EntityContent {
 	const STATUS_LINKSTUB = 60;
 
 	/**
-	 * @since 0.1
-	 * @var Item
+	 * @var EntityHolder|null
 	 */
-	protected $item;
+	private $itemHolder;
+
+	/**
+	 * @var EntityRedirect|null
+	 */
+	private $redirect;
+
+	/**
+	 * @var Title|null Title of the redirect target.
+	 */
+	private $redirectTitle;
 
 	/**
 	 * Do not use to construct new stuff from outside of this class,
@@ -52,193 +54,209 @@ class ItemContent extends EntityContent {
 	 * In other words: treat as protected (which it was, but now cannot
 	 * be since we derive from Content).
 	 *
-	 * @since 0.1
+	 * @param EntityHolder|null $itemHolder
+	 * @param EntityRedirect|null $entityRedirect
+	 * @param Title|null $redirectTitle Title of the redirect target.
 	 *
-	 * @param Item $item
+	 * @throws InvalidArgumentException
 	 */
-	public function __construct( Item $item ) {
+	public function __construct(
+		EntityHolder $itemHolder = null,
+		EntityRedirect $entityRedirect = null,
+		Title $redirectTitle = null
+	) {
 		parent::__construct( CONTENT_MODEL_WIKIBASE_ITEM );
 
-		$this->item = $item;
+		if ( is_null( $itemHolder ) === is_null( $entityRedirect ) ) {
+			throw new InvalidArgumentException(
+				'Either $item or $entityRedirect and $redirectTitle must be provided.' );
+		}
+
+		if ( $itemHolder !== null && $itemHolder->getEntityType() !== Item::ENTITY_TYPE ) {
+			throw new InvalidArgumentException( '$itemHolder must contain a Item entity!' );
+		}
+
+		if ( is_null( $entityRedirect ) !== is_null( $redirectTitle ) ) {
+			throw new InvalidArgumentException(
+				'$entityRedirect and $redirectTitle must both be provided or both be empty.' );
+		}
+
+		if ( $redirectTitle !== null
+			&& $redirectTitle->getContentModel() !== CONTENT_MODEL_WIKIBASE_ITEM
+		) {
+			if ( $redirectTitle->exists() ) {
+				throw new InvalidArgumentException(
+					'$redirectTitle must refer to a page with content model '
+					. CONTENT_MODEL_WIKIBASE_ITEM );
+			}
+		}
+
+		$this->itemHolder = $itemHolder;
+		$this->redirect = $entityRedirect;
+		$this->redirectTitle = $redirectTitle;
 	}
 
 	/**
 	 * Create a new ItemContent object for the provided Item.
-	 *
-	 * @since 0.1
 	 *
 	 * @param Item $item
 	 *
 	 * @return ItemContent
 	 */
 	public static function newFromItem( Item $item ) {
-		return new static( $item );
+		return new static( new EntityInstanceHolder( $item ) );
 	}
 
 	/**
-	 * Create a new ItemContent object from the provided Item data.
+	 * Create a new ItemContent object representing a redirect to the given item ID.
 	 *
-	 * @since 0.1
+	 * @since 0.5
 	 *
-	 * @param array $data
+	 * @param EntityRedirect $redirect
+	 * @param Title $redirectTitle Title of the redirect target.
 	 *
 	 * @return ItemContent
 	 */
-	public static function newFromArray( array $data ) {
-		return new static( new Item( $data ) );
+	public static function newFromRedirect( EntityRedirect $redirect, Title $redirectTitle ) {
+		return new static( null, $redirect, $redirectTitle );
+	}
+
+	/**
+	 * @see Content::getRedirectTarget
+	 *
+	 * @return Title|null
+	 */
+	public function getRedirectTarget() {
+		return $this->redirectTitle;
+	}
+
+	/**
+	 * @see EntityContent::getEntityRedirect
+	 *
+	 * @return null|EntityRedirect
+	 */
+	public function getEntityRedirect() {
+		return $this->redirect;
 	}
 
 	/**
 	 * Returns the Item that makes up this ItemContent.
 	 *
-	 * @since 0.1
-	 *
+	 * @throws MWException when it's a redirect (targets will never be resolved)
+	 * @throws LogicException
 	 * @return Item
 	 */
 	public function getItem() {
-		return $this->item;
-	}
+		$redirect = $this->getRedirectTarget();
 
-	/**
-	 * Sets the Item that makes up this ItemContent.
-	 *
-	 * @since 0.1
-	 *
-	 * @param Item $item
-	 */
-	public function setItem( Item $item ) {
-		$this->item = $item;
+		if ( $redirect ) {
+			throw new MWException( 'Unresolved redirect to [[' . $redirect->getFullText() . ']]' );
+		}
+
+		if ( !$this->itemHolder ) {
+			throw new LogicException( 'Neither redirect nor item found in ItemContent!' );
+		}
+
+		return $this->itemHolder->getEntity( 'Wikibase\DataModel\Entity\Item' );
 	}
 
 	/**
 	 * Returns a new empty ItemContent.
 	 *
-	 * @since 0.1
-	 *
 	 * @return ItemContent
 	 */
 	public static function newEmpty() {
-		return new static( Item::newEmpty() );
+		return new static( new EntityInstanceHolder( new Item() ) );
 	}
 
 	/**
 	 * @see EntityContent::getEntity
 	 *
-	 * @since 0.1
-	 *
+	 * @throws MWException when it's a redirect (targets will never be resolved)
 	 * @return Item
 	 */
 	public function getEntity() {
-		return $this->item;
+		return $this->getItem();
 	}
 
 	/**
-	 * @see Content::getDeletionUpdates
+	 * @see EntityContent::getEntityHolder
 	 *
-	 * @param \WikiPage $page
-	 * @param null|\ParserOutput $parserOutput
-	 *
-	 * @since 0.1
-	 *
-	 * @return DataUpdate[]
+	 * @return EntityHolder
 	 */
-	public function getDeletionUpdates( WikiPage $page, ParserOutput $parserOutput = null ) {
-		return array_merge(
-			parent::getDeletionUpdates( $page, $parserOutput ),
-			array( new ItemDeletionUpdate( $this ) )
-		);
-	}
-
-	/**
-	 * @see ContentHandler::getSecondaryDataUpdates
-	 *
-	 * @since 0.1
-	 *
-	 * @param Title              $title
-	 * @param Content|null       $old
-	 * @param bool               $recursive
-	 * @param null|ParserOutput  $parserOutput
-	 *
-	 * @return DataUpdate[]
-	 */
-	public function getSecondaryDataUpdates( Title $title, Content $old = null,
-		$recursive = false, ParserOutput $parserOutput = null ) {
-
-		return array_merge(
-			parent::getSecondaryDataUpdates( $title, $old, $recursive, $parserOutput ),
-			array( new ItemModificationUpdate( $this ) )
-		);
+	protected function getEntityHolder() {
+		return $this->itemHolder;
 	}
 
 	/**
 	 * @see EntityContent::getTextForSearchIndex()
 	 */
 	public function getTextForSearchIndex() {
-		$item = $this->getEntity();
+		if ( $this->isRedirect() ) {
+			return '';
+		}
 
+		// TODO: Refactor ItemSearchTextGenerator to share an interface with
+		// FingerprintSearchTextGenerator, so we don't have to re-implement getTextForSearchIndex() here.
 		$searchTextGenerator = new ItemSearchTextGenerator();
-		return $searchTextGenerator->generate( $item );
+		$text = $searchTextGenerator->generate( $this->getItem() );
+
+		if ( !Hooks::run( 'WikibaseTextForSearchIndex', array( $this, &$text ) ) ) {
+			return '';
+		}
+
+		return $text;
 	}
 
 	/**
-	 * Instantiates an EntityView.
+	 * @see EntityContent::isCountable
 	 *
-	 * @see getEntityView()
+	 * @param bool $hasLinks
 	 *
-	 * @param IContextSource $context
-	 * @param SnakFormatter $snakFormatter
-	 * @param PropertyDataTypeLookup $dataTypeLookup
-	 * @param EntityInfoBuilder $entityInfoBuilder
-	 * @param EntityTitleLookup $entityTitleLookup
-	 * @param EntityIdParser $idParser
-	 * @param SerializationOptions $options
-	 *
-	 * @return EntityView
+	 * @return bool True if this is not a redirect and the item is not empty.
 	 */
-	protected function newEntityView(
-		IContextSource $context,
-		SnakFormatter $snakFormatter,
-		PropertyDataTypeLookup $dataTypeLookup,
-		EntityInfoBuilder $entityInfoBuilder,
-		EntityTitleLookup $entityTitleLookup,
-		EntityIdParser $idParser,
-		SerializationOptions $options
-	) {
-		$configBuilder = new ParserOutputJsConfigBuilder(
-			$entityInfoBuilder,
-			$idParser,
-			$entityTitleLookup,
-			new ReferencedEntitiesFinder(),
-			$context->getLanguage()->getCode()
-		);
+	public function isCountable( $hasLinks = null ) {
+		return !$this->isRedirect() && !$this->getItem()->isEmpty();
+	}
 
-		return new ItemView(
-			$context,
-			$snakFormatter,
-			$dataTypeLookup,
-			$entityInfoBuilder,
-			$entityTitleLookup,
-			$options,
-			$configBuilder
-		);
+	/**
+	 * @see EntityContent::isEmpty
+	 *
+	 * @return bool True if this is not a redirect and the item is empty.
+	 */
+	public function isEmpty() {
+		return !$this->isRedirect() && $this->getItem()->isEmpty();
+	}
+
+	/**
+	 * @see EntityContent::isStub
+	 *
+	 * @return bool True if the item is not empty, but does not contain statements.
+	 */
+	public function isStub() {
+		return !$this->isRedirect()
+			&& !$this->getItem()->isEmpty()
+			&& $this->getItem()->getStatements()->isEmpty();
 	}
 
 	/**
 	 * @see EntityContent::getEntityPageProperties
 	 *
-	 * Records the number of sitelinks in the 'wb-sitelinks' key.
+	 * Records the number of statements in the 'wb-claims' key
+	 * and the number of sitelinks in the 'wb-sitelinks' key.
 	 *
 	 * @return array A map from property names to property values.
 	 */
 	public function getEntityPageProperties() {
-		$item = $this->getItem();
+		$properties = parent::getEntityPageProperties();
 
-		return array_merge(
-			parent::getEntityPageProperties(),
-			array(
-				'wb-sitelinks' => count( $item->getSiteLinks() ),
-			)
-		);
+		if ( !$this->isRedirect() ) {
+			$item = $this->getItem();
+			$properties['wb-claims'] = $item->getStatements()->count();
+			$properties['wb-sitelinks'] = $item->getSiteLinkList()->count();
+		}
+
+		return $properties;
 	}
 
 	/**
@@ -248,18 +266,26 @@ class ItemContent extends EntityContent {
 	 * If an item has sitelinks but no statements, it is considered a "linkstub".
 	 * If an item has statements, it's not empty nor a stub.
 	 *
+	 * @see STATUS_LINKSTUB
+	 *
+	 * @note Will fail of this ItemContent is a redirect.
+	 *
 	 * @return int
 	 */
 	public function getEntityStatus() {
 		$status = parent::getEntityStatus();
-		$hasSiteLinks = $this->getItem()->hasSiteLinks();
 
-		if ( $status === self::STATUS_EMPTY && $hasSiteLinks ) {
-			$status = self::STATUS_LINKSTUB;
-		} else if ( $status === self::STATUS_STUB && $hasSiteLinks ) {
-			$status = self::STATUS_LINKSTUB;
+		if ( !$this->isRedirect() ) {
+			$hasSiteLinks = !$this->getItem()->getSiteLinkList()->isEmpty();
+
+			if ( $status === self::STATUS_EMPTY && $hasSiteLinks ) {
+				$status = self::STATUS_LINKSTUB;
+			} elseif ( $status === self::STATUS_STUB && $hasSiteLinks ) {
+				$status = self::STATUS_LINKSTUB;
+			}
 		}
 
 		return $status;
 	}
+
 }

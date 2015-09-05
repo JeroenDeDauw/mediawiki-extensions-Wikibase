@@ -6,7 +6,7 @@
 	"latedef": true,
 	"newcap": true,
 	"supernew": true,
-	"shadow": true,
+	"shadow": false,
 	"noarg": true,
 	"noempty": true,
 	"nonew": true,
@@ -17,9 +17,9 @@
 	"laxbreak": true,
 	"laxcomma": false,
 	"onevar": false,
-	"bitwise": false,
+	"bitwise": true,
 	"forin": false,
-	"regexp": false,
+	"regexp": true,
 	"strict": true,
 	"scripturl": true,
 
@@ -27,17 +27,29 @@
 	"browser": true,
 
 	// Globals
-	"predef": [
-		"jQuery",
-		"QUnit",
-		"mediaWiki",
-		"wikibase",
-		"dataValues",
-		"dataTypes",
-		"util",
-		"valueFormatters",
-		"valueParsers",
-		"globeCoordinate",
-		"time"
-	]
+	"globals": {
+		"jQuery": false,
+		"mediaWiki": false,
+		"wikibase": true,
+		"dataValues": false,
+		"dataTypes": false,
+		"util": false,
+		"valueFormatters": false,
+		"valueParsers": false
+	},
+
+	"overrides": {
+		"*/tests/qunit/**/*.tests.js": {
+			"globals": {
+				"sinon": false,
+				"QUnit": false
+			}
+		},
+		"lib/tests/qunit/data/testrunner.js": {
+			"globals": {
+				"QUnit": false
+			}
+		}
+
+	}
 }

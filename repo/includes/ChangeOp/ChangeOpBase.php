@@ -3,7 +3,6 @@
 namespace Wikibase\ChangeOp;
 
 use InvalidArgumentException;
-use ValueValidators\ValueValidator;
 use ValueValidators\Result;
 use Wikibase\DataModel\Entity\Entity;
 use Wikibase\Summary;
@@ -20,39 +19,18 @@ abstract class ChangeOpBase implements ChangeOp {
 	/**
 	 * @since 0.4
 	 *
-	 * @param Summary $summary
+	 * @param Summary|null $summary
 	 * @param string $action
 	 * @param string $language
 	 * @param string|array $args
 	 *
 	 * @throws InvalidArgumentException
 	 */
-	protected function updateSummary( $summary, $action, $language = '', $args = '' ) {
-		if ( $summary !== null && !$summary instanceof Summary ) {
-			throw new InvalidArgumentException( '$summary needs to be an instance of Summary or null' );
-		}
-
+	protected function updateSummary( Summary $summary = null, $action, $language = '', $args = '' ) {
 		if ( $summary !== null ) {
 			$summary->setAction( $action );
 			$summary->setLanguage( $language );
 			$summary->addAutoSummaryArgs( $args );
-		}
-	}
-
-	/**
-	 * Applies the given validator and throws a ChangeOpValidationException if
-	 * the validation result isn't "valid".
-	 *
-	 * @param ValueValidator $validator
-	 * @param mixed $value
-	 *
-	 * @throws ChangeOpValidationException
-	 */
-	protected function applyValueValidator( ValueValidator $validator, $value ) {
-		$result = $validator->validate( $value );
-
-		if ( !$result->isValid() ) {
-			throw new ChangeOpValidationException( $result );
 		}
 	}
 
@@ -72,4 +50,5 @@ abstract class ChangeOpBase implements ChangeOp {
 	public function validate( Entity $entity ) {
 		return Result::newSuccess();
 	}
+
 }

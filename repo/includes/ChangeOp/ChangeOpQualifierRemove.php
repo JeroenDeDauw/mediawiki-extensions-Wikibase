@@ -4,10 +4,10 @@ namespace Wikibase\ChangeOp;
 
 use InvalidArgumentException;
 use ValueValidators\Result;
-use Wikibase\DataModel\Claim\Claims;
 use Wikibase\DataModel\Entity\Entity;
 use Wikibase\DataModel\Snak\Snak;
-use Wikibase\DataModel\Snak\Snaks;
+use Wikibase\DataModel\Snak\SnakList;
+use Wikibase\DataModel\Statement\StatementListHolder;
 use Wikibase\Summary;
 
 /**
@@ -24,7 +24,7 @@ class ChangeOpQualifierRemove extends ChangeOpBase {
 	 *
 	 * @var string
 	 */
-	protected $claimGuid;
+	protected $statementGuid;
 
 	/**
 	 * @since 0.5
@@ -38,21 +38,21 @@ class ChangeOpQualifierRemove extends ChangeOpBase {
 	 *
 	 * @since 0.5
 	 *
-	 * @param string $claimGuid
+	 * @param string $statementGuid
 	 * @param string $snakHash
 	 *
 	 * @throws InvalidArgumentException
 	 */
-	public function __construct( $claimGuid, $snakHash ) {
-		if ( !is_string( $claimGuid ) || $claimGuid === '' ) {
-			throw new InvalidArgumentException( '$claimGuid needs to be a string and must not be empty' );
+	public function __construct( $statementGuid, $snakHash ) {
+		if ( !is_string( $statementGuid ) || $statementGuid === '' ) {
+			throw new InvalidArgumentException( '$statementGuid needs to be a string and must not be empty' );
 		}
 
-		if ( !is_string( $snakHash ) || $snakHash === ''  ) {
+		if ( !is_string( $snakHash ) || $snakHash === '' ) {
 			throw new InvalidArgumentException( '$snakHash needs to be a string and must not be empty' );
 		}
 
-		$this->claimGuid = $claimGuid;
+		$this->statementGuid = $statementGuid;
 		$this->snakHash = $snakHash;
 	}
 
@@ -60,30 +60,34 @@ class ChangeOpQualifierRemove extends ChangeOpBase {
 	 * @see ChangeOp::apply()
 	 */
 	public function apply( Entity $entity, Summary $summary = null ) {
-		$claims = new Claims( $entity->getClaims() );
-
-		if( !$claims->hasClaimWithGuid( $this->claimGuid ) ) {
-			throw new ChangeOpException( "Entity does not have claim with GUID $this->claimGuid" );
+		if ( !( $entity instanceof StatementListHolder ) ) {
+			throw new InvalidArgumentException( '$entity must be a StatementListHolder' );
 		}
 
-		$claim = $claims->getClaimWithGuid( $this->claimGuid );
-		$qualifiers = $claim->getQualifiers();
+		$statements = $entity->getStatements();
+		$statement = $statements->getFirstStatementWithGuid( $this->statementGuid );
+
+		if ( $statement === null ) {
+			throw new ChangeOpException( "Entity does not have a statement with GUID $this->statementGuid" );
+		}
+
+		$qualifiers = $statement->getQualifiers();
 
 		$this->removeQualifier( $qualifiers, $summary );
 
-		$claim->setQualifiers( $qualifiers );
-		$entity->setClaims( $claims );
+		$statement->setQualifiers( $qualifiers );
+		$entity->setStatements( $statements );
 
 		return true;
 	}
 
 	/**
-	 * @param Snaks $qualifiers
+	 * @param SnakList $qualifiers
 	 * @param Summary $summary
 	 *
 	 * @throws ChangeOpException
 	 */
-	protected function removeQualifier( Snaks $qualifiers, Summary $summary = null ) {
+	protected function removeQualifier( SnakList $qualifiers, Summary $summary = null ) {
 		if ( !$qualifiers->hasSnakHash( $this->snakHash ) ) {
 			throw new ChangeOpException( "Qualifier with hash $this->snakHash does not exist" );
 		}
@@ -99,7 +103,7 @@ class ChangeOpQualifierRemove extends ChangeOpBase {
 	 */
 	protected function getSnakSummaryArgs( Snak $snak ) {
 		$propertyId = $snak->getPropertyId();
-		return array( array( $propertyId->getPrefixedId() => $snak ) );
+		return array( array( $propertyId->getSerialization() => $snak ) );
 	}
 
 	/**

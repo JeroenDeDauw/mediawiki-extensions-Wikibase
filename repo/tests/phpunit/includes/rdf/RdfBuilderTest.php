@@ -1,22 +1,17 @@
 <?php
 
-namespace Wikibase\Test;
+namespace Wikibase\Test\Rdf;
 
-use DateTime;
-use EasyRdf_Graph;
-use EasyRdf_Literal;
-use EasyRdf_Namespace;
-use EasyRdf_Resource;
-use SiteList;
+use Wikibase\DataModel\Entity\Entity;
 use Wikibase\DataModel\Entity\ItemId;
-use Wikibase\Entity;
-use Wikibase\EntityId;
-use Wikibase\EntityRevision;
-use Wikibase\Item;
-use Wikibase\RdfBuilder;
+use Wikibase\Rdf\DedupeBag;
+use Wikibase\Rdf\HashDedupeBag;
+use Wikibase\Rdf\RdfBuilder;
+use Wikibase\Rdf\RdfProducer;
+use Wikimedia\Purtle\NTriplesRdfWriter;
 
 /**
- * @covers Wikibase\RdfBuilder
+ * @covers Wikibase\Rdf\RdfBuilder
  *
  * @group Wikibase
  * @group WikibaseRepo
@@ -24,270 +19,186 @@ use Wikibase\RdfBuilder;
  *
  * @licence GNU GPL v2+
  * @author Daniel Kinzler
+ * @author Stas Malyshev
  */
 class RdfBuilderTest extends \MediaWikiTestCase {
 
-	const URI_BASE = 'http://acme.test/';
-	const URI_DATA = 'http://data.acme.test/';
+	private $testData;
 
 	/**
-	 * @return Entity[]
-	 */
-	public static function getTestEntities() {
-		static $entities = array();
-
-		if ( !empty( $entities ) ) {
-			return $entities;
-		}
-
-		$entity = Item::newEmpty();
-		$entities['empty'] = $entity;
-
-
-		$entity = Item::newEmpty();
-		$entities['terms'] = $entity;
-
-		$entity->setLabel( 'en', 'Berlin' );
-		$entity->setLabel( 'ru', 'Берлин' );
-
-		$entity->setDescription( 'en', 'German city' );
-		$entity->setDescription( 'ru', 'столица и одновременно земля Германии' );
-
-		$entity->addAliases( 'en', array( 'Berlin, Germany', 'Land Berlin' ) );
-		$entity->addAliases( 'ru', array( 'Berlin' ) );
-
-		// TODO: test links
-		// TODO: test data values
-
-		$i = 1;
-
-		/**
-		 * @var Entity $entity
-		 */
-		foreach ( $entities as $entity ) {
-			$entity->setId( ItemId::newFromNumber( $i++ ) );
-		}
-
-		return $entities;
-	}
-
-	/**
-	 * @param EntityId $entityId
-	 * @param array $entityProps
-	 * @param array $dataProps
+	 * Initialize repository data
 	 *
-	 * @return EasyRdf_Graph
+	 * @return RdfBuilderTestData
 	 */
-	protected static function makeEntityGraph( EntityId $entityId, $entityProps, $dataProps ) {
-		$graph = new EasyRdf_Graph();
+	private function getTestData() {
+		if ( empty( $this->testData ) ) {
+			$this->testData = new RdfBuilderTestData( __DIR__ . "/../../data/rdf", __DIR__ . "/../../data/rdf" );
+		}
 
-		$builder = self::newRdfBuilder( 'rdf' ); //XXX: ugh, dummy object
-
-		$entityUri = $builder->getEntityQName( RdfBuilder::NS_ENTITY, $entityId );
-		$dataUri = $builder->getDataURL( $entityId );
-		$entityResource = $graph->resource( $entityUri );
-		$dataResource = $graph->resource( $dataUri );
-
-		self::addProperties( $graph, $entityResource, $entityProps );
-		self::addProperties( $graph, $dataResource, $dataProps );
-
-		return $graph;
+		return $this->testData;
 	}
 
 	/**
-	 * @param EasyRdf_Graph $graph
-	 * @param EasyRdf_Resource $resource
-	 * @param array $properties
-	 */
-	protected static function addProperties( EasyRdf_Graph $graph, EasyRdf_Resource $resource, $properties ) {
-		foreach ( $properties as $prop => $values ) {
-			if ( !is_array( $values ) ) {
-				$values = array( $values );
-			}
-
-			foreach ( $values as $val ) {
-				if ( is_string( $val ) ) {
-					$val = $graph->resource( $val );
-				}
-
-				$resource->add( $prop, $val );
-			}
-		}
-	}
-
-	/**
-	 * @return EasyRdf_Graph[]|null
-	 */
-	public static function getTestGraphs() {
-		static $graphs = array();
-
-		if ( !empty( $graphs ) ) {
-			return $graphs;
-		}
-
-		$builder = self::newRdfBuilder( 'rdf' ); //XXX: ugh, dummy object
-
-		foreach ( $builder->getNamespaces() as $gname => $uri ) {
-			EasyRdf_Namespace::set( $gname, $uri );
-		}
-
-		$entities = self::getTestEntities();
-
-		$graphs['empty'] = self::makeEntityGraph(
-			$entities['empty']->getId(),
-			array(
-				'rdf:type' => $builder->getEntityTypeQName( Item::ENTITY_TYPE ),
-			),
-			array(
-				'rdf:type' => RdfBuilder::NS_SCHEMA_ORG . ':Dataset',
-				'schema:about' => $builder->getEntityQName( RdfBuilder::NS_ENTITY, $entities['empty']->getId() ),
-				'schema:version' => new EasyRdf_Literal( 23, null, 'xsd:integer' ),
-				'schema:dateModified' => new EasyRdf_Literal( '2013-01-01T00:00:00Z', null, 'xsd:dateTime' ),
-			)
-		);
-
-		$graphs['terms'] = self::makeEntityGraph(
-			$entities['terms']->getId(),
-			array(
-				'rdf:type' => $builder->getEntityTypeQName( Item::ENTITY_TYPE ),
-				'rdfs:label' => array(
-					new EasyRdf_Literal( 'Berlin', 'en' ),
-					new EasyRdf_Literal( 'Берлин', 'ru' )
-				),
-				'skos:prefLabel' => array(
-					new EasyRdf_Literal( 'Berlin', 'en' ),
-					new EasyRdf_Literal( 'Берлин', 'ru' )
-				),
-				'schema:name' => array(
-					new EasyRdf_Literal( 'Berlin', 'en' ),
-					new EasyRdf_Literal( 'Берлин', 'ru' )
-				),
-				'schema:description' => array(
-					new EasyRdf_Literal( 'German city', 'en' ),
-					new EasyRdf_Literal( 'столица и одновременно земля Германии', 'ru' )
-				),
-				'skos:altLabel' => array(
-					new EasyRdf_Literal( 'Berlin, Germany', 'en' ),
-					new EasyRdf_Literal( 'Land Berlin', 'en' ),
-					new EasyRdf_Literal( 'Berlin', 'ru' )
-				),
-			),
-
-			array(
-				'rdf:type' => RdfBuilder::NS_SCHEMA_ORG . ':Dataset',
-				'schema:about' => $builder->getEntityQName( RdfBuilder::NS_ENTITY, $entities['terms']->getId() ),
-				'schema:version' => new EasyRdf_Literal( 23, null, 'xsd:integer' ),
-				'schema:dateModified' => new EasyRdf_Literal( '2013-01-01T00:00:00Z', null, 'xsd:dateTime' ),
-			)
-		);
-
-		// TODO: test links
-		// TODO: test data values
-
-		return $graphs;
-	}
-
-	/**
+	 * @param int $produce One of the RdfProducer::PRODUCE_... constants.
+	 * @param DedupeBag|null $dedup
+	 *
 	 * @return RdfBuilder
 	 */
-	protected static function newRdfBuilder() {
-		return new RdfBuilder(
-			new SiteList(),
-			self::URI_BASE,
-			self::URI_DATA
+	private function newRdfBuilder( $produce, DedupeBag $dedup = null ) {
+		if ( $dedup === null ) {
+			$dedup = new HashDedupeBag();
+		}
+
+		$emitter = new NTriplesRdfWriter();
+		$builder = new RdfBuilder(
+			$this->getTestData()->getSiteList(),
+			$this->getTestData()->getVocabulary(),
+			$this->getTestData()->getMockRepository(),
+			$produce,
+			$emitter,
+			$dedup
 		);
-	}
 
-	public function provideAddEntity() {
-		$entities = self::getTestEntities();
-		$graphs = self::getTestGraphs();
-
-		$cases = array();
-
-		foreach ( $entities as $name => $entity ) {
-			if ( array_key_exists( $name, $graphs ) ) {
-				$cases[] = array(
-					new EntityRevision( $entity, 23, '20130101000000' ),
-					$graphs[$name],
-				);
-			}
-		}
-
-		if ( count( $cases ) == 0 ) {
-			//test should be skipped
-			return null;
-		}
-
-		return $cases;
+		$builder->startDocument();
+		return $builder;
 	}
 
 	/**
-	 * @dataProvider provideAddEntity
+	 * Load entity from JSON
+	 *
+	 * @param string $idString
+	 *
+	 * @return Entity
 	 */
-	public function testAddEntity( EntityRevision $entityRevision, EasyRdf_Graph $expectedGraph ) {
-		$builder = $this->newRdfBuilder();
-
-		$builder->addEntity( $entityRevision->getEntity() );
-		$builder->addEntityRevisionInfo( $entityRevision->getEntity()->getId(), $entityRevision->getRevision(), $entityRevision->getTimestamp() );
-		$graph = $builder->getGraph();
-
-		foreach ( $expectedGraph->resources() as $rc ) {
-			$props = $expectedGraph->properties( $rc );
-
-			foreach ( $props as $prop ) {
-				$expectedValues = $expectedGraph->all( $rc, $prop );
-				$actualValues = $graph->all( $rc, $prop );
-
-				$this->assertArrayEquals(
-					self::rdf2strings( $expectedValues ),
-					self::rdf2strings( $actualValues )
-				);
-			}
-		}
+	public function getEntityData( $idString ) {
+		return $this->getTestData()->getEntity( $idString );
 	}
 
-	public static function rdf2strings( array $data ) {
-		$strings = array();
-
-		foreach ( $data as $obj ) {
-			$strings[] = self::rdf2string( $obj );
-		}
-
-		return $strings;
+	/**
+	 * Load serialized ntriples
+	 *
+	 * @param string $testName
+	 *
+	 * @return string[]|null
+	 */
+	public function getSerializedData( $testName ) {
+		return $this->getTestData()->getNTriples( $testName );
 	}
 
-	public static function rdf2string( $obj ) {
-		if ( $obj instanceof EasyRdf_Resource ) {
-			return '<' . $obj->getUri() . '>';
-		} elseif ( $obj instanceof EasyRdf_Literal ) {
-			$value = $obj->getValue();
+	public function getRdfTests() {
+		$rdfTests = array(
+			array( 'Q1', 'Q1_simple' ),
+			array( 'Q2', 'Q2_labels' ),
+			array( 'Q3', 'Q3_links' ),
+			array( 'Q4', 'Q4_claims' ),
+			array( 'Q5', 'Q5_badges' ),
+			array( 'Q6', 'Q6_qualifiers' ),
+			array( 'Q7', 'Q7_references' ),
+			array( 'Q8', 'Q8_baddates' ),
+		);
 
-			if ( $value instanceof DateTime ) {
-				$value = wfTimestamp( TS_ISO_8601, $value->getTimestamp() );
-			}
-
-			if ( is_int( $value ) ) {
-				$s = strval( $value );
-			} elseif ( is_bool( $value ) ) {
-				$s = $value ? 'true' : 'false';
-			} else {
-				$s = '"' . strval( $value ) . '"';
-
-				if ( $obj->getDatatype() ) {
-					$s .= '^^' . $obj->getDatatype();
-				} elseif ( $obj->getLang() ) {
-					$s .= '@' . $obj->getLang();
-				}
-			}
-
-			return $s;
-		} else {
-			return strval( $obj );
-		}
+		return $rdfTests;
 	}
 
-	//TODO: test resolveMentionedEntities
-	//TODO: test all the addXXX methods
-	//TODO: test all the getXXX methods
+	/**
+	 * Extract text test data from RDF builder
+	 * @param RdfBuilder $builder
+	 * @return string[] ntriples lines
+	 */
+	private function getDataFromBuilder( RdfBuilder $builder ) {
+		$data = $builder->getRDF();
+		$dataSplit = explode( "\n", trim( $data ) );
+		sort( $dataSplit );
+		$dataSplit = array_map( 'trim', $dataSplit );
+		return $dataSplit;
+	}
+
+	/**
+	 * @dataProvider getRdfTests
+	 */
+	public function testRdfBuild( $entityName, $dataSetName ) {
+		$entity = $this->getEntityData( $entityName );
+		$correctData = $this->getSerializedData( $dataSetName );
+
+		$builder = $this->newRdfBuilder( RdfProducer::PRODUCE_ALL_STATEMENTS |
+				RdfProducer::PRODUCE_TRUTHY_STATEMENTS |
+				RdfProducer::PRODUCE_QUALIFIERS |
+				RdfProducer::PRODUCE_REFERENCES |
+				RdfProducer::PRODUCE_SITELINKS |
+				RdfProducer::PRODUCE_VERSION_INFO |
+				RdfProducer::PRODUCE_FULL_VALUES );
+		$builder->addEntity( $entity );
+		$builder->addEntityRevisionInfo( $entity->getId(), 42, "2014-11-04T03:11:05Z" );
+		$this->assertEquals( $correctData, $this->getDataFromBuilder( $builder ) );
+	}
+
+	public function testAddEntityRedirect() {
+		$builder = self::newRdfBuilder( 0 );
+
+		$q1 = new ItemId( 'Q1' );
+		$q11 = new ItemId( 'Q11' );
+		$builder->addEntityRedirect( $q11, $q1 );
+
+		$correctData = array( '<http://acme.test/Q11> <http://www.w3.org/2002/07/owl#sameAs> <http://acme.test/Q1> .' );
+		$this->assertEquals( $correctData, $this->getDataFromBuilder( $builder ) );
+	}
+
+	public function getProduceOptions() {
+		$produceTests = array(
+			array( 'Q4', RdfProducer::PRODUCE_ALL_STATEMENTS, 'Q4_all_statements' ),
+			array( 'Q4', RdfProducer::PRODUCE_TRUTHY_STATEMENTS, 'Q4_truthy_statements' ),
+			array( 'Q6', RdfProducer::PRODUCE_ALL_STATEMENTS, 'Q6_no_qualifiers' ),
+			array( 'Q6', RdfProducer::PRODUCE_ALL_STATEMENTS | RdfProducer::PRODUCE_QUALIFIERS, 'Q6_with_qualifiers' ),
+			array( 'Q7', RdfProducer::PRODUCE_ALL_STATEMENTS , 'Q7_no_refs' ),
+			array( 'Q7', RdfProducer::PRODUCE_ALL_STATEMENTS | RdfProducer::PRODUCE_REFERENCES, 'Q7_refs' ),
+			array( 'Q3', RdfProducer::PRODUCE_SITELINKS, 'Q3_sitelinks' ),
+			array( 'Q4', RdfProducer::PRODUCE_ALL_STATEMENTS | RdfProducer::PRODUCE_PROPERTIES, 'Q4_props' ),
+			array( 'Q4', RdfProducer::PRODUCE_ALL_STATEMENTS | RdfProducer::PRODUCE_FULL_VALUES, 'Q4_values' ),
+			array( 'Q1', RdfProducer::PRODUCE_VERSION_INFO, 'Q1_info' ),
+			array( 'Q4', RdfProducer::PRODUCE_TRUTHY_STATEMENTS | RdfProducer::PRODUCE_RESOLVED_ENTITIES, 'Q4_resolved' ),
+			array( 'Q10', RdfProducer::PRODUCE_TRUTHY_STATEMENTS | RdfProducer::PRODUCE_RESOLVED_ENTITIES, 'Q10_redirect' ),
+		);
+
+		return $produceTests;
+	}
+
+	/**
+	 * @dataProvider getProduceOptions
+	 */
+	public function testRdfOptions( $entityName, $produceOption, $dataSetName ) {
+		$entity = $this->getEntityData( $entityName );
+		$correctData = $this->getSerializedData( $dataSetName );
+
+		$builder = $this->newRdfBuilder( $produceOption );
+		$builder->addEntity( $entity );
+		$builder->addEntityRevisionInfo( $entity->getId(), 42, "2013-10-04T03:31:05Z" );
+		$builder->resolveMentionedEntities( $this->getTestData()->getMockRepository() );
+		$data = $this->getDataFromBuilder( $builder );
+		$this->assertEquals( $correctData, $data );
+	}
+
+	public function testDumpHeader() {
+		$builder = $this->newRdfBuilder( RdfProducer::PRODUCE_VERSION_INFO );
+		$builder->addDumpHeader( 1426110695 );
+		$data = $this->getDataFromBuilder( $builder );
+		$this->assertEquals( $this->getSerializedData( 'dumpheader' ), $data );
+	}
+
+	public function testDeduplication() {
+		$bag = new HashDedupeBag();
+
+		$builder = $this->newRdfBuilder( RdfProducer::PRODUCE_ALL, $bag );
+		$builder->addEntity( $this->getEntityData( 'Q7' ) );
+		$data1 = $this->getDataFromBuilder( $builder );
+
+		$builder = $this->newRdfBuilder( RdfProducer::PRODUCE_ALL, $bag );
+		$builder->addEntity( $this->getEntityData( 'Q9' ) );
+		$data2 = $this->getDataFromBuilder( $builder );
+
+		$data = array_merge( $data1, $data2 );
+		sort( $data );
+
+		$this->assertArrayEquals( $this->getSerializedData( 'Q7_Q9_dedup' ), $data );
+	}
 
 }

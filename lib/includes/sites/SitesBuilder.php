@@ -1,5 +1,10 @@
 <?php
 
+namespace Wikibase\Lib\Sites;
+
+use Site;
+use SiteStore;
+
 /**
  * Builds the site identifiers table
  *
@@ -15,13 +20,17 @@ class SitesBuilder {
 	/**
 	 * @var SiteStore
 	 */
-	protected $store;
+	private $store;
 
 	/**
-	 * @var array
+	 * @var string[]
 	 */
-	protected $validGroups;
+	private $validGroups;
 
+	/**
+	 * @param SiteStore $store
+	 * @param string[] $validGroups
+	 */
 	public function __construct( SiteStore $store, array $validGroups ) {
 		$this->store = $store;
 		$this->validGroups = $validGroups;
@@ -41,9 +50,9 @@ class SitesBuilder {
 			$sites = $this->addInterwikiIdsToGroup( $sites, $siteGroup );
 		}
 
-		$existingSites = $this->store->getSites( "nocache" );
+		$existingSites = $this->store->getSites();
 
-		foreach( $sites as $site ) {
+		foreach ( $sites as $site ) {
 			$siteId = $site->getGlobalId();
 
 			if ( $existingSites->hasSite( $siteId ) ) {
@@ -62,8 +71,8 @@ class SitesBuilder {
 	 * @return Site[]
 	 */
 	protected function addInterwikiIdsToGroup( array $sites, $siteGroup ) {
-		foreach( $sites as $site ) {
-			if( $site->getGroup() === $siteGroup ) {
+		foreach ( $sites as $site ) {
+			if ( $site->getGroup() === $siteGroup ) {
 				$localId = $site->getLanguageCode();
 
 				if ( $localId ) {
@@ -82,7 +91,7 @@ class SitesBuilder {
 	 *
 	 * @return string
 	 */
-	protected function getInterwikiGroup( array $sites, $wikiId ) {
+	private function getInterwikiGroup( array $sites, $wikiId ) {
 		if ( !array_key_exists( $wikiId, $sites ) ) {
 			return null;
 		}

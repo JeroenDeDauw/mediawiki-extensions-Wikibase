@@ -23,7 +23,10 @@ class HtmlUrlFormatter implements ValueFormatter {
 	 */
 	protected $attributes;
 
-	public function __construct( FormatterOptions $options ) {
+	/**
+	 * @param FormatterOptions|null $options
+	 */
+	public function __construct( FormatterOptions $options = null ) {
 		//TODO: configure from options
 		$this->attributes = array(
 			'rel' => 'nofollow',
@@ -38,9 +41,8 @@ class HtmlUrlFormatter implements ValueFormatter {
 	 *
 	 * @param StringValue $value The URL to turn into a link
 	 *
-	 * @return string
-	 *
 	 * @throws InvalidArgumentException
+	 * @return string HTML
 	 */
 	public function format( $value ) {
 		if ( !( $value instanceof StringValue ) ) {

@@ -1,15 +1,25 @@
 <?php
 
-namespace Wikibase;
+namespace Wikibase\Repo\Content;
 
-use MWException;
+use ContentHandler;
 use InvalidArgumentException;
+use MWException;
 use OutOfBoundsException;
+use Revision;
 use Status;
 use Title;
 use User;
-use Revision;
-use WikiPage;
+use Wikibase\Content\EntityInstanceHolder;
+use Wikibase\DataModel\Entity\EntityDocument;
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Entity\EntityRedirect;
+use Wikibase\DataModel\Entity\EntityIdParsingException;
+use Wikibase\EntityContent;
+use Wikibase\Lib\Store\EntityTitleLookup;
+use Wikibase\Lib\Store\StorageException;
+use Wikibase\Repo\Store\EntityPermissionChecker;
+use Wikibase\Store\EntityIdLookup;
 
 /**
  * Factory for EntityContent objects.
@@ -18,104 +28,51 @@ use WikiPage;
  *
  * @licence GNU GPL v2+
  * @author Jeroen De Dauw < jeroendedauw@gmail.com >
+ * @author Daniel Kinzler
  */
-class EntityContentFactory implements EntityTitleLookup, EntityPermissionChecker {
+class EntityContentFactory implements EntityTitleLookup, EntityIdLookup, EntityPermissionChecker {
 
 	/**
-	 * @since 0.5
-	 *
-	 * @var array
+	 * @var string[] Entity type ID to content model ID mapping.
 	 */
-	protected $typeMap;
+	private $entityContentModels;
 
 	/**
-	 * @param array $typeMap Entity type -> content model mapping
+	 * @param string[] $entityContentModels Entity type ID to content model ID mapping.
 	 */
-	public function __construct( array $typeMap ) {
-		$this->typeMap = $typeMap;
+	public function __construct( array $entityContentModels ) {
+		$this->entityContentModels = $entityContentModels;
 	}
 
 	/**
 	 * Determines whether the given content model is designated to hold some kind of Wikibase entity.
-	 * Shorthand for in_array( $ns, self::getEntityModels() );
 	 *
 	 * @since 0.2
 	 *
-	 * @param String $model the content model ID
+	 * @param string $contentModel
 	 *
-	 * @return bool True iff $model is an entity content model
+	 * @return bool If the given content model ID is a known entity content model.
 	 */
-	public function isEntityContentModel( $model ) {
-		return in_array( $model, $this->getEntityContentModels() );
+	public function isEntityContentModel( $contentModel ) {
+		return in_array( $contentModel, $this->entityContentModels );
 	}
 
 	/**
-	 * Returns a list of content model IDs that are used to represent Wikibase entities.
-	 *
 	 * @since 0.2
 	 *
-	 * @return array An array of string content model IDs.
+	 * @return string[] A list of content model IDs used to represent Wikibase entities.
 	 */
 	public function getEntityContentModels() {
-		return $this->typeMap;
+		return array_values( $this->entityContentModels );
 	}
 
 	/**
-	 * Get the items corresponding to the provided language and label pair.
-	 * A description can also be provided, in which case only the item with
-	 * that description will be returned (as only element in the array).
+	 * @since 0.5
 	 *
-	 * @since 0.2
-	 *
-	 * @param string $language
-	 * @param string $label
-	 * @param string|null $description
-	 * @param string|null $entityType
-	 * @param bool $fuzzySearch if false, only exact matches are returned, otherwise more relaxed search . Defaults to false.
-	 *
-	 * @return EntityContent[]
+	 * @return string[] A list of entity type IDs used for Wikibase entities.
 	 */
-	public function getFromLabel( $language, $label, $description = null, $entityType = null, $fuzzySearch = false ) {
-		$entityIds = StoreFactory::getStore()->getTermIndex()->getEntityIdsForLabel( $label, $language, $description, $entityType, $fuzzySearch );
-		$entities = array();
-
-		foreach ( $entityIds as $entityId ) {
-			list( $type, $id ) = $entityId;
-			$entity = self::getFromId( new EntityId( $type, $id ) );
-
-			if ( $entity !== null ) {
-				$entities[] = $entity;
-			}
-		}
-
-		return $entities;
-	}
-
-	/**
-	 * Get the entity content for the entity with the provided id
-	 * if it's available to the specified audience.
-	 * If the specified audience does not have the ability to view this
-	 * revision, if there is no such item, null will be returned.
-	 *
-	 * @since 0.2
-	 *
-	 * @deprecated use EntityLookup instead.
-	 *
-	 * @param EntityId $id
-	 *
-	 * @param integer $audience: one of:
-	 *      Revision::FOR_PUBLIC       to be displayed to all users
-	 *      Revision::FOR_THIS_USER    to be displayed to $wgUser
-	 *      Revision::RAW              get the text regardless of permissions
-	 *
-	 * @return EntityContent|null
-	 */
-	public function getFromId( EntityId $id, $audience = Revision::FOR_PUBLIC ) {
-		// TODO: since we already did the trouble of getting a WikiPage here,
-		// we probably want to keep a copy of it in the Content object.
-		$title = $this->getTitleForId( $id );
-		$page = new WikiPage( $title );
-		return $page->getContent( $audience );
+	public function getEntityTypes() {
+		return array_keys( $this->entityContentModels );
 	}
 
 	/**
@@ -126,13 +83,67 @@ class EntityContentFactory implements EntityTitleLookup, EntityPermissionChecker
 	 * @param EntityId $id
 	 *
 	 * @throws MWException
+	 * @throws OutOfBoundsException
+	 * @throws InvalidArgumentException
 	 * @return Title
 	 */
 	public function getTitleForId( EntityId $id ) {
-		return Title::newFromText(
-			$id->getSerialization(),
-			$this->getNamespaceForType( $id->getEntityType() )
-		);
+		$handler = $this->getContentHandlerForType( $id->getEntityType() );
+		return $handler->getTitleForId( $id );
+	}
+
+	/**
+	 * Returns the ID of the entity associated with the given page title.
+	 *
+	 * @note There is no guarantee that the EntityId returned by this method refers to
+	 * an existing entity.
+	 *
+	 * @param Title $title
+	 *
+	 * @return EntityId|null
+	 */
+	public function getEntityIdForTitle( Title $title ) {
+		$contentModel = $title->getContentModel();
+		$handler = ContentHandler::getForModelID( $contentModel );
+
+		if ( $handler instanceof EntityHandler ) {
+			try {
+				return $handler->getIdForTitle( $title );
+			} catch ( EntityIdParsingException $ex ) {
+				// Not a valid entity page title.
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * @see EntityIdLookup::getEntityIds
+	 *
+	 * @note: the current implementation skips non-existing entities, but there is no guarantee
+	 * that this will always be the case.
+	 *
+	 * @param Title[] $titles
+	 *
+	 * @throws StorageException
+	 * @return EntityId[] Entity IDs, keyed by page IDs.
+	 */
+	public function getEntityIds( array $titles ) {
+		$entityIds = array();
+
+		foreach ( $titles as $title ) {
+			$pageId = $title->getArticleID();
+
+			if ( $pageId > 0 ) {
+				$entityId = $this->getEntityIdForTitle( $title );
+
+				if ( $entityId !== null ) {
+					$entityIds[$pageId] = $entityId;
+				}
+			}
+		}
+
+		return $entityIds;
 	}
 
 	/**
@@ -140,14 +151,30 @@ class EntityContentFactory implements EntityTitleLookup, EntityPermissionChecker
 	 *
 	 * @since 0.5
 	 *
-	 * @param int $type
+	 * @param string $entityType
 	 *
 	 * @throws OutOfBoundsException if no content model is defined for the given entity type.
 	 * @return int
 	 */
-	public function getNamespaceForType( $type ) {
-		$model = $this->getContentModelForType( $type );
-		return NamespaceUtils::getEntityNamespace( $model );
+	public function getNamespaceForType( $entityType ) {
+		$handler = $this->getContentHandlerForType( $entityType );
+		return $handler->getEntityNamespace();
+	}
+
+	/**
+	 * Returns the ContentHandler for the given entity type.
+	 *
+	 * @since 0.5
+	 *
+	 * @param string $entityType
+	 *
+	 * @throws OutOfBoundsException if no content model is defined for the given entity type.
+	 * @throws MWException
+	 * @return EntityHandler
+	 */
+	public function getContentHandlerForType( $entityType ) {
+		$contentModel = $this->getContentModelForType( $entityType );
+		return ContentHandler::getForModelID( $contentModel );
 	}
 
 	/**
@@ -155,17 +182,17 @@ class EntityContentFactory implements EntityTitleLookup, EntityPermissionChecker
 	 *
 	 * @since 0.5
 	 *
-	 * @param int $type
+	 * @param string $entityType
 	 *
 	 * @throws OutOfBoundsException if no content model is defined for the given entity type.
 	 * @return int
 	 */
-	public function getContentModelForType( $type ) {
-		if ( !isset( $this->typeMap[$type] ) ) {
-			throw new OutOfBoundsException( 'No content model defined for entity type ' . $type );
+	public function getContentModelForType( $entityType ) {
+		if ( !isset( $this->entityContentModels[$entityType] ) ) {
+			throw new OutOfBoundsException( 'No content model defined for entity type ' . $entityType );
 		}
 
-		return $this->typeMap[$type];
+		return $this->entityContentModels[$entityType];
 	}
 
 	/**
@@ -175,12 +202,12 @@ class EntityContentFactory implements EntityTitleLookup, EntityPermissionChecker
 	 *
 	 * @since 0.2
 	 *
-	 * @param integer $revisionId
+	 * @param int $revisionId
 	 *
 	 * @return EntityContent|null
 	 */
 	public function getFromRevision( $revisionId ) {
-		$revision = \Revision::newFromId( intval( $revisionId ) );
+		$revision = Revision::newFromId( (int)$revisionId );
 
 		if ( $revision === null ) {
 			return null;
@@ -192,70 +219,66 @@ class EntityContentFactory implements EntityTitleLookup, EntityPermissionChecker
 	/**
 	 * Constructs a new EntityContent from an Entity.
 	 *
+	 * @see EntityHandler::makeEntityContent
+	 *
 	 * @since 0.3
 	 *
-	 * @param Entity $entity
+	 * @param EntityDocument $entity
 	 *
 	 * @return EntityContent
 	 */
-	public function newFromEntity( Entity $entity ) {
-		/**
-		 * @var EntityHandler $handler
-		 */
-		$handler = \ContentHandler::getForModelID( $this->typeMap[$entity->getType()] );
-
-		return $handler->newContentFromEntity( $entity );
+	public function newFromEntity( EntityDocument $entity ) {
+		$handler = $this->getContentHandlerForType( $entity->getType() );
+		return $handler->makeEntityContent( new EntityInstanceHolder( $entity ) );
 	}
 
 	/**
-	 * Constructs a new EntityContent from a given type.
+	 * Constructs a new EntityContent from an EntityRedirect,
+	 * or null if the respective kind of entity does not support redirects.
 	 *
-	 * @since 0.4
+	 * @see EntityHandler::makeEntityRedirectContent
 	 *
-	 * @param string $type
+	 * @since 0.5
 	 *
-	 * @return EntityContent
+	 * @param EntityRedirect $redirect
 	 *
-	 * @throws InvalidArgumentException
+	 * @return EntityContent|null
 	 */
-	public function newFromType( $type ) {
-		if ( !is_string( $type ) ) {
-			throw new InvalidArgumentException( '$type needs to be a string' );
-		}
-
-		if ( $type === Item::ENTITY_TYPE ) {
-			return ItemContent::newEmpty();
-		} elseif ( $type === Property::ENTITY_TYPE ) {
-			return PropertyContent::newEmpty();
-		} else {
-			throw new InvalidArgumentException( 'unknown entity type $type' );
-		}
+	public function newFromRedirect( EntityRedirect $redirect ) {
+		$handler = $this->getContentHandlerForType( $redirect->getEntityId()->getEntityType() );
+		return $handler->makeEntityRedirectContent( $redirect );
 	}
 
 	/**
-	 * @see EntityPermissionChecker::getPermissionStatusForEntityId
-	 *
 	 * @param User $user
 	 * @param string $permission
 	 * @param Title $entityPage
 	 * @param string $quick
 	 *
+	 * //XXX: would be nice to be able to pass the $short flag too,
+	 *        as used by getUserPermissionsErrorsInternal. But Title doesn't expose that.
+	 * @todo Move to a separate service (merge into WikiPageEntityStore?)
+	 *
 	 * @return Status a status object representing the check's result.
 	 */
 	protected function getPermissionStatus( User $user, $permission, Title $entityPage, $quick = '' ) {
-		wfProfileIn( __METHOD__ );
-
-		//XXX: would be nice to be able to pass the $short flag too,
-		//     as used by getUserPermissionsErrorsInternal. But Title doesn't expose that.
 		$errors = $entityPage->getUserPermissionsErrors( $permission, $user, $quick !== 'quick' );
+		return $this->getStatusForPermissionErrors( $errors );
+	}
+
+	/**
+	 * @param string[] $errors
+	 *
+	 * @return Status
+	 */
+	protected function getStatusForPermissionErrors( array $errors ) {
 		$status = Status::newGood();
 
 		foreach ( $errors as $error ) {
-			call_user_func_array( array( $status, 'fatal'), $error );
+			call_user_func_array( array( $status, 'fatal' ), $error );
 			$status->setResult( false );
 		}
 
-		wfProfileOut( __METHOD__ );
 		return $status;
 	}
 
@@ -268,15 +291,12 @@ class EntityContentFactory implements EntityTitleLookup, EntityPermissionChecker
 	 * @param string $quick
 	 *
 	 * @return Status a status object representing the check's result.
+	 *
+	 * @todo Move to a separate service (merge into WikiPageEntityStore?)
 	 */
 	public function getPermissionStatusForEntityId( User $user, $permission, EntityId $entityId, $quick = '' ) {
-		wfProfileIn( __METHOD__ );
-
 		$title = $this->getTitleForId( $entityId );
-		$status = $this->getPermissionStatus( $user, $permission, $title, $quick );
-
-		wfProfileOut( __METHOD__ );
-		return $status;
+		return $this->getPermissionStatus( $user, $permission, $title, $quick );
 	}
 
 	/**
@@ -284,21 +304,18 @@ class EntityContentFactory implements EntityTitleLookup, EntityPermissionChecker
 	 *
 	 * @param User $user
 	 * @param string $permission
-	 * @param string $type
+	 * @param string $entityType
 	 * @param string $quick
 	 *
 	 * @return Status a status object representing the check's result.
+	 *
+	 * @todo Move to a separate service (merge into WikiPageEntityStore?)
 	 */
-	public function getPermissionStatusForEntityType( User $user, $permission, $type, $quick = '' ) {
-		wfProfileIn( __METHOD__ );
-
-		$ns = $this->getNamespaceForType( $type );
+	public function getPermissionStatusForEntityType( User $user, $permission, $entityType, $quick = '' ) {
+		$ns = $this->getNamespaceForType( $entityType );
 		$dummyTitle = Title::makeTitleSafe( $ns, '/' );
 
-		$status = $this->getPermissionStatus( $user, $permission, $dummyTitle, $quick );
-
-		wfProfileOut( __METHOD__ );
-		return $status;
+		return $this->getPermissionStatus( $user, $permission, $dummyTitle, $quick );
 	}
 
 	/**
@@ -310,25 +327,27 @@ class EntityContentFactory implements EntityTitleLookup, EntityPermissionChecker
 	 *
 	 * @param User $user
 	 * @param string $permission
-	 * @param Entity $entity
+	 * @param EntityDocument $entity
 	 * @param string $quick
 	 *
 	 * @return Status a status object representing the check's result.
+	 *
+	 * @todo Move to a separate service (merge into WikiPageEntityStore?)
 	 */
-	public function getPermissionStatusForEntity( User $user, $permission, Entity $entity, $quick = '' ) {
+	public function getPermissionStatusForEntity( User $user, $permission, EntityDocument $entity, $quick = '' ) {
 		$id = $entity->getId();
 		$status = null;
 
 		if ( !$id ) {
-			$type = $entity->getType();
+			$entityType = $entity->getType();
 
 			if ( $permission === 'edit' ) {
 				// for editing a non-existing page, check the createpage permission
-				$status = $this->getPermissionStatusForEntityType( $user, 'createpage', $type, $quick );
+				$status = $this->getPermissionStatusForEntityType( $user, 'createpage', $entityType, $quick );
 			}
 
 			if ( !$status || $status->isOK() ) {
-				$status = $this->getPermissionStatusForEntityType( $user, $permission, $type, $quick );
+				$status = $this->getPermissionStatusForEntityType( $user, $permission, $entityType, $quick );
 			}
 		} else {
 			$status = $this->getPermissionStatusForEntityId( $user, $permission, $id, $quick );
@@ -336,4 +355,5 @@ class EntityContentFactory implements EntityTitleLookup, EntityPermissionChecker
 
 		return $status;
 	}
+
 }

@@ -1,5 +1,11 @@
 <?php
 
+namespace Wikibase\Lib\Sites;
+
+use InvalidArgumentException;
+use MediaWikiSite;
+use Site;
+
 /**
  * Translates api sitematrix results json into an array of Site objects
  *
@@ -12,33 +18,33 @@ class SiteMatrixParser {
 	/**
 	 * @var string
 	 */
-	protected $scriptPath;
+	private $scriptPath;
 
 	/**
 	 * @var string
 	 */
-	protected $articlePath;
+	private $articlePath;
 
 	/**
 	 * @var boolean
 	 */
-	protected $expandGroup;
+	private $expandGroup;
 
 	/**
-	 * @var string
+	 * @var bool|string
 	 */
-	protected $stripProtocol;
+	private $protocol;
 
 	/**
 	 * @param string $scriptPath (e.g. '/w/$1')
 	 * @param string $articlePath (e.g. '/wiki/$1')
-	 * @param string $stripProtocol
+	 * @param string|bool $protocol (true: default, false: strip, string: protocol to force)
 	 * @param boolean $expandGroup expands site matrix group codes from wiki to wikipedia
 	 */
-	public function __construct( $scriptPath, $articlePath, $stripProtocol, $expandGroup = true ) {
+	public function __construct( $scriptPath, $articlePath, $protocol, $expandGroup = true ) {
 		$this->scriptPath = $scriptPath;
 		$this->articlePath = $articlePath;
-		$this->stripProtocol = $stripProtocol;
+		$this->protocol = $protocol;
 		$this->expandGroup = $expandGroup;
 	}
 
@@ -70,7 +76,7 @@ class SiteMatrixParser {
 
 		$sites = array();
 
-		foreach( $groups as $groupData ) {
+		foreach ( $groups as $groupData ) {
 			$sites = array_merge(
 				$sites,
 				$this->getSitesFromLangGroup( $groupData )
@@ -90,10 +96,10 @@ class SiteMatrixParser {
 	 *
 	 * @return Site[]
 	 */
-	protected function getSpecialSites( array $specialSites ) {
+	private function getSpecialSites( array $specialSites ) {
 		$sites = array();
 
-		foreach( $specialSites as $specialSite ) {
+		foreach ( $specialSites as $specialSite ) {
 			$site = $this->getSiteFromSiteData( $specialSite );
 			$siteId = $site->getGlobalId();
 
@@ -114,15 +120,15 @@ class SiteMatrixParser {
 	 *
 	 * @return Site[]
 	 */
-	protected function getSitesFromLangGroup( $langGroup ) {
+	private function getSitesFromLangGroup( $langGroup ) {
 		$sites = array();
 
-		foreach( $langGroup['site'] as $siteData ) {
+		foreach ( $langGroup['site'] as $siteData ) {
 			if ( !array_key_exists( 'code', $langGroup ) ) {
 				continue;
 			}
 
-			$site = $this->getSiteFromSiteData( $siteData, $langGroup['code'], false );
+			$site = $this->getSiteFromSiteData( $siteData );
 			$site->setLanguageCode( $langGroup['code'] );
 			$siteId = $site->getGlobalId();
 			$sites[$siteId] = $site;
@@ -136,7 +142,7 @@ class SiteMatrixParser {
 	 *
 	 * @return Site
 	 */
-	protected function getSiteFromSiteData( $siteData ) {
+	private function getSiteFromSiteData( $siteData ) {
 		$site = new MediaWikiSite();
 		$site->setGlobalId( $siteData['dbname'] );
 
@@ -148,8 +154,10 @@ class SiteMatrixParser {
 
 		$url = $siteData['url'];
 
-		if ( $this->stripProtocol ) {
+		if ( $this->protocol === false ) {
 			$url = preg_replace( '@^https?:@', '', $url );
+		} elseif ( is_string( $this->protocol ) ) {
+			$url = preg_replace( '@^https?:@', $this->protocol . ':', $url );
 		}
 
 		$site->setFilePath( $url . $this->scriptPath );

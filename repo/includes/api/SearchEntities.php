@@ -1,28 +1,26 @@
 <?php
 
-namespace Wikibase\Api;
+namespace Wikibase\Repo\Api;
 
 use ApiBase;
 use ApiMain;
+use OutOfBoundsException;
 use Wikibase\DataModel\Entity\EntityId;
 use Wikibase\DataModel\Entity\EntityIdParser;
 use Wikibase\DataModel\Entity\EntityIdParsingException;
-use Wikibase\EntityFactory;
-use Wikibase\EntityTitleLookup;
+use Wikibase\DataModel\Services\Lookup\LabelDescriptionLookup;
+use Wikibase\DataModel\Term\Term;
+use Wikibase\Lib\ContentLanguages;
+use Wikibase\Lib\Store\EntityTitleLookup;
+use Wikibase\Lib\Store\LanguageFallbackLabelDescriptionLookup;
+use Wikibase\Repo\Interactors\TermIndexSearchInteractor;
+use Wikibase\Repo\Interactors\TermSearchResult;
 use Wikibase\Repo\WikibaseRepo;
-use Wikibase\StoreFactory;
-use Wikibase\Term;
-use Wikibase\Utils;
+use Wikibase\TermIndex;
+use Wikibase\TermIndexEntry;
 
 /**
  * API module to search for Wikibase entities.
- *
- * FIXME: this module is doing to much work. Ranking terms is not its job and should be delegated
- * FIXME: the continuation currently relies on the search order returned by the TermStore
- *
- * Note: Continuation only works for a rather small number of entities. It is assumed that a large
- * number of entities will not be searched through by human editors, and that bots cannot search
- * through them anyway.
  *
  * @since 0.2
  *
@@ -30,19 +28,35 @@ use Wikibase\Utils;
  * @author John Erling Blad < jeblad@gmail.com >
  * @author Jens Ohlig < jens.ohlig@wikimedia.de >
  * @author Tobias Gritschacher < tobias.gritschacher@wikimedia.de >
- * @author Thiemo Mättig < thiemo.maettig@wikimedia.de >
+ * @author Thiemo Mättig
+ * @author Adam Shorland
  */
 class SearchEntities extends ApiBase {
 
 	/**
-	 * @var EntityTitleLookup
+	 * @var EntitySearchHelper
 	 */
-	protected $titleLookup;
+	private $entitySearchHelper;
 
 	/**
-	 * @var EntityIdParser
+	 * @var EntityTitleLookup
 	 */
-	protected $idParser;
+	private $titleLookup;
+
+	/**
+	 * @var ContentLanguages
+	 */
+	private $termsLanguages;
+
+	/**
+	 * @var string[]
+	 */
+	private $entityTypes;
+
+	/**
+	 * @var string
+	 */
+	private $conceptBaseUri;
 
 	/**
 	 * @param ApiMain $mainModule
@@ -54,51 +68,49 @@ class SearchEntities extends ApiBase {
 	public function __construct( ApiMain $mainModule, $moduleName, $modulePrefix = '' ) {
 		parent::__construct( $mainModule, $moduleName, $modulePrefix );
 
-		//TODO: provide a mechanism to override the services
-		$this->titleLookup = WikibaseRepo::getDefaultInstance()->getEntityTitleLookup();
-		$this->idParser = WikibaseRepo::getDefaultInstance()->getEntityIdParser();
-	}
-
-	/**
-	 * Get the entities corresponding to the provided language and term pair.
-	 * Term means it is either a label or an alias.
-	 *
-	 * @since 0.2
-	 *
-	 * @param string $term
-	 * @param string|null $entityType
-	 * @param string $language
-	 * @param int $limit
-	 * @param bool $prefixSearch
-	 *
-	 * @return EntityId[]
-	 */
-	protected function searchEntities( $term, $entityType, $language, $limit, $prefixSearch ) {
-		wfProfileIn( __METHOD__ );
-
-		$ids = StoreFactory::getStore()->getTermIndex()->getMatchingIDs(
-			array(
-				new \Wikibase\Term( array(
-					'termType' 		=> \Wikibase\Term::TYPE_LABEL,
-					'termLanguage' 	=> $language,
-					'termText' 		=> $term
-				) ),
-				new \Wikibase\Term( array(
-					'termType' 		=> \Wikibase\Term::TYPE_ALIAS,
-					'termLanguage' 	=> $language,
-					'termText' 		=> $term
-				) )
-			),
-			$entityType,
-			array(
-				'caseSensitive' => false,
-				'prefixSearch' => $prefixSearch,
-				'LIMIT' => $limit,
+		$repo = WikibaseRepo::getDefaultInstance();
+		$entitySearchHelper = new EntitySearchHelper(
+			$repo->getEntityTitleLookup(),
+			$repo->getEntityIdParser(),
+			$repo->newTermSearchInteractor( $this->getLanguage()->getCode() ),
+			$repo->getStore()->getTermIndex(),
+			new LanguageFallbackLabelDescriptionLookup(
+				$repo->getTermLookup(),
+				$repo->getLanguageFallbackChainFactory()
+					->newFromLanguageCode( $this->getLanguage()->getCode() )
 			)
 		);
 
-		wfProfileOut( __METHOD__ );
-		return $ids;
+		$this->setServices(
+			$entitySearchHelper,
+			$repo->getEntityTitleLookup(),
+			$repo->getTermsLanguages(),
+			$repo->getEntityFactory()->getEntityTypes(),
+			$repo->getSettings()->getSetting( 'conceptBaseUri' )
+		);
+	}
+
+	/**
+	 * Override services, for use for testing.
+	 *
+	 * @param EntitySearchHelper $entitySearchHelper
+	 * @param EntityTitleLookup $titleLookup
+	 * @param ContentLanguages $termLanguages
+	 * @param array $entityTypes
+	 * @param string $conceptBaseUri
+	 */
+	public function setServices(
+		EntitySearchHelper $entitySearchHelper,
+		EntityTitleLookup $titleLookup,
+		ContentLanguages $termLanguages,
+		array $entityTypes,
+		$conceptBaseUri
+	) {
+		$this->entitySearchHelper = $entitySearchHelper;
+		$this->titleLookup = $titleLookup;
+		$this->termsLanguages = $termLanguages;
+		$this->entityTypes = $entityTypes;
+		$this->conceptBaseUri = $conceptBaseUri;
 	}
 
 	/**
@@ -107,157 +119,61 @@ class SearchEntities extends ApiBase {
 	 * If there are not enough exact matches, the list of returned entries will be additionally
 	 * filled with prefixed matches.
 	 *
-	 * @since 0.4
-	 *
 	 * @param array $params
 	 *
 	 * @return array[]
 	 */
 	private function getSearchEntries( array $params ) {
-		wfProfileIn( __METHOD__ );
+		$searchResults = $this->entitySearchHelper->getRankedSearchResults(
+			$params['search'],
+			$params['language'],
+			$params['type'],
+			$params['continue'] + $params['limit'] + 1,
+			$params['strictlanguage']
+		);
 
-		$ids = array();
-		$required = $params['continue'] + $params['limit'] + 1;
-
-		$entityId = $this->getExactMatchForEntityId( $params['search'], $params['type'] );
-		if ( $entityId !== null ) {
-			$ids[] = $entityId;
-		}
-
-		$missing = $required - count( $ids );
-		$ids = array_merge( $ids, $this->getRankedMatches( $params['search'], $params['type'],
-			$params['language'], $missing ) );
-		$ids = array_unique( $ids );
-
-		$entries = $this->getEntries( $ids, $params['search'], $params['type'],
-			$params['language'] );
-
-		wfProfileOut( __METHOD__ );
-		return $entries;
-	}
-
-	/**
-	 * Gets exact match for the search term as an EntityId if it can be found.
-	 *
-	 * @param string $term
-	 * @param string $entityType
-	 *
-	 * @return EntityId|null
-	 */
-	private function getExactMatchForEntityId( $term, $entityType ) {
-		try {
-			$entityId = $this->idParser->parse( $term );
-			$title = $this->titleLookup->getTitleForId( $entityId );
-
-			if ( $title->exists() && $entityId->getEntityType() === $entityType ) {
-				return $entityId;
-			}
-		} catch ( EntityIdParsingException $ex ) {
-			// never mind, doesn't look like an ID.
-		}
-
-		return null;
-	}
-
-	/**
-	 * Gets exact matches. If there are not enough exact matches, it gets prefixed matches.
-	 *
-	 * @param string $term
-	 * @param string|null $entityType
-	 * @param string $language
-	 * @param int $limit
-	 *
-	 * @return EntityId[]
-	 */
-	private function getRankedMatches( $term, $entityType, $language, $limit ) {
-		/**
-		 * @var EntityId[] $ids
-		 */
-		$ids = array();
-
-		// If still space, then merge in exact matches
-		$missing = $limit - count( $ids );
-		if ( $missing > 0 ) {
-			$ids = array_merge( $ids, $this->searchEntities( $term, $entityType, $language,
-				$missing, false ) );
-			$ids = array_unique( $ids );
-		}
-
-		// If still space, then merge in prefix matches
-		$missing = $limit - count( $ids );
-		if ( $missing > 0 ) {
-			$ids = array_merge( $ids, $this->searchEntities( $term, $entityType, $language,
-				$missing, true ) );
-			$ids = array_unique( $ids );
-		}
-
-		// Reduce overflow, if any
-		$ids = array_slice( $ids, 0, $limit );
-
-		return $ids;
-	}
-
-	/**
-	 * @param EntityId[] $ids
-	 * @param string $search
-	 * @param string $entityType
-	 * @param string|null $language language code
-	 *
-	 * @return array[]
-	 */
-	private function getEntries( array $ids, $search, $entityType, $language ) {
-		/**
-		 * @var array[] $entries
-		 */
 		$entries = array();
-
-		foreach ( $ids as $id ) {
-			$key = $id->getSerialization();
-			$title = $this->titleLookup->getTitleForId( $id );
-			$entries[ $key ] = array(
-				'id' => $id->getPrefixedId(),
-				'url' => $title->getFullUrl()
+		foreach ( $searchResults as $match ) {
+			//TODO: use EntityInfoBuilder, EntityInfoTermLookup
+			$title = $this->titleLookup->getTitleForId( $match->getEntityId() );
+			$entry = array(
+				'id' => $match->getEntityId()->getSerialization(),
+				'concepturi' => $this->conceptBaseUri . $match->getEntityId()->getSerialization(),
+				'url' => $title->getFullUrl(),
+				'title' => $title->getPrefixedText(),
+				'pageid' => $title->getArticleID()
 			);
-		}
-
-		// Find all the remaining terms for the given entities
-		$terms = StoreFactory::getStore()->getTermIndex()->getTermsOfEntities( $ids, $entityType,
-			$language );
-		// TODO: This needs to be rethought when a different search engine is used
-		$aliasPattern = '/^' . preg_quote( $search, '/' ) . '/i';
-
-		foreach ( $terms as $term ) {
-			$key = $term->getEntityId()->getSerialization();
-			if ( !isset( $entries[$key] ) ) {
-				continue;
+			$displayLabel = $match->getDisplayLabel();
+			if ( !is_null( $displayLabel ) ) {
+				$entry['label'] = $displayLabel->getText();
 			}
-
-			$entry = $entries[$key];
-
-			switch ( $term->getType() ) {
-				case Term::TYPE_LABEL:
-					$entry['label'] = $term->getText();
-					break;
-				case Term::TYPE_DESCRIPTION:
-					$entry['description'] = $term->getText();
-					break;
-				case Term::TYPE_ALIAS:
-					// Only include matching aliases
-					if ( preg_match( $aliasPattern, $term->getText() ) ) {
-						if ( !isset( $entry['aliases'] ) ) {
-							$entry['aliases'] = array();
-							$this->getResult()->setIndexedTagName( $entry['aliases'], 'alias' );
-						}
-						$entry['aliases'][] = $term->getText();
-					}
-					break;
+			$displayDescription = $match->getDisplayDescription();
+			if ( !is_null( $displayDescription ) ) {
+				$entry['description'] = $displayDescription->getText();
 			}
+			$entry['match']['type'] = $match->getMatchedTermType();
 
-			$entries[$key] = $entry;
+			//Special handling for 'entityId's as these are not actually Term objects
+			if ( $entry['match']['type'] === 'entityId' ) {
+				$entry['match']['text'] = $entry['id'];
+				$entry['aliases'] = array( $entry['id'] );
+			} else {
+				$matchedTerm = $match->getMatchedTerm();
+				$matchedTermText = $matchedTerm->getText();
+				$entry['match']['language'] = $matchedTerm->getLanguageCode();
+				$entry['match']['text'] = $matchedTermText;
+
+				/**
+				 * Add matched terms to the aliases key in the result to give some context for the matched Term
+				 * if the matched term is different to the alias.
+				 * XXX: This appears odd but is used in the UI / Entity suggesters
+				 */
+				if ( !array_key_exists( 'label', $entry ) || $matchedTermText != $entry['label'] ) {
+					$entry['aliases'] = array( $matchedTerm->getText() );
+				}
+			}
+			$entries[] = $entry;
 		}
-
-		$entries = array_values( $entries );
-
 		return $entries;
 	}
 
@@ -265,8 +181,6 @@ class SearchEntities extends ApiBase {
 	 * @see ApiBase::execute()
 	 */
 	public function execute() {
-		wfProfileIn( __METHOD__ );
-
 		$params = $this->extractRequestParams();
 
 		$entries = $this->getSearchEntries( $params );
@@ -296,7 +210,7 @@ class SearchEntities extends ApiBase {
 
 		// Only pass search-continue param if there are more results and the maximum continuation
 		// limit is not exceeded.
-		if ( $hits > $nextContinuation && $nextContinuation <= ApiBase::LIMIT_SML1 ) {
+		if ( $hits > $nextContinuation && $nextContinuation <= self::LIMIT_SML1 ) {
 			$this->getResult()->addValue(
 				null,
 				'search-continue',
@@ -310,7 +224,7 @@ class SearchEntities extends ApiBase {
 			$entries
 		);
 
-		$this->getResult()->setIndexedTagName_internal( array( 'search' ), 'entity' );
+		$this->getResult()->addIndexedTagName( array( 'search' ), 'entity' );
 
 		// @todo use result builder?
 		$this->getResult()->addValue(
@@ -318,84 +232,53 @@ class SearchEntities extends ApiBase {
 			'success',
 			(int)true
 		);
-
-		wfProfileOut( __METHOD__ );
 	}
 
 	/**
-	 * @see \ApiBase::getAllowedParams
+	 * @see ApiBase::getAllowedParams
 	 */
-	public function getAllowedParams() {
+	protected function getAllowedParams() {
 		return array(
 			'search' => array(
-				ApiBase::PARAM_TYPE => 'string',
-				ApiBase::PARAM_REQUIRED => true,
+				self::PARAM_TYPE => 'string',
+				self::PARAM_REQUIRED => true,
 			),
 			'language' => array(
-				ApiBase::PARAM_TYPE => Utils::getLanguageCodes(),
-				ApiBase::PARAM_REQUIRED => true,
+				self::PARAM_TYPE => $this->termsLanguages->getLanguages(),
+				self::PARAM_REQUIRED => true,
+			),
+			'strictlanguage' => array(
+				self::PARAM_TYPE => 'boolean',
+				self::PARAM_DFLT => false
 			),
 			'type' => array(
-				ApiBase::PARAM_TYPE => EntityFactory::singleton()->getEntityTypes(),
-				ApiBase::PARAM_DFLT => 'item',
+				self::PARAM_TYPE => $this->entityTypes,
+				self::PARAM_DFLT => 'item',
 			),
 			'limit' => array(
-				ApiBase::PARAM_TYPE => 'limit',
-				ApiBase::PARAM_DFLT => 7,
-				ApiBase::PARAM_MAX => ApiBase::LIMIT_SML1,
-				ApiBase::PARAM_MAX2 => ApiBase::LIMIT_SML2,
-				ApiBase::PARAM_MIN => 0,
-				ApiBase::PARAM_RANGE_ENFORCE => true,
+				self::PARAM_TYPE => 'limit',
+				self::PARAM_DFLT => 7,
+				self::PARAM_MAX => self::LIMIT_SML1,
+				self::PARAM_MAX2 => self::LIMIT_SML2,
+				self::PARAM_MIN => 0,
+				self::PARAM_RANGE_ENFORCE => true,
 			),
-			'continue' => null,
+			'continue' => array(
+				self::PARAM_TYPE => 'integer',
+				self::PARAM_REQUIRED => false,
+			),
 		);
 	}
 
 	/**
-	 * @see \ApiBase::getParamDescription
+	 * @see ApiBase::getExamplesMessages
 	 */
-	public function getParamDescription() {
+	protected function getExamplesMessages() {
 		return array(
-			'search' => 'Search for this text.',
-			'language' => 'Search in this language.',
-			'type' => 'Search for this type of entity.',
-			'limit' => 'Maximal number of results',
-			'continue' => 'Offset where to continue a search',
+			'action=wbsearchentities&search=abc&language=en' => 'apihelp-wbsearchentities-example-1',
+			'action=wbsearchentities&search=abc&language=en&limit=50' => 'apihelp-wbsearchentities-example-2',
+			'action=wbsearchentities&search=alphabet&language=en&type=property' => 'apihelp-wbsearchentities-example-3',
 		);
-	}
-
-	/**
-	 * @see \ApiBase::getDescription
-	 */
-	public function getDescription() {
-		return array(
-			'API module to search for entities.'
-		);
-	}
-
-	/**
-	 * @see \ApiBase::getPossibleErrors()
-	 */
-	public function getPossibleErrors() {
-		return array_merge( parent::getPossibleErrors(), array() );
-	}
-
-	/**
-	 * @see \ApiBase::getExamples
-	 */
-	protected function getExamples() {
-		return array(
-			'api.php?action=wbsearchentities&search=abc&language=en' => 'Search for "abc" in English language, with defaults for type and limit',
-			'api.php?action=wbsearchentities&search=abc&language=en&limit=50' => 'Search for "abc" in English language with a limit of 50',
-			'api.php?action=wbsearchentities&search=alphabet&language=en&type=property' => 'Search for "alphabet" in English language for type property',
-		);
-	}
-
-	/**
-	 * @see \ApiBase::getVersion
-	 */
-	public function getVersion() {
-		return __CLASS__ . '-' . WB_VERSION;
 	}
 
 }

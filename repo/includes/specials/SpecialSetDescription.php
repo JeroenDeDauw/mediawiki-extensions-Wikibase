@@ -3,6 +3,7 @@
 namespace Wikibase\Repo\Specials;
 
 use Wikibase\DataModel\Entity\Entity;
+use Wikibase\DataModel\Term\Fingerprint;
 use Wikibase\Summary;
 
 /**
@@ -15,8 +16,6 @@ use Wikibase\Summary;
 class SpecialSetDescription extends SpecialModifyTerm {
 
 	/**
-	 * Constructor
-	 *
 	 * @since 0.4
 	 */
 	public function __construct() {
@@ -39,13 +38,15 @@ class SpecialSetDescription extends SpecialModifyTerm {
 	 *
 	 * @since 0.4
 	 *
-	 * @param Entity $entity
-	 * @param string $language
+	 * @param Fingerprint $fingerprint
+	 * @param string $languageCode
 	 *
 	 * @return string
 	 */
-	protected function getValue( $entity, $language ) {
-		return $entity === null ? '' : $entity->getDescription( $language );
+	protected function getValue( Fingerprint $fingerprint, $languageCode ) {
+		return $fingerprint->hasDescription( $languageCode ) ?
+			$fingerprint->getDescription( $languageCode )->getText()
+			: '';
 	}
 
 	/**
@@ -54,23 +55,24 @@ class SpecialSetDescription extends SpecialModifyTerm {
 	 * @since 0.4
 	 *
 	 * @param Entity $entity
-	 * @param string $language
+	 * @param string $languageCode
 	 * @param string $value
 	 *
 	 * @return Summary
 	 */
-	protected function setValue( $entity, $language, $value ) {
+	protected function setValue( $entity, $languageCode, $value ) {
 		$value = $value === '' ? null : $value;
-		$summary = $this->getSummary( 'wbsetdescription' );
+		$summary = new Summary( 'wbsetdescription' );
 
 		if ( $value === null ) {
-			$changeOp = $this->termChangeOpFactory->newRemoveDescriptionOp( $language );
+			$changeOp = $this->termChangeOpFactory->newRemoveDescriptionOp( $languageCode );
 		} else {
-			$changeOp = $this->termChangeOpFactory->newSetDescriptionOp( $language, $value );
+			$changeOp = $this->termChangeOpFactory->newSetDescriptionOp( $languageCode, $value );
 		}
 
 		$this->applyChangeOp( $changeOp, $entity, $summary );
 
 		return $summary;
 	}
+
 }

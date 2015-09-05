@@ -12,6 +12,8 @@
  * current one. All these options default to global state / the current page's attributes.
  * @since 0.4
  *
+ * @option mwApiForRep {mediaWiki.Api} A mw.Api instance configured to use the repo's API.
+ *
  * @option pageTitle {string} Title of the page to link.
  *
  * @option globalSiteId {string} Id of the site the given page is on.
@@ -30,11 +32,6 @@
  *        (1) {jQuery.Event}
  */
 $.widget( 'wikibase.linkitem', {
-	/**
-	 * @type wikibase.RepoApi
-	 */
-	_repoApi: null,
-
 	/**
 	 * @type wikibase.PageConnector
 	 */
@@ -70,18 +67,16 @@ $.widget( 'wikibase.linkitem', {
 	targetArticle: null,
 
 	/**
-	 * (Additional) default options
+	 * Options
 	 * @see jQuery.Widget.options
 	 */
 	options: {
-		pageTitle: ( new mw.Title(
-			mw.config.get( 'wgTitle' ),
-			mw.config.get( 'wgNamespaceNumber' )
-		) ).getPrefixedText(),
-		globalSiteId: mw.config.get( 'wbCurrentSite' ).globalSiteId,
-		namespaceNumber: mw.config.get( 'wgNamespaceNumber' ),
-		repoArticlePath: mw.config.get( 'wbRepoUrl' ) + mw.config.get( 'wbRepoArticlePath' ),
-		langLinkSiteGroup: mw.config.get( 'wbCurrentSite' ).langLinkSiteGroup
+		mwApiForRepo: null,
+		pageTitle: null,
+		globalSiteId: null,
+		namespaceNumber: null,
+		repoArticlePath: null,
+		langLinkSiteGroup: null
 	},
 
 	/**
@@ -94,13 +89,11 @@ $.widget( 'wikibase.linkitem', {
 		var self = this,
 			$dialogSpinner = $.createSpinner();
 
-		this._repoApi = new wb.RepoApi();
-
 		this.element
 		.hide()
 		.after( $dialogSpinner );
 
-		this._repoApi.get( {
+		this.options.mwApiForRepo.get( {
 			action: 'query',
 			meta: 'userinfo'
 		} )
@@ -116,12 +109,13 @@ $.widget( 'wikibase.linkitem', {
 			self._createDialog();
 			$( '#wbclient-linkItem-site' ).focus();
 		} )
-		.fail( function() {
+		.fail( function( errorCode, errorInfo ) {
 			$dialogSpinner.remove();
 			self.element.show();
 
 			self.element.wbtooltip( {
-				content: mw.msg( 'wikibase-error-unexpected' ),
+				content: mw.msg( 'wikibase-error-unexpected',
+					( errorInfo.error && errorInfo.error.info ) || errorInfo.exception ),
 				gravity: 'w'
 			} );
 
@@ -167,6 +161,7 @@ $.widget( 'wikibase.linkitem', {
 				title: mw.message( 'wikibase-linkitem-title' ).escaped(),
 				width: 500,
 				resizable: false,
+				position: { my: 'top', at: 'top+50', of: window },
 				buttons: [ {
 					text: mw.msg( 'wikibase-linkitem-linkpage' ),
 					id: 'wbclient-linkItem-goButton',
@@ -239,7 +234,7 @@ $.widget( 'wikibase.linkitem', {
 				'class': 'wbclient-linkItem-input'
 			} )
 			.siteselector( {
-				resultSet: this._getLinkableSites()
+				source: this._getLinkableSites()
 			} )
 			.on(
 				'siteselectoropen siteselectorclose siteselectorautocomplete blur',
@@ -256,16 +251,16 @@ $.widget( 'wikibase.linkitem', {
 	 */
 	_getLinkableSites: function() {
 		var sites,
-			linkableSites = {},
+			linkableSites = [],
 			site,
 			currentSiteId;
 
 		currentSiteId = this.options.globalSiteId;
-		sites = wb.getSitesOfGroup( this.options.langLinkSiteGroup );
+		sites = wb.sites.getSitesOfGroup( this.options.langLinkSiteGroup );
 
 		for( site in sites ) {
 			if ( sites[ site ].getId() !== currentSiteId ) {
-				linkableSites[ site ] = sites[ site ];
+				linkableSites.push( sites[ site ] );
 			}
 		}
 
@@ -296,12 +291,26 @@ $.widget( 'wikibase.linkitem', {
 		$page
 		.removeAttr( 'disabled' )
 		.suggester( {
-			ajax: {
-				url: apiUrl,
-				params: {
-					action: 'opensearch',
-					namespace: this.options.namespaceNumber
-				}
+			source: function( term ) {
+				var deferred = $.Deferred();
+
+				$.ajax( {
+					url: apiUrl,
+					dataType: 'jsonp',
+					data: {
+						search: term,
+						action: 'opensearch'
+					},
+					timeout: 8000
+				} )
+				.done( function( response ) {
+					deferred.resolve( response[1], response[0] );
+				} )
+				.fail( function( jqXHR, textStatus ) {
+					deferred.reject( textStatus );
+				} );
+
+				return deferred.promise();
 			}
 		} );
 	},
@@ -312,6 +321,8 @@ $.widget( 'wikibase.linkitem', {
 	 * @return {jQuery}
 	 */
 	_createPageInput: function() {
+		var self = this;
+
 		return $( '<label>' )
 		.attr( 'for', 'wbclient-linkItem-page' )
 		.text( mw.msg( 'wikibase-linkitem-input-page' ) )
@@ -321,12 +332,18 @@ $.widget( 'wikibase.linkitem', {
 				name: 'wbclient-linkItem-page',
 				id: 'wbclient-linkItem-page',
 				disabled: 'disabled',
-				'class' : 'wbclient-linkItem-input'
+				'class': 'wbclient-linkItem-input'
 			} )
-			.on( 'focus', $.proxy( function () {
-				// Enable the button by the time the user uses this field
-				this.$goButton.button( 'enable' );
-			}, this ) )
+			.on( 'eachchange', function () {
+				// Enable the button if the field has a value
+				self.$goButton.button( $( this ).val() === '' ? 'disable' : 'enable' );
+			} )
+			.on( 'keydown', function( e ) {
+				if ( !self.$goButton.prop( 'disabled' ) && e.which === 13 ) {
+					// Enter should submit
+					self.$goButton.trigger( 'click' );
+				}
+			} )
 		);
 	},
 
@@ -339,6 +356,7 @@ $.widget( 'wikibase.linkitem', {
 		this.targetArticle = $( '#wbclient-linkItem-page' ).val();
 
 		this._pageConnector = new wb.PageConnector(
+			new wb.api.RepoApi( this.options.mwApiForRepo ),
 			this.options.globalSiteId,
 			this.options.pageTitle,
 			this.targetSite,
@@ -392,7 +410,7 @@ $.widget( 'wikibase.linkitem', {
 
 			// Count site links and abort in case the entity already is linked with a page on this
 			// wiki:
-			for ( i in entity.sitelinks ) {
+			for( i in entity.sitelinks ) {
 				if ( entity.sitelinks[ i ].site ) {
 					siteLinkCount += 1;
 					if ( entity.sitelinks[ i ].site === this.options.globalSiteId ) {
@@ -465,7 +483,7 @@ $.widget( 'wikibase.linkitem', {
 	 *
 	 * @return {jQuery}
 	 */
-	_createSiteLinkTable: function( entity )  {
+	_createSiteLinkTable: function( entity ) {
 		var i, $siteLinks;
 
 		$siteLinks = $( '<div>' )
@@ -482,14 +500,14 @@ $.widget( 'wikibase.linkitem', {
 		.appendTo( $siteLinks.find( 'table' ) );
 
 		// Table body
-		for ( i in entity.sitelinks ) {
+		for( i in entity.sitelinks ) {
 			if ( entity.sitelinks[ i ].site ) {
 				// Show a row for each page that is linked with the current entity
 				$siteLinks
 				.find( 'table' )
 				.append(
 					this._createSiteLinkRow(
-						wb.getSite( entity.sitelinks[ i ].site ),
+						wb.sites.getSite( entity.sitelinks[ i ].site ),
 						entity.sitelinks[ i ]
 					)
 				);
@@ -501,7 +519,7 @@ $.widget( 'wikibase.linkitem', {
 	/**
 	 * Creates a table row for a site link.
 	 *
-	 * @param {wikibase.Site} site
+	 * @param {wb.Site} site
 	 * @param {object} entitySitelinks
 	 *
 	 * @return {jQuery}
@@ -512,13 +530,13 @@ $.widget( 'wikibase.linkitem', {
 				$( '<td>' )
 				.addClass( 'wbclient-linkItem-column-site' )
 				.text( site.getName() )
-				.css( 'direction', site.getLanguage().dir )
+				.css( 'direction', site.getLanguageDirection() )
 			)
 			.append(
 				$( '<td>' )
 				.addClass( 'wbclient-linkItem-column-page' )
 				.append( site.getLinkTo( entitySitelinks.title ) )
-				.css( 'direction', site.getLanguage().dir )
+				.css( 'direction', site.getLanguageDirection() )
 			);
 	},
 
@@ -572,8 +590,8 @@ $.widget( 'wikibase.linkitem', {
 	 * @param {Object} [errorInfo]
 	 */
 	_onError: function( errorCode, errorInfo ) {
-		var error = ( errorInfo )
-			? wb.RepoApiError.newFromApiResponse( errorCode, errorInfo )
+		var error = errorInfo
+			? wb.api.RepoApiError.newFromApiResponse( errorInfo )
 			: errorCode;
 
 		var $elem = $( '#wbclient-linkItem-page' );

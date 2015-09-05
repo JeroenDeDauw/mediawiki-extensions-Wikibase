@@ -12,11 +12,12 @@ use Wikibase\OutputPageJsConfigBuilder;
  *
  * @group WikibaseRepo
  * @group Wikibase
+ * @group Database
  *
  * @licence GNU GPL v2+
  * @author Katie Filbert < aude.wiki@gmail.com >
  */
-class OutputPageJsConfigBuilderTest extends \PHPUnit_Framework_TestCase {
+class OutputPageJsConfigBuilderTest extends \MediaWikiTestCase {
 
 	/**
 	 * @dataProvider buildProvider
@@ -28,6 +29,10 @@ class OutputPageJsConfigBuilderTest extends \PHPUnit_Framework_TestCase {
 			$this->getOutputPage( $isBlocked, $canEdit ),
 			'https://creativecommons.org',
 			'CC-0',
+			array(
+				'Q12' => 'wb-badge-goodarticle',
+				'Q42' => 'wb-badge-featuredarticle'
+			),
 			true
 		);
 
@@ -40,6 +45,10 @@ class OutputPageJsConfigBuilderTest extends \PHPUnit_Framework_TestCase {
 					'(wikibase-shortcopyrightwarning: (wikibase-save), ' .
 					wfMessage( 'copyrightpage' )->inContentLanguage()->text() .
 					', <a rel="nofollow" class="external text" href="https://creativecommons.org">CC-0</a>)'
+			),
+			'wbBadgeItems' => array(
+				'Q12' => 'wb-badge-goodarticle',
+				'Q42' => 'wb-badge-featuredarticle'
 			),
 			'wbExperimentalFeatures' => true
 		);

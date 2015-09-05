@@ -22,9 +22,13 @@ use WikiPage;
  */
 class ViewEntityActionTest extends ActionTestCase {
 
-	public function setUp() {
+	protected function setUp() {
 		// NOTE: use a language here for which we actually have labels etc
-		$this->language = 'de';
+		$this->languageCode = 'de';
+
+		// Remove handlers for the "OutputPageParserOutput" hook
+		$this->mergeMwGlobalArrayValue( 'wgHooks', array( 'OutputPageParserOutput' => array() ) );
+
 		parent::setUp();
 	}
 
@@ -35,13 +39,22 @@ class ViewEntityActionTest extends ActionTestCase {
 		$this->assertInstanceOf( 'Wikibase\ViewEntityAction', $action );
 	}
 
-	public static function provideShow() {
-		return array(
-			array(
-				'Berlin',
-				'/Berlin/'
-			)
+	public function provideShow() {
+		$cases = array();
+
+		$cases[] = array(
+			'Berlin',
+			'/Hauptstadt von Deutschland/'
 		);
+
+		if ( self::shouldTestRedirects() ) {
+			$cases[] = array(
+				'Berlin2',
+				'/redirectMsg/'
+			);
+		}
+
+		return $cases;
 	}
 
 	/**
@@ -49,19 +62,69 @@ class ViewEntityActionTest extends ActionTestCase {
 	 */
 	public function testShow( $handle, $regex ) {
 		$page = $this->getTestItemPage( $handle );
-		$action = $this->createAction( "view", $page );
-
-		$action->show();
-		$html = $action->getOutput()->getHTML();
+		$html = $this->executeViewAction( $page, array() );
 
 		$this->assertRegExp( $regex, $html );
+	}
+
+	public function testShowDiff() {
+		$page = $this->getTestItemPage( 'Berlin' );
+
+		$latest = $page->getRevision();
+		$previous = $latest->getPrevious();
+
+		$params = array(
+			'diff' => $latest->getId(),
+			'oldid' => $previous->getId()
+		);
+
+		$html = $this->executeViewAction( $page, $params );
+
+		$this->assertRegExp( '/diff-currentversion-title/', $html, 'is diff view' );
+		$this->assertNotRegExp( '/wikibase-edittoolbar-container/', $html, 'no edit toolbar' );
+	}
+
+	public function testShowOldRevision_hasNoEditLinks() {
+		$page = $this->getTestItemPage( 'Berlin' );
+
+		$latest = $page->getRevision();
+		$previous = $latest->getPrevious();
+
+		$params = array(
+			'oldid' => $previous->getId()
+		);
+
+		$html = $this->executeViewAction( $page, $params );
+
+		$this->assertNotRegExp( '/wikibase-edittoolbar-container/', $html, 'no edit toolbar' );
+	}
+
+	public function testShowNonExistingRevision() {
+		$page = $this->getTestItemPage( 'Berlin' );
+		$params = array( 'oldid' => 2147483647 );
+
+		$html = $this->executeViewAction( $page, $params );
+		$this->assertContains( 'Die Version 2147483647', $html, 'non-existing revision' );
+	}
+
+	/**
+	 * @param WikiPage $page
+	 * @param string[] $params
+	 *
+	 * @return string
+	 */
+	private function executeViewAction( WikiPage $page, array $params ) {
+		$action = $this->createAction( 'view', $page, $params );
+		$action->show();
+
+		return $action->getOutput()->getHTML();
 	}
 
 	public function testShow404() {
 		$id = new ItemId( 'q1122334455' );
 		$title = WikibaseRepo::getDefaultInstance()->getEntityContentFactory()->getTitleForId( $id );
 		$page = new WikiPage( $title );
-		$action = $this->createAction( "view", $page );
+		$action = $this->createAction( 'view', $page );
 
 		/* @var \FauxResponse $response */
 		$response = $action->getRequest()->response();

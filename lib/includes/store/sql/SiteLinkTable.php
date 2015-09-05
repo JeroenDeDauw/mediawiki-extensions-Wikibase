@@ -1,11 +1,13 @@
 <?php
 
-namespace Wikibase;
+namespace Wikibase\Lib\Store;
 
 use DatabaseBase;
+use DBAccessBase;
 use MWException;
+use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\ItemId;
-use Wikibase\DataModel\SimpleSiteLink;
+use Wikibase\DataModel\SiteLink;
 
 /**
  * Represents a lookup database table for sitelinks.
@@ -17,7 +19,7 @@ use Wikibase\DataModel\SimpleSiteLink;
  * @author Jeroen De Dauw < jeroendedauw@gmail.com >
  * @author Daniel Kinzler
  */
-class SiteLinkTable extends \DBAccessBase implements SiteLinkCache {
+class SiteLinkTable extends DBAccessBase implements SiteLinkStore, SiteLinkConflictLookup {
 
 	/**
 	 * @since 0.1
@@ -40,22 +42,32 @@ class SiteLinkTable extends \DBAccessBase implements SiteLinkCache {
 	 * @param bool $readonly Whether the table can be modified.
 	 * @param string|bool $wiki The wiki's database to connect to.
 	 *        Must be a value LBFactory understands. Defaults to false, which is the local wiki.
+	 *
+	 * @throws MWException
 	 */
 	public function __construct( $table, $readonly, $wiki = false ) {
+		if ( !is_string( $table ) ) {
+			throw new MWException( '$table must be a string.' );
+		}
+		if ( !is_bool( $readonly ) ) {
+			throw new MWException( '$readonly must be boolean.' );
+		}
+		if ( !is_string( $wiki ) && $wiki !== false ) {
+			throw new MWException( '$wiki must be a string or false.' );
+		}
+
 		$this->table = $table;
 		$this->readonly = $readonly;
 		$this->wiki = $wiki;
-
-		assert( is_bool( $this->readonly ) );
 	}
 
 	/**
-	 * @param SimpleSiteLink $a
-	 * @param SimpleSiteLink $b
+	 * @param SiteLink $a
+	 * @param SiteLink $b
 	 *
 	 * @return int
 	 */
-	public function compareSiteLinks( SimpleSiteLink $a, SimpleSiteLink $b ) {
+	public function compareSiteLinks( SiteLink $a, SiteLink $b ) {
 		$siteComp = strcmp( $a->getSiteId(), $b->getSiteId() );
 
 		if ( $siteComp !== 0 ) {
@@ -72,7 +84,7 @@ class SiteLinkTable extends \DBAccessBase implements SiteLinkCache {
 	}
 
 	/**
-	 * @see SiteLinkCache::saveLinksOfItem
+	 * @see SiteLinkStore::saveLinksOfItem
 	 *
 	 * @since 0.1
 	 *
@@ -81,10 +93,8 @@ class SiteLinkTable extends \DBAccessBase implements SiteLinkCache {
 	 * @return boolean Success indicator
 	 */
 	public function saveLinksOfItem( Item $item ) {
-		wfProfileIn( __METHOD__ );
-
 		//First check whether there's anything to update
-		$newLinks = $item->getSiteLinks();
+		$newLinks = $item->getSiteLinkList()->toArray();
 		$oldLinks = $this->getSiteLinksForItem( $item->getId() );
 
 		$linksToInsert = array_udiff( $newLinks, $oldLinks, array( $this, 'compareSiteLinks' ) );
@@ -92,7 +102,6 @@ class SiteLinkTable extends \DBAccessBase implements SiteLinkCache {
 
 		if ( !$linksToInsert && !$linksToDelete ) {
 			wfDebugLog( __CLASS__, __FUNCTION__ . ": links did not change, returning." );
-			wfProfileOut( __METHOD__ );
 			return true;
 		}
 
@@ -112,7 +121,6 @@ class SiteLinkTable extends \DBAccessBase implements SiteLinkCache {
 		}
 
 		$this->releaseConnection( $dbw );
-		wfProfileOut( __METHOD__ );
 
 		return $ok;
 	}
@@ -126,37 +134,32 @@ class SiteLinkTable extends \DBAccessBase implements SiteLinkCache {
 	 * @since 0.5
 	 *
 	 * @param Item $item
-	 * @param SimpleSiteLink[] $links
+	 * @param SiteLink[] $links
 	 * @param DatabaseBase $dbw
 	 *
 	 * @return boolean Success indicator
 	 */
-	public function insertLinksInternal( Item $item, $links, DatabaseBase $dbw ) {
-		wfProfileIn( __METHOD__ );
+	public function insertLinksInternal( Item $item, array $links, DatabaseBase $dbw ) {
+		wfDebugLog( __CLASS__, __FUNCTION__ . ': inserting links for ' . $item->getId()->getSerialization() );
 
-		wfDebugLog( __CLASS__, __FUNCTION__ . ": inserting links for " . $item->getId()->getPrefixedId() );
-
-		$success = true;
-		foreach ( $links as $link ) {
-			$success = $dbw->insert(
-				$this->table,
-				array(
-					'ips_item_id' => $item->getId()->getNumericId(),
-					'ips_site_id' => $link->getSiteId(),
-					'ips_site_page' => $link->getPageName()
-				),
-				__METHOD__
+		$insert = array();
+		foreach ( $links as $siteLink ) {
+			$insert[] = array(
+				'ips_item_id' => $item->getId()->getNumericId(),
+				'ips_site_id' => $siteLink->getSiteId(),
+				'ips_site_page' => $siteLink->getPageName()
 			);
-
-			if ( !$success ) {
-				break;
-			}
 		}
 
-		wfProfileOut( __METHOD__ );
-		return $success;
-	}
+		$success = $dbw->insert(
+			$this->table,
+			$insert,
+			__METHOD__,
+			array( 'IGNORE' )
+		);
 
+		return $success && $dbw->affectedRows();
+	}
 
 	/**
 	 * Internal callback for deleting a list of links.
@@ -167,41 +170,33 @@ class SiteLinkTable extends \DBAccessBase implements SiteLinkCache {
 	 * @since 0.5
 	 *
 	 * @param Item $item
-	 * @param SimpleSiteLink[] $links
+	 * @param SiteLink[] $links
 	 * @param DatabaseBase $dbw
 	 *
 	 * @return boolean Success indicator
 	 */
-	public function deleteLinksInternal( Item $item, $links, DatabaseBase $dbw ) {
-		wfProfileIn( __METHOD__ );
+	public function deleteLinksInternal( Item $item, array $links, DatabaseBase $dbw ) {
+		wfDebugLog( __CLASS__, __FUNCTION__ . ': deleting links for ' . $item->getId()->getSerialization() );
 
-		wfDebugLog( __CLASS__, __FUNCTION__ . ": deleting links for " . $item->getId()->getPrefixedId() );
-
-		//TODO: We can do this in a single query by collecting all the site IDs into a set.
-
-		$success = true;
-		foreach ( $links as $link ) {
-			$success = $dbw->delete(
-				$this->table,
-				array(
-					'ips_item_id' => $item->getId()->getNumericId(),
-					'ips_site_id' => $link->getSiteId()
-				),
-				__METHOD__
-			);
-
-			if ( !$success ) {
-				break;
-			}
+		$siteIds = array();
+		foreach ( $links as $siteLink ) {
+			$siteIds[] = $siteLink->getSiteId();
 		}
 
-		wfProfileOut( __METHOD__ );
+		$success = $dbw->delete(
+			$this->table,
+			array(
+				'ips_item_id' => $item->getId()->getNumericId(),
+				'ips_site_id' => $siteIds
+			),
+			__METHOD__
+		);
+
 		return $success;
 	}
 
-
 	/**
-	 * @see SiteLinkCache::deleteLinksOfItem
+	 * @see SiteLinkStore::deleteLinksOfItem
 	 *
 	 * @since 0.1
 	 *
@@ -224,6 +219,7 @@ class SiteLinkTable extends \DBAccessBase implements SiteLinkCache {
 		);
 
 		$this->releaseConnection( $dbw );
+
 		return $ok;
 	}
 
@@ -231,8 +227,6 @@ class SiteLinkTable extends \DBAccessBase implements SiteLinkCache {
 	 * @see SiteLinkLookup::getItemIdForLink
 	 *
 	 * @todo may want to deprecate this or change it to always return entity id object only
-	 *
-	 * @since 0.1
 	 *
 	 * @param string $globalSiteId
 	 * @param string $pageTitle
@@ -259,15 +253,13 @@ class SiteLinkTable extends \DBAccessBase implements SiteLinkCache {
 	}
 
 	/**
-	 * @see SiteLinkLookup::getEntityIdForSiteLink
+	 * @see SiteLinkLookup::getItemIdForSiteLink
 	 *
-	 * @since 0.4
-	 *
-	 * @param SimpleSiteLink $siteLink
+	 * @param SiteLink $siteLink
 	 *
 	 * @return ItemId|null
 	 */
-	public function getEntityIdForSiteLink( SimpleSiteLink $siteLink ) {
+	public function getItemIdForSiteLink( SiteLink $siteLink ) {
 		$siteId = $siteLink->getSiteId();
 		$pageName = $siteLink->getPageName();
 
@@ -275,22 +267,17 @@ class SiteLinkTable extends \DBAccessBase implements SiteLinkCache {
 	}
 
 	/**
-	 * @see SiteLinkLookup::getConflictsForItem
-	 *
-	 * @since 0.1
+	 * @see SiteLinkConflictLookup::getConflictsForItem
 	 *
 	 * @param Item $item
-	 * @param \DatabaseBase|null $db
+	 * @param DatabaseBase|null $db
 	 *
-	 * @return array of array
+	 * @return array[]
 	 */
-	public function getConflictsForItem( Item $item, \DatabaseBase $db = null ) {
-		wfProfileIn( __METHOD__ );
+	public function getConflictsForItem( Item $item, DatabaseBase $db = null ) {
+		$siteLinks = $item->getSiteLinkList();
 
-		$links = $item->getSiteLinks();
-
-		if ( $links === array() ) {
-			wfProfileOut( __METHOD__ );
+		if ( $siteLinks->isEmpty() ) {
 			return array();
 		}
 
@@ -302,7 +289,8 @@ class SiteLinkTable extends \DBAccessBase implements SiteLinkCache {
 
 		$anyOfTheLinks = '';
 
-		foreach ( $links as $siteLink ) {
+		/** @var SiteLink $siteLink */
+		foreach ( $siteLinks as $siteLink ) {
 			if ( $anyOfTheLinks !== '' ) {
 				$anyOfTheLinks .= "\nOR ";
 			}
@@ -317,7 +305,6 @@ class SiteLinkTable extends \DBAccessBase implements SiteLinkCache {
 		//TODO: $anyOfTheLinks might get very large and hit some size limit imposed by the database.
 		//      We could chop it up of we know that size limit. For MySQL, it's select @@max_allowed_packet.
 
-		wfProfileIn( __METHOD__ . '#select' );
 		$conflictingLinks = $dbr->select(
 			$this->table,
 			array(
@@ -325,10 +312,9 @@ class SiteLinkTable extends \DBAccessBase implements SiteLinkCache {
 				'ips_site_page',
 				'ips_item_id',
 			),
-			"($anyOfTheLinks) AND ips_item_id != " . intval( $item->getId()->getNumericId() ),
+			"($anyOfTheLinks) AND ips_item_id != " . (int)$item->getId()->getNumericId(),
 			__METHOD__
 		);
-		wfProfileOut( __METHOD__ . '#select' );
 
 		$conflicts = array();
 
@@ -344,12 +330,11 @@ class SiteLinkTable extends \DBAccessBase implements SiteLinkCache {
 			$this->releaseConnection( $dbr );
 		}
 
-		wfProfileOut( __METHOD__ );
 		return $conflicts;
 	}
 
 	/**
-	 * @see SiteLinkCache::clear
+	 * @see SiteLinkStore::clear
 	 *
 	 * @since 0.2
 	 *
@@ -370,64 +355,22 @@ class SiteLinkTable extends \DBAccessBase implements SiteLinkCache {
 	}
 
 	/**
-	 * @see SiteLinkLookup::countLinks
-	 *
-	 * @since 0.3
-	 *
-	 * @param array $itemIds
-	 * @param array $siteIds
-	 * @param array $pageNames
-	 *
-	 * @return integer
-	 */
-	public function countLinks( array $itemIds, array $siteIds = array(), array $pageNames = array() ) {
-		$dbr = $this->getConnection( DB_SLAVE );
-
-		$conditions = array();
-
-		if ( $itemIds !== array() ) {
-			$conditions['ips_item_id'] = $itemIds;
-		}
-
-		if ( $siteIds !== array() ) {
-			$conditions['ips_site_id'] = $siteIds;
-		}
-
-		if ( $pageNames !== array() ) {
-			$conditions['ips_site_page'] = $pageNames;
-		}
-
-		$res = $dbr->selectRow(
-			$this->table,
-			array( 'COUNT(*) AS rowcount' ),
-			$conditions,
-			__METHOD__
-		)->rowcount;
-
-		$this->releaseConnection( $dbr );
-		return $res;
-	}
-
-	/**
 	 * @see SiteLinkLookup::getLinks
 	 *
-	 * @note: SimpleSiteLink objects returned from this method will not contain badges!
-	 *
-	 * @since 0.3
-	 *
-	 * @param array $itemIds
-	 * @param array $siteIds
-	 * @param array $pageNames
+	 * @param int[] $numericIds Numeric (unprefixed) item ids
+	 * @param string[] $siteIds
+	 * @param string[] $pageNames
 	 *
 	 * @return array[]
+	 * @note The arrays returned by this method do not contain badges!
 	 */
-	public function getLinks( array $itemIds, array $siteIds = array(), array $pageNames = array() ) {
+	public function getLinks( array $numericIds = array(), array $siteIds = array(), array $pageNames = array() ) {
 		$dbr = $this->getConnection( DB_SLAVE );
 
 		$conditions = array();
 
-		if ( $itemIds !== array() ) {
-			$conditions['ips_item_id'] = $itemIds;
+		if ( $numericIds !== array() ) {
+			$conditions['ips_item_id'] = $numericIds;
 		}
 
 		if ( $siteIds !== array() ) {
@@ -466,15 +409,10 @@ class SiteLinkTable extends \DBAccessBase implements SiteLinkCache {
 	/**
 	 * @see SiteLinkLookup::getSiteLinksForItem
 	 *
-	 * Get array of SiteLink for an item or returns empty array if no site links
-	 *
-	 * @note: SimpleSiteLink objects returned from this method will not contain badges!
-	 *
-	 * @since 0.4
-	 *
 	 * @param ItemId $itemId
 	 *
-	 * @return SimpleSiteLink[]
+	 * @return SiteLink[]
+	 * @note The SiteLink objects returned by this method do not contain badges!
 	 */
 	public function getSiteLinksForItem( ItemId $itemId ) {
 		$numericId = $itemId->getNumericId();
@@ -494,8 +432,8 @@ class SiteLinkTable extends \DBAccessBase implements SiteLinkCache {
 
 		$siteLinks = array();
 
-		foreach( $rows as $row ) {
-			$siteLinks[] = new SimpleSiteLink( $row->ips_site_id, $row->ips_site_page );
+		foreach ( $rows as $row ) {
+			$siteLinks[] = new SiteLink( $row->ips_site_id, $row->ips_site_page );
 		}
 
 		$this->releaseConnection( $dbr );

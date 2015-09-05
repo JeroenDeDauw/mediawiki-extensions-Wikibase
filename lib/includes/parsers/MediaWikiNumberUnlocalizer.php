@@ -1,12 +1,11 @@
 <?php
 
 namespace Wikibase\Lib;
+
 use Language;
 use ValueParsers\BasicNumberUnlocalizer;
 
 /**
- * MediaWikiNumberUnlocalizer
- *
  * @since 0.5
  *
  * @license GPL 2+
@@ -23,7 +22,7 @@ class MediaWikiNumberUnlocalizer extends BasicNumberUnlocalizer {
 	/**
 	 * @var Language
 	 */
-	protected $language;
+	private $language;
 
 	/**
 	 * @param Language $language
@@ -33,11 +32,11 @@ class MediaWikiNumberUnlocalizer extends BasicNumberUnlocalizer {
 	}
 
 	/**
-	 * @see Unlocalizer::unlocalize()
+	 * @see NumberUnlocalizer::unlocalizeNumber
 	 *
 	 * @param string $number string to process
 	 *
-	 * @return string unlocalized string
+	 * @return string unlocalized number, in a form suitable for floatval resp. intval.
 	 */
 	public function unlocalizeNumber( $number ) {
 		$canonicalizedNumber = $this->language->parseFormattedNumber( $number );
@@ -46,16 +45,18 @@ class MediaWikiNumberUnlocalizer extends BasicNumberUnlocalizer {
 		$canonicalizedNumber = strtr( $canonicalizedNumber, self::$unlocalizerMap );
 
 		// strip any remaining whitespace
-		$canonicalizedNumber = preg_replace( '/\s/u', '', $canonicalizedNumber );
+		$canonicalizedNumber = preg_replace( '/\s+/u', '', $canonicalizedNumber );
 
 		return $canonicalizedNumber;
 	}
 
 	/**
-	 * @see Unlocalizer::getNumberRegex()
+	 * @see NumberUnlocalizer::getNumberRegex
 	 *
 	 * Constructs a regular expression based on Language::digitTransformTable()
 	 * and Language::separatorTransformTable().
+	 *
+	 * Note that the resulting regex will accept scientific notation.
 	 *
 	 * @param string $delimiter The regex delimiter, used for escaping.
 	 *
@@ -66,22 +67,28 @@ class MediaWikiNumberUnlocalizer extends BasicNumberUnlocalizer {
 		$separatorMap = $this->language->separatorTransformTable();
 
 		// Always accept canonical digits and separators
-		$characters = '0123456789,.';
+		$digits = '0123456789';
+		$separators = ',.';
 
 		// Add localized digits and separators
 		if ( is_array( $digitMap ) ) {
-			$characters .= implode( '', array_values( $digitMap ) );
+			$digits .= implode( '', array_values( $digitMap ) );
 		}
 		if ( is_array( $separatorMap ) ) {
-			$characters .= implode( '', array_values( $separatorMap ) );
+			$separators .= implode( '', array_values( $separatorMap ) );
 		}
 
 		// if any whitespace characters are acceptable, also accept a regular blank.
-		if ( preg_match( '/\s/u', $characters ) ) {
-			$characters .= ' ';
+		if ( preg_match( '/\s/u', $separators ) ) {
+			$separators .= ' ';
 		}
 
-		return '[-+]?[' . preg_quote( $characters, $delimiter ) . ']+';
+		$numberRegex = '[-+]?[' . preg_quote( $digits . $separators, $delimiter ) . ']+';
+
+		// Scientific notation support. Keep in sync with DecimalParser::splitDecimalExponent.
+		$numberRegex .= '(?:(?:[eE]|x10\^)[-+]?[' . preg_quote( $digits, $delimiter ) . ']+)?';
+
+		return $numberRegex;
 	}
 
 }

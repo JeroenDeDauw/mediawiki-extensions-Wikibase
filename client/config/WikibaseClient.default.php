@@ -1,5 +1,6 @@
 <?php
 
+use Wikibase\Client\WikibaseClient;
 use Wikibase\SettingsArray;
 
 /**
@@ -16,7 +17,7 @@ use Wikibase\SettingsArray;
  */
 
 return call_user_func( function() {
-	global $wgLanguageCode, $wgDBname;
+	global $wgLanguageCode;
 
 	$defaults = array(
 		'namespaces' => array(), // by default, include all namespaces; deprecated as of 0.4
@@ -30,7 +31,6 @@ return call_user_func( function() {
 		'languageLinkSiteGroup' => null,
 		'injectRecentChanges' => true,
 		'showExternalRecentChanges' => true,
-		'defaultClientStore' => null,
 		// default for repo items in main namespace
 		'repoNamespaces' => array(
 			'wikibase-item' => '',
@@ -38,10 +38,53 @@ return call_user_func( function() {
 		),
 		'allowDataTransclusion' => true,
 		'propagateChangesToRepo' => true,
-		'otherProjectsLinks' => array(),
-		// List of additional CSS class names for site links that have badges, e.g.
-		// array( 'Q101' => 'wb-badge-featuredarticle' ).
+		'otherProjectsLinksByDefault' => false,
+		'otherProjectsLinksBeta' => false,
+		// List of additional CSS class names for site links that have badges,
+		// e.g. array( 'Q101' => 'badge-goodarticle' )
 		'badgeClassNames' => array(),
+		// Allow accessing data from other items in the parser functions and via Lua
+		'allowArbitraryDataAccess' => true,
+		// Maximum number of full entities that can be accessed on a page. This does
+		// not include convenience functions like mw.wikibase.label that use TermLookup
+		// instead of loading a full entity.
+		'entityAccessLimit' => 250,
+		// Allow accessing data in the user's language rather than the content language
+		// in the parser functions and via Lua.
+		// Allows users to split the ParserCache by user language.
+		'allowDataAccessInUserLanguage' => false,
+		// Enable in case wbc_entity_usage does not exist or is not yet populated.
+		'useLegacyUsageIndex' => false,
+
+		// Enable in case wb_changes_subscription does not exist (on the repo) or is not yet populated.
+		//
+		// @note: if Wikibase Repo and Client are enabled on the same wiki, then this only needs
+		// to be set in the repo or can be set the same in both. (repo settings override client settings)
+		'useLegacyChangesSubscription' => false,
+
+		// Prefix to use for cache keys that should be shared among a Wikibase Repo instance
+		// and all its clients. This is for things like caching entity blobs in memcached.
+		//
+		// The default here assumes Wikibase Repo + Client installed together on the same wiki.
+		// For a multiwiki / wikifarm setup, to configure shared caches between clients and repo,
+		// this needs to be set to the same value in both client and repo wiki settings.
+		//
+		// For Wikidata production, we set it to 'wikibase-shared/wikidata_1_25wmf24-wikidatawiki',
+		// which is 'wikibase_shared/' + deployment branch name + '-' + repo database name,
+		// and have it set in both $wgWBClientSettings and $wgWBRepoSettings.
+		'sharedCacheKeyPrefix' => 'wikibase_shared/' . WBL_VERSION . '-' . $GLOBALS['wgDBname'],
+
+		// The duration of the object cache, in seconds.
+		//
+		// As with sharedCacheKeyPrefix, this is both client and repo setting. On a multiwiki
+		// setup, this should be set to the same value in both the repo and clients.
+		// Also note that the setting value in $wgWBClientSettings overrides the one here.
+		'sharedCacheDuration' => 60 * 60,
+
+		// The type of object cache to use. Use CACHE_XXX constants.
+		// This is both a repo and client setting, and should be set to the same value in
+		// repo and clients for multiwiki setups.
+		'sharedCacheType' => $GLOBALS['wgMainCacheType'],
 
 		/**
 		 * @todo this is a bit wikimedia-specific and need to find a better place for this stuff,
@@ -55,18 +98,18 @@ return call_user_func( function() {
 		'interwikiSortOrders' => array(
 			'alphabetic' => array(
 				'ace', 'kbd', 'af', 'ak', 'als', 'am', 'ang', 'ab', 'ar', 'an', 'arc',
-				'roa-rup', 'frp', 'as', 'ast', 'gn', 'av', 'ay', 'az', 'bm', 'bn', 'bjn',
+				'roa-rup', 'frp', 'as', 'ast', 'gn', 'av', 'ay', 'az', 'azb', 'bm', 'bn', 'bjn',
 				'zh-min-nan', 'nan', 'map-bms', 'ba', 'be', 'be-x-old', 'bh', 'bcl', 'bi',
 				'bg', 'bar', 'bo', 'bs', 'br', 'bxr', 'ca', 'cv', 'ceb', 'cs', 'ch',
 				'cbk-zam', 'ny', 'sn', 'tum', 'cho', 'co', 'cy', 'da', 'dk', 'pdc', 'de',
 				'dv', 'nv', 'dsb', 'dz', 'mh', 'et', 'el', 'eml', 'en', 'myv', 'es', 'eo',
 				'ext', 'eu', 'ee', 'fa', 'hif', 'fo', 'fr', 'fy', 'ff', 'fur', 'ga', 'gv',
-				'gag', 'gd', 'gl', 'gan', 'ki', 'glk', 'gu', 'got', 'hak', 'xal', 'ko', 'ha',
-				'haw', 'hy', 'hi', 'ho', 'hsb', 'hr', 'io', 'ig', 'ilo', 'bpy', 'id', 'ia',
+				'gag', 'gd', 'gl', 'gan', 'ki', 'glk', 'gu', 'got', 'gom', 'hak', 'xal', 'ko',
+				'ha', 'haw', 'hy', 'hi', 'ho', 'hsb', 'hr', 'io', 'ig', 'ilo', 'bpy', 'id', 'ia',
 				'ie', 'iu', 'ik', 'os', 'xh', 'zu', 'is', 'it', 'he', 'jv', 'kl', 'kn', 'kr',
 				'pam', 'krc', 'ka', 'ks', 'csb', 'kk', 'kw', 'rw', 'rn', 'sw', 'kv', 'kg',
-				'ht', 'ku', 'kj', 'ky', 'mrj', 'lad', 'lbe', 'lez', 'lo', 'ltg', 'la', 'lv',
-				'lb', 'lt', 'lij', 'li', 'ln', 'jbo', 'lg', 'lmo', 'hu', 'mk', 'mg', 'ml',
+				'ht', 'ku', 'kj', 'ky', 'mrj', 'lad', 'lbe', 'lez', 'lo', 'lrc', 'ltg', 'la',
+				'lv', 'lb', 'lt', 'lij', 'li', 'ln', 'jbo', 'lg', 'lmo', 'hu', 'mk', 'mg', 'ml',
 				'mt', 'mi', 'mr', 'xmf', 'arz', 'mzn', 'ms', 'min', 'cdo', 'mwl', 'mdf', 'mo',
 				'mn', 'mus', 'my', 'nah', 'na', 'fj', 'nl', 'nds-nl', 'cr', 'ne', 'new', 'ja',
 				'nap', 'ce', 'frr', 'pih', 'no', 'nb', 'nn', 'nrm', 'nov', 'ii', 'oc', 'mhr',
@@ -83,78 +126,79 @@ return call_user_func( function() {
 			),
 			'alphabetic_revised' => array(
 				'ace', 'kbd', 'af', 'ak', 'als', 'am', 'ang', 'ab', 'ar', 'an', 'arc', 'roa-rup',
-				'frp', 'as', 'ast', 'gn', 'av', 'ay', 'az', 'bjn', 'id', 'ms', 'bm', 'bn',
+				'frp', 'as', 'ast', 'gn', 'av', 'ay', 'az', 'azb', 'bjn', 'id', 'ms', 'bm', 'bn',
 				'zh-min-nan', 'nan', 'map-bms', 'jv', 'su', 'ba', 'min', 'be', 'be-x-old', 'bh',
 				'bcl', 'bi', 'bar', 'bo', 'bs', 'br', 'bug', 'bg', 'bxr', 'ca', 'ceb', 'cv', 'cs',
 				'ch', 'cbk-zam', 'ny', 'sn', 'tum', 'cho', 'co', 'cy', 'da', 'dk', 'pdc', 'de',
 				'dv', 'nv', 'dsb', 'na', 'dz', 'mh', 'et', 'el', 'eml', 'en', 'myv', 'es', 'eo',
 				'ext', 'eu', 'ee', 'fa', 'hif', 'fo', 'fr', 'fy', 'ff', 'fur', 'ga', 'gv', 'sm',
-				'gag', 'gd', 'gl', 'gan', 'ki', 'glk', 'gu', 'got', 'hak', 'xal', 'ko', 'ha', 'haw',
-				'hy', 'hi', 'ho', 'hsb', 'hr', 'io', 'ig', 'ilo', 'bpy', 'ia', 'ie', 'iu', 'ik',
-				'os', 'xh', 'zu', 'is', 'it', 'he', 'kl', 'kn', 'kr', 'pam', 'ka', 'ks', 'csb',
-				'kk', 'kw', 'rw', 'ky', 'rn', 'mrj', 'sw', 'kv', 'kg', 'ht', 'ku', 'kj', 'lad',
-				'lbe', 'lez', 'lo', 'la', 'ltg', 'lv', 'to', 'lb', 'lt', 'lij', 'li', 'ln', 'jbo',
-				'lg', 'lmo', 'hu', 'mk', 'mg', 'ml', 'krc', 'mt', 'mi', 'mr', 'xmf', 'arz', 'mzn',
-				'cdo', 'mwl', 'koi', 'mdf', 'mo', 'mn', 'mus', 'my', 'nah', 'fj', 'nl', 'nds-nl',
-				'cr', 'ne', 'new', 'ja', 'nap', 'ce', 'frr', 'pih', 'no', 'nb', 'nn', 'nrm', 'nov',
-				'ii', 'oc', 'mhr', 'or', 'om', 'ng', 'hz', 'uz', 'pa', 'pi', 'pfl', 'pag', 'pnb',
-				'pap', 'ps', 'km', 'pcd', 'pms', 'nds', 'pl', 'pnt', 'pt', 'aa', 'kaa', 'crh', 'ty',
-				'ksh', 'ro', 'rmy', 'rm', 'qu', 'ru', 'rue', 'sah', 'se', 'sa', 'sg', 'sc', 'sco',
-				'stq', 'st', 'nso', 'tn', 'sq', 'scn', 'si', 'simple', 'sd', 'ss', 'sk', 'sl',
-				'cu', 'szl', 'so', 'ckb', 'srn', 'sr', 'sh', 'fi', 'sv', 'tl', 'ta', 'shi',
-				'kab', 'roa-tara', 'tt', 'te', 'tet', 'th', 'vi', 'ti', 'tg', 'tpi', 'tokipona',
-				'tp', 'chr', 'chy', 've', 'tr', 'tk', 'tw', 'udm', 'uk', 'ur', 'ug', 'za',
-				'vec', 'vep', 'vo', 'fiu-vro', 'wa', 'zh-classical', 'vls', 'war', 'wo', 'wuu',
-				'ts', 'yi', 'yo', 'zh-yue', 'diq', 'zea', 'bat-smg', 'zh', 'zh-tw', 'zh-cn'
+				'gag', 'gd', 'gl', 'gan', 'ki', 'glk', 'gu', 'got', 'gom', 'hak', 'xal', 'ko',
+				'ha', 'haw', 'hy', 'hi', 'ho', 'hsb', 'hr', 'io', 'ig', 'ilo', 'bpy', 'ia', 'ie',
+				'iu', 'ik', 'os', 'xh', 'zu', 'is', 'it', 'he', 'kl', 'kn', 'kr', 'pam', 'ka',
+				'ks', 'csb', 'kk', 'kw', 'rw', 'ky', 'rn', 'mrj', 'sw', 'kv', 'kg', 'ht', 'ku',
+				'kj', 'lad', 'lbe', 'lez', 'lo', 'la', 'lrc', 'ltg', 'lv', 'to', 'lb', 'lt', 'lij',
+				'li', 'ln', 'jbo', 'lg', 'lmo', 'hu', 'mk', 'mg', 'ml', 'krc', 'mt', 'mi', 'mr',
+				'xmf', 'arz', 'mzn', 'cdo', 'mwl', 'koi', 'mdf', 'mo', 'mn', 'mus', 'my', 'nah',
+				'fj', 'nl',	'nds-nl', 'cr', 'ne', 'new', 'ja', 'nap', 'ce', 'frr', 'pih', 'no',
+				'nb', 'nn', 'nrm', 'nov', 'ii', 'oc', 'mhr', 'or', 'om', 'ng', 'hz', 'uz', 'pa',
+				'pi', 'pfl', 'pag', 'pnb', 'pap', 'ps', 'km', 'pcd', 'pms', 'nds', 'pl', 'pnt',
+				'pt', 'aa', 'kaa', 'crh', 'ty', 'ksh', 'ro', 'rmy', 'rm', 'qu', 'ru', 'rue', 'sah',
+				'se', 'sa', 'sg', 'sc', 'sco', 'stq', 'st', 'nso', 'tn', 'sq', 'scn', 'si',
+				'simple', 'sd', 'ss', 'sk', 'sl', 'cu', 'szl', 'so', 'ckb', 'srn', 'sr', 'sh',
+				'fi', 'sv', 'tl', 'ta', 'shi', 'kab', 'roa-tara', 'tt', 'te', 'tet', 'th', 'vi',
+				'ti', 'tg', 'tpi', 'tokipona', 'tp', 'chr', 'chy', 've', 'tr', 'tk', 'tw', 'udm',
+				'uk', 'ur', 'ug', 'za', 'vec', 'vep', 'vo', 'fiu-vro', 'wa', 'zh-classical', 'vls',
+				'war', 'wo', 'wuu', 'ts', 'yi', 'yo', 'zh-yue', 'diq', 'zea', 'bat-smg', 'zh',
+				'zh-tw', 'zh-cn'
 			),
 			'alphabetic_sr' => array(
 				'ace', 'kbd', 'af', 'ak', 'als', 'am', 'ang', 'ab', 'ar', 'an', 'arc',
-				'roa-rup', 'frp', 'arz', 'as', 'ast', 'gn', 'av', 'ay', 'az', 'bjn', 'id',
+				'roa-rup', 'frp', 'arz', 'as', 'ast', 'gn', 'av', 'ay', 'az', 'azb', 'bjn', 'id',
 				'ms', 'bg', 'bm', 'zh-min-nan', 'nan', 'map-bms', 'jv', 'su', 'ba', 'be',
 				'be-x-old', 'bh', 'bcl', 'bi', 'bn', 'bo', 'bar', 'bs', 'bpy', 'br', 'bug',
 				'bxr', 'ca', 'ceb', 'ch', 'cbk-zam', 'sn', 'tum', 'ny', 'cho', 'chr', 'co',
 				'cy', 'cv', 'cs', 'da', 'dk', 'pdc', 'de', 'nv', 'dsb', 'na', 'dv', 'dz',
 				'mh', 'et', 'el', 'eml', 'en', 'myv', 'es', 'eo', 'ext', 'eu', 'ee', 'fa',
 				'hif', 'fo', 'fr', 'fy', 'ff', 'fur', 'ga', 'gv', 'sm', 'gag', 'gd', 'gl',
-				'gan', 'ki', 'glk', 'got', 'gu', 'ha', 'hak', 'xal', 'haw', 'he', 'hi', 'ho',
-				'hsb', 'hr', 'hy', 'io', 'ig', 'ii', 'ilo', 'ia', 'ie', 'iu', 'ik', 'os',
-				'xh', 'zu', 'is', 'it', 'ja', 'ka', 'kl', 'kr', 'pam', 'krc', 'csb', 'kk',
-				'kw', 'rw', 'ky', 'mrj', 'rn', 'sw', 'km', 'kn', 'ko', 'kv', 'kg', 'ht',
-				'ks', 'ku', 'kj', 'lad', 'lbe', 'la', 'ltg', 'lv', 'to', 'lb', 'lez', 'lt',
-				'lij', 'li', 'ln', 'lo', 'jbo', 'lg', 'lmo', 'hu', 'mk', 'mg', 'mt', 'mi',
-				'min', 'cdo', 'mwl', 'ml', 'mdf', 'mo', 'mn', 'mr', 'mus', 'my', 'mzn', 'nah',
-				'fj', 'ne', 'nl', 'nds-nl', 'cr', 'new', 'nap', 'ce', 'frr', 'pih', 'no', 'nb',
-				'nn', 'nrm', 'nov', 'oc', 'mhr', 'or', 'om', 'ng', 'hz', 'uz', 'pa', 'pfl',
-				'pag', 'pap', 'koi', 'pi', 'pcd', 'pms', 'nds', 'pnb', 'pl', 'pt', 'pnt',
-				'ps', 'aa', 'kaa', 'crh', 'ty', 'ksh', 'ro', 'rmy', 'rm', 'qu', 'ru', 'rue',
-				'sa', 'sah', 'se', 'sg', 'sc', 'sco', 'sd', 'stq', 'st', 'nso', 'tn', 'sq',
-				'si', 'scn', 'simple', 'ss', 'sk', 'sl', 'cu', 'szl', 'so', 'ckb', 'srn',
-				'sr', 'sh', 'fi', 'sv', 'ta', 'shi', 'tl', 'kab', 'roa-tara', 'tt', 'te',
-				'tet', 'th', 'ti', 'vi', 'tg', 'tokipona', 'tp', 'tpi', 'chy', 've', 'tr',
-				'tk', 'tw', 'udm', 'uk', 'ur', 'ug', 'za', 'vec', 'vep', 'vo', 'fiu-vro',
-				'wa', 'vls', 'war', 'wo', 'wuu', 'ts', 'xmf', 'yi', 'yo', 'diq', 'zea', 'zh',
-				'zh-tw', 'zh-cn', 'zh-classical', 'zh-yue', 'bat-smg'
+				'gan', 'ki', 'glk', 'got', 'gom', 'gu', 'ha', 'hak', 'xal', 'haw', 'he',
+				'hi', 'ho', 'hsb', 'hr', 'hy', 'io', 'ig', 'ii', 'ilo', 'ia', 'ie', 'iu',
+				'ik', 'os', 'xh', 'zu', 'is', 'it', 'ja', 'ka', 'kl', 'kr', 'pam', 'krc',
+				'csb', 'kk', 'kw', 'rw', 'ky', 'mrj', 'rn', 'sw', 'km', 'kn', 'ko', 'kv',
+				'kg', 'ht', 'ks', 'ku', 'kj', 'lad', 'lbe', 'la', 'lrc', 'ltg', 'lv', 'to',
+				'lb', 'lez', 'lt', 'lij', 'li', 'ln', 'lo', 'jbo', 'lg', 'lmo', 'hu', 'mk',
+				'mg', 'mt', 'mi', 'min', 'cdo', 'mwl', 'ml', 'mdf', 'mo', 'mn', 'mr', 'mus',
+				'my', 'mzn', 'nah', 'fj', 'ne', 'nl', 'nds-nl', 'cr', 'new', 'nap', 'ce',
+				'frr', 'pih', 'no', 'nb', 'nn', 'nrm', 'nov', 'oc', 'mhr', 'or', 'om', 'ng',
+				'hz', 'uz', 'pa', 'pfl', 'pag', 'pap', 'koi', 'pi', 'pcd', 'pms', 'nds',
+				'pnb', 'pl', 'pt', 'pnt', 'ps', 'aa', 'kaa', 'crh', 'ty', 'ksh', 'ro', 'rmy',
+				'rm', 'qu', 'ru', 'rue', 'sa', 'sah', 'se', 'sg', 'sc', 'sco', 'sd', 'stq',
+				'st', 'nso', 'tn', 'sq', 'si', 'scn', 'simple', 'ss', 'sk', 'sl', 'cu', 'szl',
+				'so', 'ckb', 'srn', 'sr', 'sh', 'fi', 'sv', 'ta', 'shi', 'tl', 'kab',
+				'roa-tara', 'tt', 'te', 'tet', 'th', 'ti', 'vi', 'tg', 'tokipona', 'tp',
+				'tpi', 'chy', 've', 'tr', 'tk', 'tw', 'udm', 'uk', 'ur', 'ug', 'za', 'vec',
+				'vep', 'vo', 'fiu-vro', 'wa', 'vls', 'war', 'wo', 'wuu', 'ts', 'xmf', 'yi',
+				'yo', 'diq', 'zea', 'zh', 'zh-tw', 'zh-cn', 'zh-classical', 'zh-yue', 'bat-smg'
 			),
 			'alphabetic_fy' => array(
 				'aa', 'ab', 'ace', 'af', 'ay', 'ak', 'als', 'am', 'an', 'ang', 'ar', 'arc',
-				'arz', 'as', 'ast', 'av', 'az', 'ba', 'bar', 'bat-smg', 'bcl', 'be', 'be-x-old',
+				'arz', 'as', 'ast', 'av', 'az', 'azb', 'ba', 'bar', 'bat-smg', 'bcl', 'be', 'be-x-old',
 				'bg', 'bh', 'bi', 'bjn', 'bm', 'bn', 'bo', 'bpy', 'br', 'bs', 'bug', 'bxr',
 				'ca', 'cbk-zam', 'cdo', 'ce', 'ceb', 'ch', 'chy', 'cho', 'chr', 'cy', 'ckb',
 				'co', 'cr', 'crh', 'cs', 'csb', 'cu', 'cv', 'da', 'de', 'diq', 'dk', 'dsb', 'dv',
 				'dz', 'ee', 'el', 'eml', 'en', 'eo', 'es', 'et', 'eu', 'ext', 'fa', 'ff', 'fi',
 				'fy', 'fiu-vro', 'fj', 'fo', 'fr', 'frp', 'frr', 'fur', 'ga', 'gag', 'gan', 'gd',
-				'gl', 'glk', 'gn', 'got', 'gu', 'gv', 'ha', 'hak', 'haw', 'he', 'hi', 'hy',
+				'gl', 'glk', 'gn', 'got', 'gom', 'gu', 'gv', 'ha', 'hak', 'haw', 'he', 'hi', 'hy',
 				'hif', 'ho', 'hr', 'hsb', 'ht', 'hu', 'hz', 'ia', 'id', 'ie', 'ig', 'ii', 'yi',
 				'ik', 'ilo', 'io', 'yo', 'is', 'it', 'iu', 'ja', 'jbo', 'jv', 'ka', 'kaa', 'kab',
 				'kbd', 'kg', 'ki', 'ky', 'kj', 'kk', 'kl', 'km', 'kn', 'ko', 'koi', 'kr', 'krc',
 				'ks', 'ksh', 'ku', 'kv', 'kw', 'la', 'lad', 'lb', 'lbe', 'lez', 'lg', 'li',
-				'lij', 'lmo', 'ln', 'lo', 'lt', 'ltg', 'lv', 'map-bms', 'mdf', 'mg', 'mh', 'mhr',
-				'mi', 'my', 'min', 'myv', 'mk', 'ml', 'mn', 'mo', 'mr', 'mrj', 'ms', 'mt', 'mus',
-				'mwl', 'mzn', 'na', 'nah', 'nan', 'nap', 'nds', 'nds-nl', 'ne', 'new', 'ng', 'ny',
-				'nl', 'nn', 'no', 'nov', 'nrm', 'nso', 'nv', 'oc', 'om', 'or', 'os', 'pa', 'pag',
-				'pam', 'pap', 'pcd', 'pdc', 'pfl', 'pi', 'pih', 'pl', 'pms', 'pnb', 'pnt', 'ps',
-				'pt', 'qu', 'rm', 'rmy', 'rn', 'ro', 'roa-rup', 'roa-tara', 'ru', 'rue', 'rw',
-				'sa', 'sah', 'sc', 'scn', 'sco', 'sd', 'se', 'sg', 'sh', 'shi', 'si', 'simple',
+				'lij', 'lmo', 'ln', 'lo', 'lrc', 'lt', 'ltg', 'lv', 'map-bms', 'mdf', 'mg', 'mh',
+				'mhr', 'mi', 'my', 'min', 'myv', 'mk', 'ml', 'mn', 'mo', 'mr', 'mrj', 'ms', 'mt',
+				'mus', 'mwl', 'mzn', 'na', 'nah', 'nan', 'nap', 'nds', 'nds-nl', 'ne', 'new', 'ng',
+				'ny', 'nl', 'nn', 'no', 'nov', 'nrm', 'nso', 'nv', 'oc', 'om', 'or', 'os', 'pa',
+				'pag', 'pam', 'pap', 'pcd', 'pdc', 'pfl', 'pi', 'pih', 'pl', 'pms', 'pnb', 'pnt',
+				'ps', 'pt', 'qu', 'rm', 'rmy', 'rn', 'ro', 'roa-rup', 'roa-tara', 'ru', 'rue',
+				'rw', 'sa', 'sah', 'sc', 'scn', 'sco', 'sd', 'se', 'sg', 'sh', 'shi', 'si', 'simple',
 				'sk', 'sl', 'sm', 'sn', 'so', 'sq', 'sr', 'srn', 'ss', 'st', 'stq', 'su', 'sv',
 				'sw', 'szl', 'ta', 'te', 'tet', 'tg', 'th', 'ti', 'ty', 'tk', 'tl', 'tn', 'to',
 				'tokipona', 'tp', 'tpi', 'tr', 'ts', 'tt', 'tum', 'tw', 'udm', 'ug', 'uk', 'ur',
@@ -192,6 +236,10 @@ return call_user_func( function() {
 	$defaults['repoUrl'] = function ( SettingsArray $settings ) {
 		// use $wgServer if this wiki is the repo, otherwise default to wikidata.org
 		return $settings->getSetting( 'thisWikiIsTheRepo' ) ? $GLOBALS['wgServer'] : '//www.wikidata.org';
+	};
+
+	$defaults['repoConceptBaseUri'] = function ( SettingsArray $settings ) {
+		return $settings->getSetting( 'repoUrl' ) . '/entity/';
 	};
 
 	$defaults['repoArticlePath'] = function ( SettingsArray $settings ) {
@@ -236,30 +284,9 @@ return call_user_func( function() {
 		return null;
 	};
 
-	// Prefix to use for cache keys that should be shared among
-	// a wikibase repo and all its clients.
-	// In order to share caches between clients (and the repo)
-	// the default includes WBL_VERSION and the repo's DB name.
-	$defaults['sharedCacheKeyPrefix'] = function ( SettingsArray $settings ) {
-		// Per default, the database for tracking changes is the repo's database.
-		// Note that the value for the repoDatabase setting may be calculated dynamically,
-		// see above.
-
-		//NOTE: keep in sync with the default value for sharedCacheKeyPrefix defined
-		//      in WikibaseLib.default.php, since that's the key the repo is using per
-		//      default.
-
-		$repoId = $settings->getSetting( 'repoDatabase' );
-
-		if ( $repoId === false ) {
-			// false means the local wiki's DB (this is the case when the local wiki is the repo)
-			$repoId = $GLOBALS['wgDBname'];
-		} elseif ( $repoId === null ) {
-			// null means no direct access to the repo's DB, so use the repo's URL instead
-			$repoId = 'repoUrl:' . $settings->getSetting( 'repoUrl' );
-		}
-
-		return $repoId . ':WBL/' . WBL_VERSION;
+	$defaults['otherProjectsLinks'] = function ( SettingsArray $settings ) {
+		$otherProjectsSitesProvider = WikibaseClient::getDefaultInstance()->getOtherProjectsSitesProvider();
+		return $otherProjectsSitesProvider->getOtherProjectsSiteIds( $settings->getSetting( 'siteLinkGroups' ) );
 	};
 
 	return $defaults;

@@ -2,8 +2,13 @@
 
 namespace Wikibase;
 
-use Article;
-use Wikibase\Repo\WikibaseRepo;
+use ContentHandler;
+use Hooks;
+use LogEventsList;
+use OutputPage;
+use SpecialPage;
+use ViewAction;
+use Wikibase\Repo\Content\EntityHandler;
 
 /**
  * Handles the view action for Wikibase entities.
@@ -14,228 +19,116 @@ use Wikibase\Repo\WikibaseRepo;
  * @author Jeroen De Dauw < jeroendedauw@gmail.com >
  * @author Daniel Kinzler < daniel.kinzler@wikimedia.de >
  */
-abstract class ViewEntityAction extends \ViewAction {
+abstract class ViewEntityAction extends ViewAction {
 
 	/**
-	 * @var LanguageFallbackChain
-	 */
-	protected $languageFallbackChain;
-
-	/**
-	 * @var EntityPermissionChecker
-	 */
-	protected $permissionChecker;
-
-	/**
-	 * Get the language fallback chain.
-	 * Uses the default WikibaseRepo instance to get the service if it was not previously set.
+	 * @see ViewAction::show
 	 *
-	 * @since 0.4
-	 *
-	 * @return LanguageFallbackChain
-	 */
-	public function getLanguageFallbackChain() {
-		if ( $this->languageFallbackChain === null ) {
-			$this->languageFallbackChain = WikibaseRepo::getDefaultInstance()->getLanguageFallbackChainFactory()
-				->newFromContext( $this->getContext() );
-		}
-
-		return $this->languageFallbackChain;
-	}
-
-	/**
-	 * Set language fallback chain.
-	 *
-	 * @since 0.4
-	 *
-	 * @param LanguageFallbackChain $chain
-	 */
-	public function setLanguageFallbackChain( LanguageFallbackChain $chain ) {
-		$this->languageFallbackChain = $chain;
-	}
-
-	/**
-	 * Get permission checker.
-	 * Uses the default WikibaseRepo instance to get the service if it was not previously set.
-	 *
-	 * @return \Wikibase\EntityPermissionChecker
-	 */
-	public function getPermissionChecker() {
-		if ( $this->permissionChecker === null ) {
-			$this->permissionChecker = WikibaseRepo::getDefaultInstance()->getEntityPermissionChecker();
-		}
-
-		return $this->permissionChecker;
-	}
-
-	/**
-	 * Set permission checker.
-	 *
-	 * @param \Wikibase\EntityPermissionChecker $permissionChecker
-	 */
-	public function setPermissionChecker( $permissionChecker ) {
-		$this->permissionChecker = $permissionChecker;
-	}
-
-	/**
-	 * @see Action::getName()
-	 *
-	 * @since 0.1
-	 *
-	 * @return string
-	 */
-	public function getName() {
-		return 'view';
-	}
-
-	/**
-	 * Returns the current article.
-	 *
-	 * @since 0.1
-	 *
-	 * @return Article
-	 */
-	protected function getArticle() {
-		return $this->page;
-	}
-
-	/**
-	 * @see FormlessAction::show()
-	 *
-	 * @since 0.1
-	 *
-	 * TODO: permissing checks?
 	 * Parent is doing $this->checkCanExecute( $this->getUser() )
 	 */
 	public function show() {
-		$contentRetriever = new ContentRetriever();
-		$content = $contentRetriever->getContentForRequest(
-			$this->getRequest(),
-			$this->getArticle()
-		);
-
-		if ( is_null( $content ) ) {
+		if ( !$this->page->exists() ) {
+			// @fixme could use ShowMissingArticle hook instead.
+			// Article checks for missing / deleted revisions and either
+			// shows appropriate error page or deleted revision, if permission allows.
 			$this->displayMissingEntity();
-		} else {
-			$this->displayEntityContent( $content );
+			return;
 		}
+
+		$this->showEntityPage();
 	}
 
 	/**
 	 * Returns true if this view action is performing a plain view (not a diff, etc)
 	 * of the page's current revision.
+	 *
+	 * @return bool
 	 */
-	public function isPlainView() {
-		if ( !$this->getArticle()->getPage()->exists() ) {
-			// showing non-existing entity
-			return false;
-		}
-
-		if ( $this->getArticle()->getOldID() > 0
-			&&  ( $this->getArticle()->getOldID() !== $this->getArticle()->getPage()->getLatest() ) ) {
-			// showing old content
-			return false;
-		}
-
-		$contentRetriever = new ContentRetriever();
-		$content = $contentRetriever->getContentForRequest(
-			$this->getRequest(),
-			$this->getArticle()
-		);
-
-		if ( !( $content instanceof EntityContent ) ) {
-			//XXX: HACK against evil tricks in Article::getContentObject
-			// showing strange content
-			return false;
-		}
-
-		if ( $this->getRequest()->getCheck( 'diff' ) ) {
-			// showing a diff
-			return false;
-		}
-
-		return true;
+	private function isEditable() {
+		return !$this->isDiff() && $this->page->isCurrent();
 	}
 
 	/**
-	 * Displays the entity content.
-	 *
-	 * @since 0.1
-	 *
-	 * @param EntityContent $content
+	 * @return bool
 	 */
-	protected function displayEntityContent( EntityContent $content ) {
-		$out = $this->getOutput();
+	private function isDiff() {
+		return $this->getRequest()->getCheck( 'diff' );
+	}
 
-		// can edit?
-		$editable = $this->isPlainView();
+	/**
+	 * Displays the entity page.
+	 */
+	private function showEntityPage() {
+		$outputPage = $this->getOutput();
+		$editable = $this->isEditable();
 
 		// NOTE: page-wide property, independent of user permissions
-		$out->addJsConfigVars( 'wbIsEditView', $editable );
+		$outputPage->addJsConfigVars( 'wbIsEditView', $editable );
 
-		if ( $editable ) {
-			$permissionChecker = $this->getPermissionChecker();
-			$permissionStatus = $permissionChecker->getPermissionStatusForEntity(
-				$this->getUser(),
-				'edit',
-				$content->getEntity(),
-				'quick' );
+		$user = $this->getUser();
+		$parserOptions = $this->page->makeParserOptions( $user );
 
-			$editable = $permissionStatus->isOK();
+		$this->page->setParserOptions( $parserOptions );
+		$this->page->view();
+
+		$this->overrideTitleText( $outputPage );
+	}
+
+	/**
+	 * This will be the label, if available, or else the entity id (e.g. 'Q42').
+	 * This is passed via parser output and output page to save overhead on view actions.
+	 *
+	 * @param OutputPage $outputPage
+	 */
+	private function overrideTitleText( OutputPage $outputPage ) {
+		$titleText = $this->getOutput()->getProperty( 'wikibase-titletext' );
+
+		if ( $titleText === null ) {
+			return;
 		}
 
-			// View it!
-		$parserOptions = $this->getArticle()->getPage()->makeParserOptions( $this->getContext()->getUser() );
-
-		if ( !$editable ) {
-			// disable editing features ("sections" is a misnomer, it applies to the wikitext equivalent)
-			$parserOptions->setEditSection( $editable );
-		}
-
-		$this->getArticle()->setParserOptions( $parserOptions );
-		$this->getArticle()->view();
-
-		// Figure out which label to use for title.
-		$languageFallbackChain = $this->getLanguageFallbackChain();
-		$labelData = $languageFallbackChain->extractPreferredValueOrAny( $content->getEntity()->getLabels() );
-
-		if ( $labelData ) {
-			$labelText = $labelData['value'];
+		if ( $this->isDiff() ) {
+			$this->setPageTitle( $outputPage, $titleText );
 		} else {
-			$labelText = $content->getEntity()->getId()->getSerialization();
+			$this->setHTMLTitle( $outputPage, $titleText );
 		}
+	}
 
-		// Create and set the title.
-		if ( $this->getRequest()->getCheck( 'diff' ) ) {
-			// Escaping HTML characters in order to retain original label that may contain HTML
-			// characters. This prevents having characters evaluated or stripped via
-			// OutputPage::setPageTitle:
-			$out->setPageTitle(
-				$this->msg(
-					'difference-title'
-					// This should be something like the following,
-					// $labelLang->getDirMark() . $labelText . $wgLang->getDirMark()
-					// or should set the attribute of the h1 to correct direction.
-					// Still note that the direction is "auto" so guessing should
-					// give the right direction in most cases.
-				)->rawParams( htmlspecialchars( $labelText ) )
-			);
-		} else {
-			// Prevent replacing {{...}} by using rawParams() instead of params():
-			$this->getOutput()->setHTMLTitle( $this->msg( 'pagetitle' )->rawParams( $labelText ) );
-		}
+	/**
+	 * @param OutputPage $outputPage
+	 * @param string $titleText
+	 */
+	private function setPageTitle( OutputPage $outputPage, $titleText ) {
+		// Escaping HTML characters in order to retain original label that may contain HTML
+		// characters. This prevents having characters evaluated or stripped via
+		// OutputPage::setPageTitle:
+		$outputPage->setPageTitle(
+			$this->msg(
+				'difference-title'
+				// This should be something like the following,
+				// $labelLang->getDirMark() . $titleText . $wgLang->getDirMark()
+				// or should set the attribute of the h1 to correct direction.
+				// Still note that the direction is "auto" so guessing should
+				// give the right direction in most cases.
+			)->rawParams( htmlspecialchars( $titleText ) )
+		);
+	}
+
+	/**
+	 * @param OutputPage $outputPage
+	 * @param string $titleText
+	 */
+	private function setHTMLTitle( OutputPage $outputPage, $titleText ) {
+		// Prevent replacing {{...}} by using rawParams() instead of params():
+		$outputPage->setHTMLTitle( $this->msg( 'pagetitle' )->rawParams( $titleText ) );
 	}
 
 	/**
 	 * Displays there is no entity for the current page.
-	 *
-	 * @since 0.1
 	 */
-	protected function displayMissingEntity() {
-		global $wgSend404Code;
-
-		$title = $this->getArticle()->getTitle();
-		$oldid = $this->getArticle()->getOldID();
+	private function displayMissingEntity() {
+		$title = $this->getTitle();
+		$oldid = $this->page->getOldID();
 
 		$out = $this->getOutput();
 
@@ -244,23 +137,21 @@ abstract class ViewEntityAction extends \ViewAction {
 		// TODO: Factor the "show stuff for missing page" code out from Article::showMissingArticle,
 		//       so it can be re-used here. The below code is copied & modified from there...
 
-		wfRunHooks( 'ShowMissingArticle', array( $this ) );
+		Hooks::run( 'ShowMissingArticle', array( $this->page ) );
 
 		# Show delete and move logs
-		\LogEventsList::showLogExtract( $out, array( 'delete', 'move' ), $title, '',
-			array(  'lim' => 10,
-			        'conds' => array( "log_action != 'revision'" ),
-			        'showIfEmpty' => false,
-			        'msgKey' => array( 'moveddeleted-notice' ) )
+		LogEventsList::showLogExtract( $out, array( 'delete', 'move' ), $title, '',
+			array(
+				'lim' => 10,
+				'conds' => array( "log_action != 'revision'" ),
+				'showIfEmpty' => false,
+				'msgKey' => array( 'moveddeleted-notice' )
+			)
 		);
 
-		if ( $wgSend404Code ) {
-			// If there's no backing content, send a 404 Not Found
-			// for better machine handling of broken links.
-			$this->getRequest()->response()->header( "HTTP/1.1 404 Not Found" );
-		}
+		$this->send404Code();
 
-		$hookResult = wfRunHooks( 'BeforeDisplayNoArticleText', array( $this ) );
+		$hookResult = Hooks::run( 'BeforeDisplayNoArticleText', array( $this ) );
 
 		// XXX: ...end of stuff stolen from Article::showMissingArticle
 
@@ -271,21 +162,21 @@ abstract class ViewEntityAction extends \ViewAction {
 					$this->getTitle()->getPrefixedText(),
 					wfMessage( 'missingarticle-rev', $oldid )->plain() )->plain();
 			} else {
-				/** @var $entityHandler EntityHandler */
-				$entityHandler = \ContentHandler::getForTitle( $this->getTitle() );
+				/** @var EntityHandler $entityHandler */
+				$entityHandler = ContentHandler::getForTitle( $this->getTitle() );
 				$entityCreationPage = $entityHandler->getSpecialPageForCreation();
 
 				$text = wfMessage( 'wikibase-noentity' )->plain();
 
-				if( $entityCreationPage !== null
-					&& $this->getTitle()->quickUserCan( 'create', $this->getContext()->getUser() )
-					&& $this->getTitle()->quickUserCan( 'edit', $this->getContext()->getUser() )
+				if ( $entityCreationPage !== null
+					&& $this->getTitle()->quickUserCan( 'create', $this->getUser() )
+					&& $this->getTitle()->quickUserCan( 'edit', $this->getUser() )
 				) {
 					/*
 					 * add text with link to special page for creating an entity of that type if possible and
 					 * if user has the rights for it
 					 */
-					$createEntityPage = \SpecialPage::getTitleFor( $entityCreationPage );
+					$createEntityPage = SpecialPage::getTitleFor( $entityCreationPage );
 					$text .= ' ' . wfMessage(
 						'wikibase-noentity-createone',
 						$createEntityPage->getPrefixedText() // TODO: might be nicer to use an 'action=create' instead
@@ -299,25 +190,38 @@ abstract class ViewEntityAction extends \ViewAction {
 		}
 	}
 
+	private function send404Code() {
+		global $wgSend404Code;
+
+		if ( $wgSend404Code ) {
+			// If there's no backing content, send a 404 Not Found
+			// for better machine handling of broken links.
+			$this->getRequest()->response()->header( 'HTTP/1.1 404 Not Found' );
+		}
+	}
+
 	/**
-	 * (non-PHPdoc)
-	 * @see Action::getDescription()
+	 * @see Action::getDescription
+	 *
+	 * @return string Empty.
 	 */
 	protected function getDescription() {
 		return '';
 	}
 
 	/**
-	 * (non-PHPdoc)
-	 * @see Action::requiresUnblock()
+	 * @see Action::requiresUnblock
+	 *
+	 * @return bool Always false.
 	 */
 	public function requiresUnblock() {
 		return false;
 	}
 
 	/**
-	 * (non-PHPdoc)
-	 * @see Action::requiresWrite()
+	 * @see Action::requiresWrite
+	 *
+	 * @return bool Always false.
 	 */
 	public function requiresWrite() {
 		return false;

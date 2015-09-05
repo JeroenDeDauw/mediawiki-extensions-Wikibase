@@ -1,17 +1,18 @@
 <?php
 
-namespace Wikibase\Validators;
+namespace Wikibase\Repo\Validators;
 
 use ValueValidators\Result;
-use Wikibase\DataModel\Entity\Entity;
+use Wikibase\DataModel\Entity\EntityDocument;
 use Wikibase\DataModel\Entity\EntityId;
 use Wikibase\DataModel\Term\Fingerprint;
-use Wikibase\DataModel\Term\Term;
+use Wikibase\DataModel\Term\FingerprintProvider;
 use Wikibase\LabelDescriptionDuplicateDetector;
 
 /**
- * Validator for checking that entity labels are unique (per language).
- * This is used to make sure that Properties have unique labels.
+ * Validator for checking that the combination of an entity's label and description
+ * are unique (per language). This is used to make sure that no two items have the same
+ * label and description.
  *
  * @since 0.5
  *
@@ -23,7 +24,7 @@ class LabelDescriptionUniquenessValidator implements EntityValidator, Fingerprin
 	/**
 	 * @var LabelDescriptionDuplicateDetector
 	 */
-	protected $duplicateDetector;
+	private $duplicateDetector;
 
 	/**
 	 * @param LabelDescriptionDuplicateDetector $duplicateDetector
@@ -35,42 +36,39 @@ class LabelDescriptionUniquenessValidator implements EntityValidator, Fingerprin
 	/**
 	 * @see EntityValidator::validate()
 	 *
-	 * @param Entity $entity
+	 * @param EntityDocument $entity
 	 *
 	 * @return Result
 	 */
-	public function validateEntity( Entity $entity ) {
-		$labels = $entity->getLabels();
-		$descriptions = $entity->getDescriptions();
+	public function validateEntity( EntityDocument $entity ) {
+		if ( $entity instanceof FingerprintProvider ) {
+			return $this->duplicateDetector->detectLabelDescriptionConflicts(
+				$entity->getType(),
+				$entity->getFingerprint()->getLabels()->toTextArray(),
+				$entity->getFingerprint()->getDescriptions()->toTextArray(),
+				$entity->getId()
+			);
+		}
 
-		return $this->duplicateDetector->detectTermConflicts( $labels, $descriptions, $entity->getId() );
+		return Result::newSuccess();
 	}
 
 	/**
 	 * @see FingerprintValidator::validateFingerprint()
 	 *
-	 * @since 0.5
-	 *
 	 * @param Fingerprint $fingerprint
-	 * @param EntityId|null $entityId
-	 * @param array|null $languageCodes
+	 * @param EntityId $entityId
+	 * @param string[]|null $languageCodes
 	 *
 	 * @return Result
 	 */
-	public function validateFingerprint( Fingerprint $fingerprint, EntityId $entityId = null, $languageCodes = null ) {
-		$labels = array_map(
-			function( Term $term ) {
-				return $term->getText();
-			},
-			iterator_to_array( $fingerprint->getLabels()->getIterator() )
-		);
-
-		$descriptions = array_map(
-			function( Term $term ) {
-				return $term->getText();
-			},
-			iterator_to_array( $fingerprint->getDescriptions()->getIterator() )
-		);
+	public function validateFingerprint(
+		Fingerprint $fingerprint,
+		EntityId $entityId,
+		array $languageCodes = null
+	) {
+		$labels = $fingerprint->getLabels()->toTextArray();
+		$descriptions = $fingerprint->getDescriptions()->toTextArray();
 
 		if ( $languageCodes !== null ) {
 			$languageKeys = array_flip( $languageCodes );
@@ -78,12 +76,18 @@ class LabelDescriptionUniquenessValidator implements EntityValidator, Fingerprin
 			$descriptions = array_intersect_key( $descriptions, $languageKeys );
 		}
 
-		// nothing to do
-		if ( empty( $labels ) && empty( $descriptions ) ) {
+		// Nothing to do if there are no labels OR no descriptions, since
+		// a conflict requires a label AND a description.
+		if ( empty( $labels ) || empty( $descriptions ) ) {
 			return Result::newSuccess();
 		}
 
-		return $this->duplicateDetector->detectTermConflicts( $labels, $descriptions, $entityId );
+		return $this->duplicateDetector->detectLabelDescriptionConflicts(
+			$entityId->getEntityType(),
+			$labels,
+			$descriptions,
+			$entityId
+		);
 	}
 
 }

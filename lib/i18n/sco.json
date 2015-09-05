@@ -1,11 +1,13 @@
 {
 	"@metadata": {
 		"authors": [
-			"John Reid"
+			"John Reid",
+			"Macofe",
+			"AmaryllisGardener"
 		]
 	},
 	"wikibase-timedetails-time": "Time",
-	"wikibase-timedetails-isotime": "ISO Timestamp",
+	"wikibase-timedetails-isotime": "Timestamp",
 	"wikibase-timedetails-timezone": "Timezone",
 	"wikibase-timedetails-calendar": "Calendair",
 	"wikibase-timedetails-precision": "Preceesion",
@@ -15,5 +17,15 @@
 	"wikibase-globedetails-latitude": "Latitude",
 	"wikibase-globedetails-precision": "Preceesion",
 	"wikibase-globedetails-globe": "Globe",
-	"wikibase-parse-error": "Malformed value."
+	"wikibase-parse-error": "Malformed value.",
+	"wikibase-sitelinks-wikipedia": "Wikipaedia",
+	"wikibase-time-precision-Gannum": "in $1 billion year",
+	"wikibase-time-precision-Mannum": "in $1 million year",
+	"wikibase-time-precision-annum": "in $1 year",
+	"wikibase-time-precision-millennium": "$1. millennium",
+	"wikibase-time-precision-century": "$1. yearhunner",
+	"wikibase-time-precision-10annum": "$1s",
+	"wikibase-item-summary-wbcreateredirect": "Redguidit tae $4",
+	"wikibase-item-summary-wblinktitles-create": "Cræftit this eetem fer tae connect pages",
+	"wikibase-item-summary-wblinktitles-connect": "Eikit ae leid airtin fer tae connect pages"
 }

@@ -2,7 +2,13 @@
 
 namespace Wikibase\Test;
 
+use FauxRequest;
+use Wikibase\DataModel\Entity\ItemId;
+use Wikibase\DataModel\Term\Term;
+use Wikibase\ItemDisambiguation;
+use Wikibase\Repo\Interactors\TermIndexSearchInteractor;
 use Wikibase\Repo\Specials\SpecialItemDisambiguation;
+use Wikibase\TermIndexEntry;
 
 /**
  * @covers Wikibase\Repo\Specials\SpecialItemDisambiguation
@@ -16,18 +22,88 @@ use Wikibase\Repo\Specials\SpecialItemDisambiguation;
  *        ^---- needed because we rely on Title objects internally
  *
  * @licence GNU GPL v2+
- * @author Jeroen De Dauw < jeroendedauw@gmail.com >
  * @author Daniel Kinzler
  * @author Adam Shorland
  */
 class SpecialItemDisambiguationTest extends SpecialPageTestBase {
 
-	protected function newSpecialPage() {
-		return new SpecialItemDisambiguation();
+	/**
+	 * @return ItemDisambiguation
+	 */
+	private function getMockItemDisambiguation() {
+		$mock = $this->getMockBuilder( 'Wikibase\ItemDisambiguation' )
+			->disableOriginalConstructor()
+			->getMock();
+		$mock->expects( $this->any() )
+			->method( 'getHTML' )
+			->will( $this->returnCallback( function ( $searchResult ) {
+				return '<span class="mock-span" >ItemDisambiguationHTML-' . count( $searchResult ) . '</span>';
+			} ) );
+		return $mock;
 	}
 
-	public function testExecute() {
-		//TODO: Verify that more of the output is correct.
+	/**
+	 * @return TermIndexSearchInteractor
+	 */
+	private function getMockSearchInteractor() {
+		$returnResults = array(
+			array(
+				'entityId' => new ItemId( 'Q2' ),
+				'matchedTermType' => 'label',
+				'matchedTerm' => new Term( 'fr', 'Foo' ),
+				'displayTerms' => array(
+					TermIndexEntry::TYPE_DESCRIPTION => new Term( 'en', 'DisplayDescription' ),
+				),
+			),
+			array(
+				'entityId' => new ItemId( 'Q3' ),
+				'matchedTermType' => 'label',
+				'matchedTerm' => new Term( 'fr', 'Foo' ),
+				'displayTerms' => array(
+					TermIndexEntry::TYPE_LABEL => new Term( 'en', 'DisplayLabel' ),
+				),
+			),
+		);
+		$mock = $this->getMockBuilder( 'Wikibase\Repo\Interactors\TermIndexSearchInteractor' )
+			->disableOriginalConstructor()
+			->getMock();
+		$mock->expects( $this->any() )
+			->method( 'searchForEntities' )
+			->with(
+				$this->equalTo( 'Foo' ),
+				$this->equalTo( 'fr' ),
+				$this->equalTo( 'item' ),
+				$this->equalTo( array( TermIndexEntry::TYPE_LABEL, TermIndexEntry::TYPE_ALIAS ) )
+			)
+			->will( $this->returnValue( $returnResults ) );
+
+		$mock->expects( $this->any() )
+			->method( 'setIsCaseSensitive' )
+			->with( false );
+
+		$mock->expects( $this->any() )
+			->method( 'setPrefixMatch' )
+			->with( false );
+
+		$mock->expects( $this->any() )
+			->method( 'setUseLanguageFallback' )
+			->with( true );
+
+		return $mock;
+	}
+
+	protected function newSpecialPage() {
+		$page = new SpecialItemDisambiguation();
+		$page->initServices(
+			$this->getMockItemDisambiguation(),
+			$this->getMockSearchInteractor()
+		);
+		return $page;
+	}
+
+	public function requestProvider() {
+		$cases = array();
+		$matchers = array();
 
 		$matchers['language'] = array(
 			'tag' => 'input',
@@ -52,19 +128,31 @@ class SpecialItemDisambiguationTest extends SpecialPageTestBase {
 				'name' => 'submit',
 			) );
 
-		list( $output, ) = $this->executeSpecialPage( '' );
-		foreach( $matchers as $key => $matcher ) {
+		$cases['empty'] = array( '', array(), null, $matchers );
+
+		// fr/Foo
+		$matchers['language']['attributes']['value'] = 'fr';
+		$matchers['label']['attributes']['value'] = 'Foo';
+		$matchers['matches'] = array(
+			'tag' => 'span',
+			'content' => 'ItemDisambiguationHTML-2',
+			'attributes' => array( 'class' => 'mock-span' ),
+		);
+		$cases['fr/Foo'] = array( 'fr/Foo', array(), 'en', $matchers );
+
+		return $cases;
+	}
+
+	/**
+	 * @dataProvider requestProvider
+	 */
+	public function testExecute( $sub, array $data, $languageCode, array $matchers ) {
+		$request = new FauxRequest( $data );
+
+		list( $output, ) = $this->executeSpecialPage( $sub, $request, $languageCode );
+		foreach ( $matchers as $key => $matcher ) {
 			$this->assertTag( $matcher, $output, "Failed to match html output with tag '{$key}''" );
 		}
-
-		list( $output, ) = $this->executeSpecialPage( 'LangText/LabelText' );
-		$matchers['language']['attributes']['value'] = 'LangText';
-		$matchers['label']['attributes']['value'] = 'LabelText';
-
-		foreach( $matchers as $key => $matcher ) {
-			$this->assertTag( $matcher, $output, "Failed to match html output with tag '{$key}''" );
-		}
-
 	}
 
 }

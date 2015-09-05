@@ -1,8 +1,18 @@
 <?php
 
 namespace Wikibase;
-use Wikibase\store\EntityStore;
-use Wikibase\store\EntityStoreWatcher;
+
+use Wikibase\DataModel\Services\Entity\EntityPrefetcher;
+use Wikibase\DataModel\Services\Lookup\EntityLookup;
+use Wikibase\DataModel\Services\Lookup\EntityRedirectLookup;
+use Wikibase\Lib\Store\EntityInfoBuilderFactory;
+use Wikibase\Lib\Store\EntityRevisionLookup;
+use Wikibase\Lib\Store\EntityStore;
+use Wikibase\Lib\Store\EntityStoreWatcher;
+use Wikibase\Lib\Store\LabelConflictFinder;
+use Wikibase\Lib\Store\SiteLinkConflictLookup;
+use Wikibase\Lib\Store\SiteLinkStore;
+use Wikibase\Repo\Store\EntityPerPage;
 
 /**
  * Store interface. All interaction with store Wikibase does on top
@@ -19,15 +29,11 @@ use Wikibase\store\EntityStoreWatcher;
 interface Store {
 
 	/**
-	 * Returns a new SiteLinkCache for this store.
-	 *
 	 * @since 0.1
 	 *
-	 * @return SiteLinkCache
-	 *
-	 * @todo: rename to newSiteLinkIndex
+	 * @return SiteLinkStore
 	 */
-	public function newSiteLinkCache();
+	public function newSiteLinkStore();
 
 	/**
 	 * Removes all data from the store.
@@ -37,15 +43,13 @@ interface Store {
 	public function clear();
 
 	/**
-	 * Rebuilds the store.
+	 * Rebuilds the store from the original data source.
 	 *
 	 * @since 0.1
 	 */
 	public function rebuild();
 
 	/**
-	 * Returns a TermIndex for this store.
-	 *
 	 * @since 0.4
 	 *
 	 * @return TermIndex
@@ -53,8 +57,13 @@ interface Store {
 	public function getTermIndex();
 
 	/**
-	 * Returns a new IdGenerator for this store.
+	 * @since 0.5
 	 *
+	 * @return LabelConflictFinder
+	 */
+	public function getLabelConflictFinder();
+
+	/**
 	 * @since 0.1
 	 *
 	 * @return IdGenerator
@@ -62,8 +71,6 @@ interface Store {
 	public function newIdGenerator();
 
 	/**
-	 * Return a new EntityPerPage.
-	 *
 	 * @since 0.3
 	 *
 	 * @return EntityPerPage
@@ -71,8 +78,13 @@ interface Store {
 	public function newEntityPerPage();
 
 	/**
-	 * Returns an EntityLookup
+	 * @since 0.5
 	 *
+	 * @return EntityRedirectLookup
+	 */
+	public function getEntityRedirectLookup();
+
+	/**
 	 * @since 0.4
 	 *
 	 * @param string $uncached Flag string, set to 'uncached' to get an uncached direct lookup service.
@@ -82,8 +94,6 @@ interface Store {
 	public function getEntityLookup( $uncached = '' );
 
 	/**
-	 * Returns an EntityRevisionLookup
-	 *
 	 * @since 0.5
 	 *
 	 * @param string $uncached Flag string, set to 'uncached' to get an uncached direct lookup service.
@@ -93,8 +103,6 @@ interface Store {
 	public function getEntityRevisionLookup( $uncached = '' );
 
 	/**
-	 * Returns an EntityStore
-	 *
 	 * @since 0.5
 	 *
 	 * @return EntityStore
@@ -112,21 +120,41 @@ interface Store {
 	public function getEntityStoreWatcher();
 
 	/**
-	 * Returns an EntityInfoBuilder
-	 *
 	 * @since 0.5
 	 *
-	 * @return EntityInfoBuilder
+	 * @return EntityInfoBuilderFactory
 	 */
-	public function getEntityInfoBuilder();
+	public function getEntityInfoBuilderFactory();
 
 	/**
-	 * Returns an PropertyInfoStore
-	 *
 	 * @since 0.4
 	 *
 	 * @return PropertyInfoStore
 	 */
 	public function getPropertyInfoStore();
+
+	/**
+	 * @since 0.5
+	 *
+	 * @return ChangesTable
+	 */
+	public function getChangesTable();
+
+	/**
+	 * @since 0.5
+	 *
+	 * @return SiteLinkConflictLookup
+	 */
+	public function getSiteLinkConflictLookup();
+
+	/**
+	 * Returns an EntityPrefetcher which can be used to prefetch a list of entity
+	 * ids in case we need to for example load a batch of entity ids.
+	 *
+	 * @since 0.5
+	 *
+	 * @return EntityPrefetcher
+	 */
+	public function getEntityPrefetcher();
 
 }

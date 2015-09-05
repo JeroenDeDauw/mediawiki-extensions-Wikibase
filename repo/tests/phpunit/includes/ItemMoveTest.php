@@ -2,15 +2,14 @@
 
 namespace Wikibase\Test;
 
+use TestSites;
 use Title;
 use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\ItemId;
 use Wikibase\EntityRevision;
-use Wikibase\NamespaceUtils;
 use Wikibase\Repo\WikibaseRepo;
 use WikiPage;
 use WikitextContent;
-use TestSites;
 
 /**
  * Tests prevention of moving pages in and out of the data NS.
@@ -46,11 +45,7 @@ class ItemMoveTest extends \MediaWikiTestCase {
 	/**
 	 * This is to set up the environment
 	 */
-	public function setUp() {
-		if ( defined( 'WBC_VERSION' ) ) {
-			$this->markTestSkipped( 'Cannot run ItemMoveTest when the client is hooked up to the repo' );
-		}
-
+	protected function setUp() {
 		parent::setUp();
 
 		//TODO: remove global TestSites DB setup once we can inject sites sanely.
@@ -65,7 +60,7 @@ class ItemMoveTest extends \MediaWikiTestCase {
 
 		$store = WikibaseRepo::getDefaultInstance()->getEntityStore();
 
-		$item = Item::newEmpty();
+		$item = new Item();
 		$this->entityRevision = $store->saveEntity( $item, '', $GLOBALS['wgUser'], EDIT_NEW );
 
 		$id = $this->entityRevision->getEntity()->getId();
@@ -80,7 +75,8 @@ class ItemMoveTest extends \MediaWikiTestCase {
 	 * Tests @see WikibaseItem::getIdForSiteLink
 	 */
 	public function testMovePrevention() {
-		$titleLookup = WikibaseRepo::getDefaultInstance()->getEntityTitleLookup();
+		$wikibaseRepo = WikibaseRepo::getDefaultInstance();
+		$titleLookup = $wikibaseRepo->getEntityTitleLookup();
 
 		// Moving a regular page into data NS onto an existing item
 		$title = $this->itemTitle;
@@ -88,9 +84,12 @@ class ItemMoveTest extends \MediaWikiTestCase {
 
 		$this->assertFalse( $this->page->getTitle()->moveTo( $title ) === true );
 
+		$entityNamespaceLookup = $wikibaseRepo->getEntityNamespaceLookup();
+		$itemNamespace = $entityNamespaceLookup->getEntityNamespace( CONTENT_MODEL_WIKIBASE_ITEM );
+
 		// Moving a regular page into data NS to an invalid location
-		$title = Title::newFromText( $this->page->getTitle()->getText(),
-			NamespaceUtils::getEntityNamespace( CONTENT_MODEL_WIKIBASE_ITEM ) ); //@todo: test other types of entities too!
+		// @todo: test other types of entities too!
+		$title = Title::newFromText( $this->page->getTitle()->getText(), $itemNamespace );
 		$this->assertFalse( $this->page->getTitle()->moveTo( $title ) === true );
 
 		// Moving a regular page into data NS to an empty (but valid) location
@@ -106,8 +105,7 @@ class ItemMoveTest extends \MediaWikiTestCase {
 		$this->assertFalse( $this->itemTitle->moveTo( $title ) === true );
 
 		// Moving item to an invalid location in the data NS
-		$title = Title::newFromText( $this->page->getTitle()->getText(),
-			NamespaceUtils::getEntityNamespace( CONTENT_MODEL_WIKIBASE_ITEM ) );
+		$title = Title::newFromText( $this->page->getTitle()->getText(), $itemNamespace );
 		$this->assertFalse( $this->itemTitle->moveTo( $title ) === true );
 
 		// Moving item to an valid location in the data NS
@@ -116,4 +114,3 @@ class ItemMoveTest extends \MediaWikiTestCase {
 	}
 
 }
-

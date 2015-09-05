@@ -4,12 +4,12 @@ namespace Wikibase\Lib\Test;
 
 use DataValues\StringValue;
 use Wikibase\DataModel\Entity\PropertyId;
+use Wikibase\DataModel\Snak\PropertyNoValueSnak;
+use Wikibase\DataModel\Snak\PropertySomeValueSnak;
+use Wikibase\DataModel\Snak\PropertyValueSnak;
 use Wikibase\Lib\DispatchingSnakFormatter;
 use Wikibase\Lib\MessageSnakFormatter;
 use Wikibase\Lib\SnakFormatter;
-use Wikibase\PropertyNoValueSnak;
-use Wikibase\PropertySomeValueSnak;
-use Wikibase\PropertyValueSnak;
 
 /**
  * @covers Wikibase\Lib\DispatchingSnakFormatter
@@ -26,19 +26,19 @@ class DispatchingSnakFormatterTest extends \PHPUnit_Framework_TestCase {
 
 	/**
 	 * @dataProvider constructorErrorsProvider
-	 *
-	 * @param $format
-	 * @param $formatters
-	 * @param $error
 	 */
-	public function testConstructorErrors( $format, $formatters, $error ) {
+	public function testConstructorErrors( $format, array $formatters, $error ) {
 		$this->setExpectedException( $error );
 
 		new DispatchingSnakFormatter( $format, $formatters );
 	}
 
-	public static function constructorErrorsProvider() {
-		$formatter = new MessageSnakFormatter( 'novalue', wfMessage( 'wikibase-snakview-snaktypeselector-novalue' ), SnakFormatter::FORMAT_PLAIN );
+	public function constructorErrorsProvider() {
+		$formatter = new MessageSnakFormatter(
+			'novalue',
+			wfMessage( 'wikibase-snakview-snaktypeselector-novalue' ),
+			SnakFormatter::FORMAT_PLAIN
+		);
 
 		return array(
 			'format must be a string' => array(
@@ -64,9 +64,6 @@ class DispatchingSnakFormatterTest extends \PHPUnit_Framework_TestCase {
 		);
 	}
 
-	/**
-	 * @covers DispatchingSnakFormatter::formatSnak()
-	 */
 	public function testFormatSnak() {
 		$novalue = wfMessage( 'wikibase-snakview-snaktypeselector-novalue' );
 		$somevalue = wfMessage( 'wikibase-snakview-snaktypeselector-somevalue' );
@@ -87,11 +84,6 @@ class DispatchingSnakFormatterTest extends \PHPUnit_Framework_TestCase {
 		$this->assertEquals( $value->text(), $formatter->formatSnak( $valueSnak ) );
 	}
 
-
-	/**
-	 * @covers DispatchingSnakFormatter::getSnakTypes()
-	 * @covers DispatchingSnakFormatter::getFormatter()
-	 */
 	public function testGetSnakTypes() {
 		$novalue = wfMessage( 'wikibase-snakview-snaktypeselector-novalue' );
 		$somevalue = wfMessage( 'wikibase-snakview-snaktypeselector-somevalue' );
@@ -113,9 +105,6 @@ class DispatchingSnakFormatterTest extends \PHPUnit_Framework_TestCase {
 		}
 	}
 
-	/**
-	 * @covers DispatchingSnakFormatter::canFormatSnak()
-	 */
 	public function testCanFormatSnak() {
 		$novalue = wfMessage( 'wikibase-snakview-snaktypeselector-novalue' );
 
@@ -132,9 +121,6 @@ class DispatchingSnakFormatterTest extends \PHPUnit_Framework_TestCase {
 		$this->assertFalse( $formatter->canFormatSnak( $snak ), $snak->getType() );
 	}
 
-	/**
-	 * @covers DispatchingSnakFormatter::getFormat()
-	 */
 	public function testGetFormat() {
 		$formatter = new DispatchingSnakFormatter( 'test', array() );
 		$this->assertEquals( 'test', $formatter->getFormat() );

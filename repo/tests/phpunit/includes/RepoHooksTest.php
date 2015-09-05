@@ -2,7 +2,12 @@
 
 namespace Wikibase\Tests;
 
-use ImportStreamSource;
+use ConfigFactory;
+use DerivativeContext;
+use ImportStringSource;
+use OutputPage;
+use RequestContext;
+use Wikibase\Repo\WikibaseRepo;
 use Wikibase\RepoHooks;
 use WikiImporter;
 
@@ -19,6 +24,20 @@ use WikiImporter;
  */
 class RepoHooksTest extends \MediaWikiTestCase {
 
+	private $saveAllowImport = false;
+
+	public function setup() {
+		parent::setup();
+
+		$this->saveAllowImport = WikibaseRepo::getDefaultInstance()->getSettings()->getSetting( 'allowEntityImport' );
+	}
+
+	public function tearDown() {
+		WikibaseRepo::getDefaultInstance()->getSettings()->setSetting( 'allowEntityImport', $this->saveAllowImport );
+
+		parent::tearDown();
+	}
+
 	public function revisionInfoProvider() {
 		return array(
 			'empty' => array( array() ),
@@ -29,11 +48,9 @@ class RepoHooksTest extends \MediaWikiTestCase {
 
 	/**
 	 * @dataProvider revisionInfoProvider
-	 * @param $revisionInfo
-	 * @param null $expectedException
 	 */
-	public function testOnImportHandleRevisionXMLTag( $revisionInfo, $expectedException = null ) {
-		//NOTE: class is unclear, see Bug 64657. But we don't use that object anyway.
+	public function testOnImportHandleRevisionXMLTag( array $revisionInfo, $expectedException = null ) {
+		//NOTE: class is unclear, see Bug T66657. But we don't use that object anyway.
 		$importer = $this->getMockBuilder( 'Import' )
 			->disableOriginalConstructor()
 			->getMock();
@@ -44,30 +61,6 @@ class RepoHooksTest extends \MediaWikiTestCase {
 
 		RepoHooks::onImportHandleRevisionXMLTag( $importer, array(), $revisionInfo );
 		$this->assertTrue( true ); // make PHPUnit happy
-	}
-
-	private function getMockImportStream( $xml ) {
-		$source = $this->getMockBuilder( 'ImportStreamSource' )
-			->disableOriginalConstructor()
-			->getMock();
-
-		$atEnd = new \stdClass();
-		$atEnd->atEnd = false;
-
-		$source->expects( $this->any() )
-			->method( 'atEnd' )
-			->will( $this->returnCallback( function () use ( $atEnd ) {
-				return $atEnd->atEnd;
-			} ) );
-
-		$source->expects( $this->any() )
-			->method( 'readChunk' )
-			->will( $this->returnCallback( function () use ( $atEnd, $xml ) {
-				$atEnd->atEnd = true;
-				return $xml;
-			} ) );
-
-		return $source;
 	}
 
 	public function importProvider() {
@@ -90,6 +83,8 @@ class RepoHooksTest extends \MediaWikiTestCase {
   </page>
  </mediawiki>
 XML
+				,
+				false
 			),
 			'item' => array( <<<XML
 <mediawiki>
@@ -110,27 +105,51 @@ XML
  </mediawiki>
 XML
 				,
+				false,
 				'MWException'
+			),
+			'item (allow)' => array( <<<XML
+<mediawiki>
+  <siteinfo>
+    <sitename>TestWiki</sitename>
+    <case>first-letter</case>
+  </siteinfo>
+  <page>
+    <title>Q123</title><ns>1234</ns>
+    <revision>
+      <contributor><username>Tester</username><id>0</id></contributor>
+      <comment>Test</comment>
+      <text>{ "id":"Q123" }</text>
+      <model>wikibase-item</model>
+      <format>application/json</format>
+    </revision>
+  </page>
+ </mediawiki>
+XML
+			,
+				true
 			),
 		);
 	}
 
 	/**
 	 * @dataProvider importProvider
-	 * @param $xml
-	 * @param null $expectedException
 	 */
-	public function testImportHandleRevisionXMLTag_hook( $xml, $expectedException = null ) {
+	public function testImportHandleRevisionXMLTag_hook( $xml, $allowImport, $expectedException = null ) {
 		// WikiImporter tried to register this protocol every time, so unregister first to avoid errors.
-		wfSuppressWarnings();
+		\MediaWiki\suppressWarnings();
 		stream_wrapper_unregister( 'uploadsource' );
-		wfRestoreWarnings();
+		\MediaWiki\restoreWarnings();
 
-		$source = $this->getMockImportStream( $xml );
-		$importer = new WikiImporter( $source );
+		WikibaseRepo::getDefaultInstance()->getSettings()->setSetting( 'allowEntityImport', $allowImport );
 
-		$importer->setNoticeCallback( function () {
+		$source = new ImportStringSource( $xml );
+		$importer = new WikiImporter( $source, ConfigFactory::getDefaultInstance()->makeConfig( 'main' ) );
+
+		$importer->setNoticeCallback( function() {
 			// Do nothing for now. Could collect and compare notices.
+		} );
+		$importer->setPageOutCallback( function() {
 		} );
 
 		if ( $expectedException !== null ) {
@@ -139,6 +158,38 @@ XML
 
 		$importer->doImport();
 		$this->assertTrue( true ); // make PHPUnit happy
+	}
+
+	public function testOnOutputPageParserOutput() {
+		$altLinks = array( array( 'a' => 'b' ), array( 'c', 'd' ) );
+
+		$context = new DerivativeContext( RequestContext::getMain() );
+		$out = new OutputPage( $context );
+
+		$parserOutput = $this->getMock( 'ParserOutput' );
+		$parserOutput->expects( $this->exactly( 3 ) )
+			->method( 'getExtensionData' )
+			->will( $this->returnCallback( function ( $key ) use ( $altLinks ) {
+				if ( $key === 'wikibase-alternate-links' ) {
+					return $altLinks;
+				} else {
+					return $key;
+				}
+			} ) );
+
+		RepoHooks::onOutputPageParserOutput( $out, $parserOutput );
+
+		$this->assertSame(
+			'wikibase-view-chunks',
+			$out->getProperty( 'wikibase-view-chunks' )
+		);
+
+		$this->assertSame(
+			'wikibase-titletext',
+			$out->getProperty( 'wikibase-titletext' )
+		);
+
+		$this->assertSame( $altLinks, $out->getLinkTags() );
 	}
 
 }

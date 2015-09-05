@@ -3,30 +3,18 @@
 namespace Wikibase\Test;
 
 use DataValues\StringValue;
-use Language;
-use Title;
-use User;
-use ValueParsers\ParserOptions;
-use Wikibase\CopyrightMessageBuilder;
-use Wikibase\DataModel\Claim\Claim;
-use Wikibase\DataModel\Claim\ClaimGuid;
-use Wikibase\DataModel\Entity\BasicEntityIdParser;
-use Wikibase\DataModel\Entity\Entity;
+use MediaWikiTestCase;
+use Wikibase\DataModel\Entity\EntityDocument;
 use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\ItemId;
 use Wikibase\DataModel\Entity\Property;
 use Wikibase\DataModel\Entity\PropertyId;
 use Wikibase\DataModel\Snak\PropertyValueSnak;
-use Wikibase\EntityFactory;
-use Wikibase\EntityRevision;
-use Wikibase\Item;
-use Wikibase\LanguageFallbackChain;
-use Wikibase\LanguageFallbackChainFactory;
-use Wikibase\Lib\Serializers\SerializationOptions;
-use Wikibase\Lib\Serializers\SerializerFactory;
-use Wikibase\NamespaceUtils;
+use Wikibase\DataModel\Statement\StatementListProvider;
+use Wikibase\DataModel\Term\FingerprintProvider;
 use Wikibase\ParserOutputJsConfigBuilder;
-use Wikibase\ReferencedEntitiesFinder;
+use Wikibase\Repo\WikibaseRepo;
 
 /**
  * @covers Wikibase\ParserOutputJsConfigBuilder
@@ -39,173 +27,130 @@ use Wikibase\ReferencedEntitiesFinder;
  * @licence GNU GPL v2+
  * @author Katie Filbert < aude.wiki@gmail.com >
  */
-class ParserOutputJsConfigBuilderTest extends \MediaWikiTestCase {
+class ParserOutputJsConfigBuilderTest extends MediaWikiTestCase {
 
-	/**
-	 * @dataProvider buildProvider
-	 */
-	public function testBuild( Entity $entity, $usedEntities ) {
-		$langCode = 'en';
-		$langCodes = array( 'de', 'en', 'es', 'fr' );
+	public function testBuildConfigItem() {
+		$item = new Item( new ItemId( 'Q5881' ) );
+		$this->addLabels( $item );
+		$mainSnakPropertyId = $this->addStatements( $item );
 
-		$configBuilder = $this->getConfigBuilder( $langCode );
-		$options = $this->getSerializationOptions( $langCode, $langCodes );
+		$configBuilder = new ParserOutputJsConfigBuilder();
+		$configVars = $configBuilder->build( $item );
 
-		$configVars = $configBuilder->build( $entity, $options );
+		$this->assertWbEntityId( 'Q5881', $configVars );
 
-		$this->assertInternalType( 'array', $configVars );
+		$this->assertWbEntity(
+			$this->getSerialization( $item, $mainSnakPropertyId ),
+			$configVars
+		);
 
-		$entityId = $entity->getId()->getSerialization();
-		$this->assertEquals( $entityId, $configVars['wbEntityId'], 'wbEntityId' );
-
-		$usedEntitiesVar = json_decode( $configVars['wbUsedEntities'], true );
-		$this->assertEquals( $usedEntities, $usedEntitiesVar, 'wbUsedEntities' );
-
-		$this->assertSerializationEqualsEntity( $entity, json_decode( $configVars['wbEntity'], true ) );
+		$this->assertSerializationEqualsEntity(
+			$item,
+			json_decode( $configVars['wbEntity'], true )
+		);
 	}
 
-	public function assertSerializationEqualsEntity( $entity, $serialization ) {
-		$serializerFactory = new SerializerFactory();
-		$options = new SerializationOptions();
+	public function testBuildConfigProperty() {
+		$property = new Property( new PropertyId( 'P330' ), null, 'string' );
+		$this->addLabels( $property );
+		$mainSnakPropertyId = $this->addStatements( $property );
 
-		$unserializer = $serializerFactory->newUnserializerForEntity( $entity->getType(), $options );
-		$unserializedEntity = $unserializer->newFromSerialization( $serialization );
+		$configBuilder = new ParserOutputJsConfigBuilder();
+		$configVars = $configBuilder->build( $property );
 
-		$this->assertTrue( $unserializedEntity->equals( $entity ), 'unserialized entity equals entity' );
+		$this->assertWbEntityId( 'P330', $configVars );
+
+		$expectedSerialization = $this->getSerialization( $property, $mainSnakPropertyId );
+		$expectedSerialization['datatype'] = 'string';
+
+		$this->assertWbEntity( $expectedSerialization, $configVars );
+
+		$this->assertSerializationEqualsEntity(
+			$property,
+			json_decode( $configVars['wbEntity'], true )
+		);
 	}
 
-	public function buildProvider() {
-		$entity = $this->getEntity();
+	public function assertWbEntityId( $expectedId, array $configVars ) {
+		$this->assertEquals(
+			$expectedId,
+			$configVars['wbEntityId'],
+			'wbEntityId'
+		);
+	}
 
-		$property = $this->getProperty();
-		$usedEntities = $this->getUsedEntities( $property );
+	public function assertWbEntity( array $expectedSerialization, array $configVars ) {
+		$this->assertEquals(
+			$expectedSerialization,
+			json_decode( $configVars['wbEntity'], true ),
+			'wbEntity'
+		);
+	}
 
+	public function assertSerializationEqualsEntity( EntityDocument $entity, $serialization ) {
+		$deserializer = WikibaseRepo::getDefaultInstance()->getEntityDeserializer();
+		$unserializedEntity = $deserializer->deserialize( $serialization );
+
+		$this->assertTrue(
+			$unserializedEntity->equals( $entity ),
+			'unserialized entity equals entity'
+		);
+	}
+
+	private function addLabels( FingerprintProvider $fingerprintProvider ) {
+		$fingerprintProvider->getFingerprint()->setLabel( 'en', 'Cake' );
+		$fingerprintProvider->getFingerprint()->setLabel( 'de', 'Kuchen' );
+	}
+
+	private function addStatements( StatementListProvider $statementListProvider ) {
+		$propertyId = new PropertyId( 'P794' );
+
+		$statementListProvider->getStatements()->addNewStatement(
+			new PropertyValueSnak( $propertyId, new StringValue( 'kittens!' ) ),
+			null,
+			null,
+			$this->makeGuid( $statementListProvider->getId() )
+		);
+
+		return $propertyId;
+	}
+
+	private function makeGuid( EntityId $entityId ) {
+		return $entityId->getSerialization() . '$muahahaha';
+	}
+
+	private function getSerialization( EntityDocument $entity, PropertyId $propertyId ) {
 		return array(
-			array( $entity, $usedEntities, true )
-		);
-	}
-
-	private function getConfigBuilder( $langCode ) {
-		$configBuilder = new ParserOutputJsConfigBuilder(
-			$this->getMockRepository(),
-			new BasicEntityIdParser(),
-			$this->getEntityTitleLookupMock(),
-			new ReferencedEntitiesFinder(),
-			$langCode
-		);
-
-		return $configBuilder;
-	}
-
-	/**
-	 * @param string $langCode
-	 *
-	 * @return LanguageFallbackChain
-	 */
-	private function getLanguageFallbackChain( $langCode ) {
-		$languageFallbackChainFactory = new LanguageFallbackChainFactory();
-
-		$languageFallbackChain = $languageFallbackChainFactory->newFromLanguage(
-			Language::factory( $langCode )
-		);
-
-		return $languageFallbackChain;
-	}
-
-	private function getSerializationOptions( $langCode, $langCodes ) {
-		$fallbackChain = $this->getLanguageFallbackChain( $langCode );
-		$langCodes = $langCodes + array( $langCode => $fallbackChain );
-
-		$options = new SerializationOptions();
-		$options->setLanguages( $langCodes );
-
-		return $options;
-	}
-
-	private function getEntity() {
-		$item = Item::newFromArray( array() );
-		$itemId = new ItemId( 'Q5881' );
-		$item->setId( $itemId );
-		$item->setLabel( 'en', 'Cake' );
-
-		$snak = new PropertyValueSnak( new PropertyId( 'P794' ), new StringValue( 'a' ) );
-
-		$claim = new Claim( $snak );
-		$claim->setGuid( 'P794$muahahaha' );
-
-		$item->addClaim( $claim );
-
-		return $item;
-	}
-
-	private function getProperty() {
-		$property = Property::newFromArray( array() );
-		$property->setId( new PropertyId( 'P794' ) );
-		$property->setLabel( 'en', 'AwesomeID' );
-		$property->setDataTypeId( 'string' );
-
-		return $property;
-	}
-
-	private function getUsedEntities( Property $property ) {
-		$propertyId = $property->getId()->getSerialization();
-
-		$usedEntities = array(
-			$propertyId => array(
-				'content' => array(
-					'id' => $propertyId,
-					'type' => 'property',
-					'labels' => array(
-						'en' => array(
-							'language' => 'en',
-							'value' => $property->getLabel( 'en' )
-						)
-					),
-					'descriptions' => $property->getDescriptions(),
-					'datatype' => $property->getDataTypeId(),
+			'id' => $entity->getId()->getSerialization(),
+			'type' => $entity->getType(),
+			'labels' => array(
+				'de' => array(
+					'language' => 'de',
+					'value' => 'Kuchen'
 				),
-				'title' => "property:$propertyId"
-			)
+				'en' => array(
+					'language' => 'en',
+					'value' => 'Cake'
+				)
+			),
+			'claims' => array(
+				$propertyId->getSerialization() => array(
+					array(
+						'id' => $this->makeGuid( $entity->getId() ),
+						'mainsnak' => array(
+							'snaktype' => 'value',
+							'property' => $propertyId->getSerialization(),
+							'datavalue' => array(
+								'value' => 'kittens!',
+								'type' => 'string'
+							),
+						),
+						'type' => 'statement',
+						'rank' => 'normal',
+					),
+				),
+			),
 		);
-
-		return $usedEntities;
-	}
-
-	private function getMockRepository() {
-		$mockRepo = new MockRepository();
-
-		$entity = $this->getEntity();
-		$mockRepo->putEntity( $entity );
-
-		$property = $this->getProperty();
-		$mockRepo->putEntity( $property );
-
-		return $mockRepo;
-	}
-
-	/**
-	 * @param EntityId $entityId
-	 *
-	 * @return Title
-	 */
-	public function getTitleForId( EntityId $entityId ) {
-		$name = $entityId->getEntityType() . ':' . $entityId->getPrefixedId();
-		return Title::makeTitle( NS_MAIN, $name );
-	}
-
-	/**
-	 * @return EntityTitleLookup
-	 */
-	private function getEntityTitleLookupMock() {
-		$lookup = $this->getMockBuilder( 'Wikibase\EntityTitleLookup' )
-			->disableOriginalConstructor()
-			->getMock();
-
-		$lookup->expects( $this->any() )
-			->method( 'getTitleForId' )
-			->will( $this->returnCallback( array( $this, 'getTitleForId' ) ) );
-
-		return $lookup;
 	}
 
 }

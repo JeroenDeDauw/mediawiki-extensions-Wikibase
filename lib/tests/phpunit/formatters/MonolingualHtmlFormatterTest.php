@@ -8,25 +8,29 @@ use ValueFormatters\ValueFormatter;
 use Wikibase\Formatters\MonolingualHtmlFormatter;
 
 /**
- * @covers MonolingualHtmlFormatter
+ * @covers Wikibase\Formatters\MonolingualHtmlFormatter
  *
  * @group ValueFormatters
  * @group DataValueExtensions
  * @group WikibaseLib
  * @group Wikibase
+ * @group Database
  *
  * @licence GNU GPL v2+
  * @author Daniel Kinzler
  */
-class MonolingualHtmlFormatterTest extends \PHPUnit_Framework_TestCase {
+class MonolingualHtmlFormatterTest extends \MediaWikiTestCase {
 
 	/**
 	 * @dataProvider monolingualHtmlFormatProvider
-	 *
-	 * @covers MonolingualHtmlFormatter::format
 	 */
 	public function testFormat( $value, $options, $pattern, $not = '' ) {
-		$formatter = new MonolingualHtmlFormatter( $options );
+		$languageNameLookup = $this->getMock( 'Wikibase\Lib\LanguageNameLookup' );
+		$languageNameLookup->expects( $this->any() )
+			->method( 'getName' )
+			->will( $this->returnValue( 'Deutsch' ) );
+
+		$formatter = new MonolingualHtmlFormatter( $options, $languageNameLookup );
 
 		$text = $formatter->format( $value );
 
@@ -45,7 +49,7 @@ class MonolingualHtmlFormatterTest extends \PHPUnit_Framework_TestCase {
 			'formatting' => array(
 				new MonolingualTextValue( 'de', 'Hallo Welt' ),
 				$options,
-				'@^<span lang="de".*?>Hallo Welt<\/span>.*\((German|Deutsch)\).*$@'
+				'@^<span lang="de".*?>Hallo Welt<\/span>.*\Deutsch.*$@'
 			),
 			'html/wikitext escaping' => array(
 				new MonolingualTextValue( 'de', '[[Hallo&Welt]]' ),

@@ -2,15 +2,19 @@
 
 namespace Wikibase\Test;
 
-use InvalidArgumentException;
-use Wikibase\DataModel\Entity\ItemId;
-use Wikibase\EntityContentFactory;
-use Wikibase\Repo\WikibaseRepo;
+use ContentHandler;
+use Title;
+use Wikibase\DataModel\Entity\Entity;
+use Wikibase\DataModel\Entity\EntityRedirect;
 use Wikibase\DataModel\Entity\Item;
+use Wikibase\DataModel\Entity\ItemId;
 use Wikibase\DataModel\Entity\Property;
+use Wikibase\DataModel\Entity\PropertyId;
+use Wikibase\Repo\Content\EntityContentFactory;
+use Wikibase\Repo\WikibaseRepo;
 
 /**
- * @covers Wikibase\EntityContentFactory
+ * @covers Wikibase\Repo\Content\EntityContentFactory
  *
  * @group Wikibase
  * @group WikibaseEntity
@@ -26,6 +30,11 @@ use Wikibase\DataModel\Entity\Property;
  */
 class EntityContentFactoryTest extends \MediaWikiTestCase {
 
+	private function supportsRedirects() {
+		$handler = ContentHandler::getForModelID( CONTENT_MODEL_WIKIBASE_ITEM );
+		return $handler->supportsRedirects();
+	}
+
 	/**
 	 * @dataProvider contentModelsProvider
 	 */
@@ -34,7 +43,10 @@ class EntityContentFactoryTest extends \MediaWikiTestCase {
 			$contentModelIds
 		);
 
-		$this->assertEquals( $contentModelIds, $factory->getEntityContentModels() );
+		$this->assertEquals(
+			array_values( $contentModelIds ),
+			array_values( $factory->getEntityContentModels() )
+		);
 	}
 
 	public function contentModelsProvider() {
@@ -50,8 +62,8 @@ class EntityContentFactoryTest extends \MediaWikiTestCase {
 	public function testIsEntityContentModel() {
 		$factory = $this->newFactory();
 
-		foreach ( $factory->getEntityContentModels() as $type ) {
-			$this->assertTrue( $factory->isEntityContentModel( $type ) );
+		foreach ( $factory->getEntityContentModels() as $model ) {
+			$this->assertTrue( $factory->isEntityContentModel( $model ) );
 		}
 
 		$this->assertFalse( $factory->isEntityContentModel( 'this-does-not-exist' ) );
@@ -71,6 +83,44 @@ class EntityContentFactoryTest extends \MediaWikiTestCase {
 		$this->assertEquals( 'Q42', $title->getText() );
 	}
 
+	public function testGetEntityIdForTitle() {
+		$factory = $this->newFactory();
+
+		$title = Title::makeTitle( $factory->getNamespaceForType( Item::ENTITY_TYPE ), 'Q42' );
+		$title->resetArticleID( 42 );
+
+		$entityId = $factory->getEntityIdForTitle( $title );
+		$this->assertEquals( 'Q42', $entityId->getSerialization() );
+	}
+
+	public function testGetEntityIds() {
+		$factory = $this->newFactory();
+
+		/** @var Title[] $titles */
+		$titles = array(
+			 0 => Title::makeTitle( $factory->getNamespaceForType( Item::ENTITY_TYPE ), 'Q17' ),
+			10 => Title::makeTitle( $factory->getNamespaceForType( Item::ENTITY_TYPE ), 'Q42' ),
+			20 => Title::makeTitle( NS_HELP, 'Q42' ),
+			30 => Title::makeTitle( $factory->getNamespaceForType( Item::ENTITY_TYPE ), 'XXX' ),
+			40 => Title::makeTitle( $factory->getNamespaceForType( Item::ENTITY_TYPE ), 'Q144' ),
+		);
+
+		foreach ( $titles as $id => $title ) {
+			$title->resetArticleID( $id );
+		}
+
+		$entityIds = $factory->getEntityIds( array_values( $titles ) );
+
+		$this->assertArrayNotHasKey( 0, $entityIds );
+		$this->assertArrayHasKey( 10, $entityIds );
+		$this->assertArrayNotHasKey( 20, $entityIds );
+		$this->assertArrayNotHasKey( 30, $entityIds );
+		$this->assertArrayHasKey( 40, $entityIds );
+
+		$this->assertEquals( 'Q42', $entityIds[10]->getSerialization() );
+		$this->assertEquals( 'Q144', $entityIds[40]->getSerialization() );
+	}
+
 	public function testGetNamespaceForType() {
 		$factory = $this->newFactory();
 		$id = new ItemId( 'Q42' );
@@ -80,40 +130,18 @@ class EntityContentFactoryTest extends \MediaWikiTestCase {
 		$this->assertGreaterThanOrEqual( 0, $ns, 'namespace' );
 	}
 
-	public function entityTypesProvider() {
-		$argLists = array();
+	public function testGetContentHandlerForType() {
+		$factory = $this->newFactory();
 
-		$argLists[] = array( Item::ENTITY_TYPE );
-		$argLists[] = array( Property::ENTITY_TYPE );
+		foreach ( $factory->getEntityTypes() as $type ) {
+			$model = $factory->getContentModelForType( $type );
+			$handler = $factory->getContentHandlerForType( $type );
 
-		return $argLists;
-	}
+			$this->assertEquals( $model, $handler->getModelId() );
+			$this->assertEquals( $type, $handler->getEntityType() );
+		}
 
-	public function invalidEntityTypesProvider() {
-		$argLists = array();
-
-		$argLists[] = array( 42 );
-		$argLists[] = array( 'foo' );
-
-		return $argLists;
-	}
-
-	/**
-	 * @dataProvider entityTypesProvider
-	 */
-	public function testNewFromType( $type ) {
-		$entityContentFactory = WikibaseRepo::getDefaultInstance()->getEntityContentFactory();
-		$entityContent = $entityContentFactory->newFromType( $type );
-		$this->assertEquals( $type, $entityContent->getEntity()->getType() );
-	}
-
-	/**
-	 * @dataProvider invalidEntityTypesProvider
-	 * @expectedException InvalidArgumentException
-	 */
-	public function testInvalidNewFromType( $type ) {
-		$entityContentFactory = WikibaseRepo::getDefaultInstance()->getEntityContentFactory();
-		$entityContent = $entityContentFactory->newFromType( $type );
+		$this->assertFalse( $factory->isEntityContentModel( 'this-does-not-exist' ) );
 	}
 
 	public function provideGetPermissionStatusForEntity() {
@@ -189,10 +217,10 @@ class EntityContentFactoryTest extends \MediaWikiTestCase {
 	/**
 	 * @dataProvider provideGetPermissionStatusForEntity
 	 */
-	public function testGetPermissionStatusForEntity( $action, $permissions, $id, $expectations ) {
+	public function testGetPermissionStatusForEntity( $action, array $permissions, $id, array $expectations ) {
 		global $wgUser;
 
-		$entity = Item::newEmpty();
+		$entity = new Item();
 
 		if ( $id ) {
 			// "exists"
@@ -228,4 +256,75 @@ class EntityContentFactoryTest extends \MediaWikiTestCase {
 			$this->assertEquals( $expectations['getPermissionStatusForEntityId'], $status->isOK() );
 		}
 	}
+
+	public function newFromEntityProvider() {
+		$item = new Item();
+		$property = Property::newFromType( 'string' );
+
+		return array(
+			'item' => array( $item ),
+			'property' => array( $property ),
+		);
+	}
+
+	/**
+	 * @dataProvider newFromEntityProvider
+	 * @param Entity $entity
+	 */
+	public function testNewFromEntity( Entity $entity ) {
+		$factory = $this->newFactory();
+		$content = $factory->newFromEntity( $entity );
+
+		$this->assertFalse( $content->isRedirect() );
+		$this->assertSame( $entity, $content->getEntity() );
+	}
+
+	public function newFromRedirectProvider() {
+		$q1 = new ItemId( 'Q1' );
+		$q2 = new ItemId( 'Q2' );
+
+		return array(
+			'item' => array( new EntityRedirect( $q1, $q2 ) ),
+		);
+	}
+
+	/**
+	 * @dataProvider newFromRedirectProvider
+	 * @param EntityRedirect $redirect
+	 */
+	public function testNewFromRedirect( EntityRedirect $redirect ) {
+		if ( !$this->supportsRedirects() ) {
+			// As of 2014-07-03, redirects are still experimental.
+			// So do a feature check before trying to test redirects.
+			$this->markTestSkipped( 'Redirects not yet supported.' );
+		}
+
+		$factory = $this->newFactory();
+		$content = $factory->newFromRedirect( $redirect );
+
+		$this->assertTrue( $content->isRedirect() );
+		$this->assertSame( $redirect, $content->getEntityRedirect() );
+		$this->assertNotNull( $content->getRedirectTarget() );
+	}
+
+	public function newFromRedirectProvider_unsupported() {
+		$p1 = new PropertyId( 'P1' );
+		$p2 = new PropertyId( 'P2' );
+
+		return array(
+			'property' => array( new EntityRedirect( $p1, $p2 ) ),
+		);
+	}
+
+	/**
+	 * @dataProvider newFromRedirectProvider_unsupported
+	 * @param EntityRedirect $redirect
+	 */
+	public function testNewFromRedirect_unsupported( EntityRedirect $redirect ) {
+		$factory = $this->newFactory();
+		$content = $factory->newFromRedirect( $redirect );
+
+		$this->assertNull( $content );
+	}
+
 }

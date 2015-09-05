@@ -2,11 +2,15 @@
 
 namespace Wikibase\Repo\Specials;
 
+use HTMLForm;
 use Html;
 use Language;
-use Wikibase\Item;
 use Wikibase\ItemDisambiguation;
+use Wikibase\Lib\LanguageNameLookup;
+use Wikibase\Repo\Interactors\TermIndexSearchInteractor;
+use Wikibase\Repo\Interactors\TermSearchResult;
 use Wikibase\Repo\WikibaseRepo;
+use Wikibase\TermIndexEntry;
 
 /**
  * Enables accessing items by providing the label of the item and the language of the label.
@@ -16,172 +20,220 @@ use Wikibase\Repo\WikibaseRepo;
  * @licence GNU GPL v2+
  * @author John Erling Blad < jeblad@gmail.com >
  * @author Jeroen De Dauw < jeroendedauw@gmail.com >
+ * @author Daniel Kinzler
+ * @author Adam Shorland
  */
-class SpecialItemDisambiguation extends SpecialItemResolver {
+class SpecialItemDisambiguation extends SpecialWikibasePage {
 
 	/**
-	 * Constructor.
-	 *
-	 * @see SpecialItemResolver::__construct
+	 * @var ItemDisambiguation DO NOT ACCESS DIRECTLY use this->getItemDisambiguation
+	 */
+	private $itemDisambiguation;
+
+	/**
+	 * @var TermIndexSearchInteractor|null DO NOT ACCESS DIRECTLY use this->getSearchInteractor
+	 */
+	private $searchInteractor = null;
+
+	/**
+	 * @var int
+	 */
+	private $limit;
+
+	/**
+	 * @see SpecialWikibasePage::__construct
 	 *
 	 * @since 0.1
 	 */
 	public function __construct() {
-		// args $name, $restriction, $listed
 		parent::__construct( 'ItemDisambiguation', '', true );
+		//@todo: make this configurable
+		$this->limit = 100;
 	}
 
 	/**
-	 * @see SpecialItemResolver::execute
+	 * Set service objects to use. Unit tests may call this to substitute mock
+	 * services.
+	 *
+	 * @param ItemDisambiguation $itemDisambiguation
+	 * @param TermIndexSearchInteractor|null $searchInteractor
+	 */
+	public function initServices(
+		ItemDisambiguation $itemDisambiguation,
+		TermIndexSearchInteractor $searchInteractor
+	) {
+		$this->itemDisambiguation = $itemDisambiguation;
+		$this->searchInteractor = $searchInteractor;
+	}
+
+	/**
+	 * @param string $displayLanguageCode Only used if the service does not already exist
+	 *
+	 * @return TermIndexSearchInteractor
+	 */
+	private function getSearchInteractor( $displayLanguageCode ) {
+		if ( $this->searchInteractor === null ) {
+			$interactor = WikibaseRepo::getDefaultInstance()->newTermSearchInteractor( $displayLanguageCode );
+			$this->searchInteractor = $interactor;
+		}
+		return $this->searchInteractor;
+	}
+
+	/**
+	 * @return ItemDisambiguation
+	 */
+	private function getItemDisambiguation() {
+		if ( $this->itemDisambiguation === null ) {
+			$languageNameLookup = new LanguageNameLookup();
+			$this->itemDisambiguation = new ItemDisambiguation(
+				WikibaseRepo::getDefaultInstance()->getEntityTitleLookup(),
+				$languageNameLookup,
+				$this->getLanguage()->getCode()
+			);
+		}
+		return $this->itemDisambiguation;
+	}
+
+	/**
+	 * @see SpecialWikibasePage::execute
 	 *
 	 * @since 0.1
+	 *
+	 * @param string|null $subPage
 	 */
 	public function execute( $subPage ) {
-		if ( !parent::execute( $subPage ) ) {
-			return false;
-		}
+		parent::execute( $subPage );
 
 		// Setup
 		$request = $this->getRequest();
 		$parts = $subPage === '' ? array() : explode( '/', $subPage, 2 );
-		$language = $request->getVal( 'language', isset( $parts[0] ) ? $parts[0] : '' );
-
-		if ( $language === '' ) {
-			$language = $this->getLanguage()->getCode();
+		$languageCode = $request->getVal( 'language', isset( $parts[0] ) ? $parts[0] : '' );
+		if ( $languageCode === '' ) {
+			$languageCode = $this->getLanguage()->getCode();
 		}
 
 		if ( $request->getCheck( 'label' ) ) {
 			$label = $request->getText( 'label' );
-		}
-		else {
+		} else {
 			$label = isset( $parts[1] ) ? str_replace( '_', ' ', $parts[1] ) : '';
 		}
 
-		$this->switchForm( $language, $label );
+		$this->switchForm( $languageCode, $label );
 
 		// Display the result set
-		if ( isset( $language ) && isset( $label ) && $label !== '' ) {
-			// TODO: should search over aliases as well, not just labels
-			$itemContents = WikibaseRepo::getDefaultInstance()->getEntityContentFactory()->getFromLabel(
-				$language,
+		if ( isset( $languageCode ) && isset( $label ) && $label !== '' ) {
+			$searchInteractor = $this->getSearchInteractor( $this->getLanguage()->getCode() );
+			$searchInteractor->setLimit( $this->limit );
+			$searchInteractor->setIsCaseSensitive( false );
+			$searchInteractor->setIsPrefixSearch( false );
+			$searchInteractor->setUseLanguageFallback( true );
+
+			$searchResults = $searchInteractor->searchForEntities(
 				$label,
-				null,
-				Item::ENTITY_TYPE,
-				true
+				$languageCode,
+				'item',
+				array( TermIndexEntry::TYPE_LABEL, TermIndexEntry::TYPE_ALIAS )
 			);
 
-			if ( 0 < count( $itemContents ) ) {
+			if ( 0 < count( $searchResults ) ) {
 				$this->getOutput()->setPageTitle( $this->msg( 'wikibase-disambiguation-title', $label )->escaped() );
-				$this->displayDisambiguationPage( $itemContents, $language );
+				$this->displayDisambiguationPage( $searchResults );
 			} else {
-				// No results found
-				if ( ( Language::isValidBuiltInCode( $language ) && ( Language::fetchLanguageName( $language ) !== "" ) ) ) {
-					// No valid language code
-					$this->getOutput()->addWikiMsg( 'wikibase-itemdisambiguation-nothing-found' );
-
-					if ( $language === $this->getLanguage()->getCode() ) {
-						$this->getOutput()->addWikiMsg(
-							'wikibase-itemdisambiguation-search',
-							urlencode( $label )
-						);
-						$this->getOutput()->addWikiMsg(
-							'wikibase-itemdisambiguation-create',
-							urlencode( $label )
-						);
-					}
-				} else {
-					$this->getOutput()->addWikiMsg( 'wikibase-itemdisambiguation-invalid-langcode' );
-				}
+				$this->showNothingFound( $languageCode, $label );
 			}
 		}
+	}
 
-		return true;
+	/**
+	 * Shows information, assuming no results were found.
+	 *
+	 * @param string $languageCode
+	 * @param string $label
+	 */
+	private function showNothingFound( $languageCode, $label ) {
+		// No results found
+		if ( ( Language::isValidBuiltInCode( $languageCode ) && ( Language::fetchLanguageName( $languageCode ) !== "" ) ) ) {
+			$this->getOutput()->addWikiMsg( 'wikibase-itemdisambiguation-nothing-found' );
+
+			if ( $languageCode === $this->getLanguage()->getCode() ) {
+				$searchLink = $this->getTitleFor( 'Search' );
+				$this->getOutput()->addWikiMsg(
+					'wikibase-itemdisambiguation-search',
+					$searchLink->getFullURL( array( 'search' => $label ) )
+				);
+				$createLink = $this->getTitleFor( 'NewItem' );
+				$this->getOutput()->addWikiMsg(
+					'wikibase-itemdisambiguation-create',
+					$createLink->getFullURL( array( 'label' => $label ) )
+				);
+			}
+		} else {
+			// No valid language code
+			$this->getOutput()->addWikiMsg( 'wikibase-itemdisambiguation-invalid-langcode' );
+		}
 	}
 
 	/**
 	 * Display disambiguation page.
 	 *
-	 * @since 0.1
-	 *
-	 * @param array $items
-	 * @param string $langCode
+	 * @param TermSearchResult[] $searchResults
 	 */
-	protected function displayDisambiguationPage( array /* of ItemContent */ $items, $langCode ) {
-		$disambiguationList = new ItemDisambiguation( $items, $langCode, $this->getContext() );
-		$disambiguationList->display();
+	private function displayDisambiguationPage( array $searchResults ) {
+		$itemDisambiguation = $this->getItemDisambiguation();
+		$html = $itemDisambiguation->getHTML( $searchResults );
+		$this->getOutput()->addHTML( $html );
 	}
 
 	/**
 	 * Output a form to allow searching for labels
 	 *
-	 * @since 0.1
-	 *
-	 * @param string|null $langCode
+	 * @param string|null $languageCode
 	 * @param string|null $label
 	 */
-	protected function switchForm( $langCode, $label ) {
-		$this->getOutput()->addModules( 'wikibase.special.itemDisambiguation' );
+	private function switchForm( $languageCode, $label ) {
+		$this->getOutput()->addModules( 'wikibase.special.languageSuggester' );
 
-		$this->getOutput()->addHTML(
-			Html::openElement(
-				'form',
-				array(
-					'method' => 'get',
-					'action' => $this->getPageTitle()->getFullUrl(),
-					'name' => 'itemdisambiguation',
-					'id' => 'wb-itemdisambiguation-form1'
-				)
+		$formDescriptor = array(
+			'language' => array(
+				'name' => 'language',
+				'default' => $languageCode ?: '',
+				'type' => 'text',
+				'id' => 'wb-itemdisambiguation-languagename',
+				'size' => 12,
+				'cssclass' => 'wb-input-text wb-language-suggester',
+				'label-message' => 'wikibase-itemdisambiguation-lookup-language'
+			),
+			'label' => array(
+				'name' => 'label',
+				'default' => $label ?: '',
+				'type' => 'text',
+				'id' => 'labelname',
+				'size' => 36,
+				'cssclass' => 'wb-input-text',
+				'autofocus',
+				'label-message' => 'wikibase-itemdisambiguation-lookup-label'
+			),
+			'submit' => array(
+				'name' => 'submit',
+				'default' => $this->msg( 'wikibase-itemdisambiguation-submit' )->text(),
+				'type' => 'submit',
+				'id' => 'wb-itembytitle-submit',
+				'cssclass' => 'wb-input-button'
 			)
-			. Html::openElement( 'fieldset' )
-			. Html::element(
-				'legend',
-				array(),
-				$this->msg( 'wikibase-itemdisambiguation-lookup-fieldset' )->text()
-			)
-			. Html::element(
-				'label',
-				array( 'for' => 'wb-itemdisambiguation-languagename' ),
-				$this->msg( 'wikibase-itemdisambiguation-lookup-language' )->text()
-			)
-			. Html::input(
-				'language',
-				$langCode ? $langCode : '',
-				'text',
-				array(
-					'id' => 'wb-itemdisambiguation-languagename',
-					'size' => 12,
-					'class' => 'wb-input-text'
-				)
-			)
-			. ' '
-			. Html::element(
-				'label',
-				array( 'for' => 'labelname' ),
-				$this->msg( 'wikibase-itemdisambiguation-lookup-label' )->text()
-			)
-			. Html::input(
-				'label',
-				$label ? $label : '',
-				'text',
-				array(
-					'id' => 'labelname',
-					'size' => 36,
-					'class' => 'wb-input-text',
-					'autofocus'
-				)
-			)
-			. Html::input(
-				'submit',
-				$this->msg( 'wikibase-itemdisambiguation-submit' )->text(),
-				'submit',
-				array(
-					'id' => 'wb-itembytitle-submit',
-					'class' => 'wb-input-button'
-				)
-			)
-			. Html::closeElement( 'fieldset' )
-			. Html::closeElement( 'form' )
 		);
+
+		HTMLForm::factory( 'inline', $formDescriptor, $this->getContext() )
+			->setId( 'wb-itemdisambiguation-form1' )
+			->setMethod( 'get' )
+			->setFooterText( Html::element(
+				'p',
+				array(),
+				$this->msg( 'wikibase-itemdisambiguation-form-hints' )->numParams( $this->limit )->text()
+			) )
+			->setWrapperLegendMsg( 'wikibase-itemdisambiguation-lookup-fieldset' )
+			->suppressDefaultSubmit()
+			->setSubmitCallback( function () {// no-op
+			} )->show();
 	}
 
 }

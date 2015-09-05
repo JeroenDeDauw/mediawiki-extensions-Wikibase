@@ -1,15 +1,13 @@
 <?php
 
-namespace Wikibase\Validators;
+namespace Wikibase\Repo\Validators;
 
 use InvalidArgumentException;
 use ValueValidators\ValueValidator;
-use Wikibase\DataModel\Entity\EntityIdParser;
 use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\Property;
+use Wikibase\DataModel\Entity\EntityIdParser;
 use Wikibase\LabelDescriptionDuplicateDetector;
-use Wikibase\SiteLinkLookup;
-
 
 /**
  * Provides validators for terms (like the maximum length of labels, etc).
@@ -29,7 +27,7 @@ class TermValidatorFactory {
 	/**
 	 * @var string[]
 	 */
-	private $languages;
+	private $languageCodes;
 
 	/**
 	 * @var EntityIdParser
@@ -37,30 +35,32 @@ class TermValidatorFactory {
 	private $idParser;
 
 	/**
-	 * @param int $maxLength The maximum length of terms.
-	 * @param string[] $languages A list of valid language codes
-	 * @param EntityIdParser $idParser
-	 * @param LabelDescriptionDuplicateDetector $termDuplicateDetector
-	 * @param SiteLinkLookup $siteLinkLookup
-	 *
-	 * @throws \InvalidArgumentException
+	 * @var LabelDescriptionDuplicateDetector
 	 */
-	function __construct(
+	private $duplicateDetector;
+
+	/**
+	 * @param int $maxLength The maximum length of terms.
+	 * @param string[] $languageCodes A list of valid language codes
+	 * @param EntityIdParser $idParser
+	 * @param LabelDescriptionDuplicateDetector $duplicateDetector
+	 *
+	 * @throws InvalidArgumentException
+	 */
+	public function __construct(
 		$maxLength,
-		array $languages,
+		array $languageCodes,
 		EntityIdParser $idParser,
-		LabelDescriptionDuplicateDetector $termDuplicateDetector,
-		SiteLinkLookup $siteLinkLookup
+		LabelDescriptionDuplicateDetector $duplicateDetector
 	) {
 		if ( !is_int( $maxLength ) || $maxLength <= 0 ) {
-			throw new \InvalidArgumentException( '$maxLength must be a positive integer.' );
+			throw new InvalidArgumentException( '$maxLength must be a positive integer.' );
 		}
 
 		$this->maxLength = $maxLength;
-		$this->languages = $languages;
+		$this->languageCodes = $languageCodes;
 		$this->idParser = $idParser;
-		$this->termDuplicateDetector = $termDuplicateDetector;
-		$this->siteLinkLookup = $siteLinkLookup;
+		$this->duplicateDetector = $duplicateDetector;
 	}
 
 	/**
@@ -73,7 +73,6 @@ class TermValidatorFactory {
 	 *
 	 * @param string $entityType
 	 *
-	 * @throws InvalidArgumentException
 	 * @return FingerprintValidator
 	 */
 	public function getFingerprintValidator( $entityType ) {
@@ -81,7 +80,7 @@ class TermValidatorFactory {
 
 		switch ( $entityType ) {
 			case Item::ENTITY_TYPE:
-				return new LabelDescriptionUniquenessValidator( $this->termDuplicateDetector );
+				return new LabelDescriptionUniquenessValidator( $this->duplicateDetector );
 
 			default:
 				return new CompositeFingerprintValidator( array() );
@@ -105,11 +104,9 @@ class TermValidatorFactory {
 	}
 
 	/**
-	 * @param string $entityType
-	 *
 	 * @return ValueValidator
 	 */
-	public function getDescriptionValidator( $entityType ) {
+	public function getDescriptionValidator() {
 		$validators = $this->getCommonTermValidators();
 
 		return new CompositeValidator( $validators, true );
@@ -144,7 +141,7 @@ class TermValidatorFactory {
 	public function getLanguageValidator() {
 		$validators = array();
 		$validators[] = new TypeValidator( 'string' );
-		$validators[] = new MembershipValidator( $this->languages, 'not-a-language' );
+		$validators[] = new MembershipValidator( $this->languageCodes, 'not-a-language' );
 
 		$validator = new CompositeValidator( $validators, true ); //Note: each validator is fatal
 		return $validator;

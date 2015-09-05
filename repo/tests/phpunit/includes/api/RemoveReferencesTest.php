@@ -1,22 +1,22 @@
 <?php
 
-namespace Wikibase\Test\Api;
+namespace Wikibase\Test\Repo\Api;
 
 use DataValues\StringValue;
 use UsageException;
 use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Reference;
-use Wikibase\DataModel\Snak\SnakList;
-use Wikibase\Lib\ClaimGuidGenerator;
+use Wikibase\DataModel\Services\Statement\GuidGenerator;
 use Wikibase\DataModel\Snak\PropertyNoValueSnak;
 use Wikibase\DataModel\Snak\PropertySomeValueSnak;
 use Wikibase\DataModel\Snak\PropertyValueSnak;
 use Wikibase\DataModel\Snak\Snak;
-use Wikibase\DataModel\Claim\Statement;
+use Wikibase\DataModel\Snak\SnakList;
+use Wikibase\DataModel\Statement\Statement;
 use Wikibase\Repo\WikibaseRepo;
 
 /**
- * @covers Wikibase\Api\RemoveReferences
+ * @covers Wikibase\Repo\Api\RemoveReferences
  *
  * @group API
  * @group Database
@@ -73,18 +73,16 @@ class RemoveReferencesTest extends WikibaseApiTestCase {
 
 	public function testRequests() {
 		foreach ( $this->statementProvider() as $statement ) {
-			$item = Item::newEmpty();
+			$item = new Item();
 
-			wfSuppressWarnings(); // We are referencing properties that don't exist. Not relevant here.
 			$store = WikibaseRepo::getDefaultInstance()->getEntityStore();
 			$store->saveEntity( $item, '', $GLOBALS['wgUser'], EDIT_NEW );
 
-			$guidGenerator = new ClaimGuidGenerator();
+			$guidGenerator = new GuidGenerator();
 			$statement->setGuid( $guidGenerator->newGuid( $item->getId() ) );
-			$item->addClaim( $statement );
+			$item->getStatements()->addStatement( $statement );
 
 			$store->saveEntity( $item, '', $GLOBALS['wgUser'], EDIT_UPDATE );
-			wfRestoreWarnings();
 
 			$references = $statement->getReferences();
 
@@ -103,8 +101,7 @@ class RemoveReferencesTest extends WikibaseApiTestCase {
 					array( '~=[,,_,,]:3' ),
 					'no-such-reference'
 				);
-			}
-			else {
+			} else {
 				$this->makeValidRequest(
 					$statement->getGuid(),
 					$hashes
@@ -159,14 +156,14 @@ class RemoveReferencesTest extends WikibaseApiTestCase {
 
 		try {
 			$this->doApiRequestWithToken( $params );
-			$this->fail( 'Invalid claim guid did not throw an error' );
-		} catch ( UsageException $e ) {
-			$this->assertEquals( 'invalid-guid', $e->getCodeString(),  'Invalid claim guid raised correct error' );
+			$this->fail( 'Invalid guid did not throw an error' );
+		} catch ( UsageException $ex ) {
+			$this->assertEquals( 'invalid-guid', $ex->getCodeString(), 'Invalid guid raised correct error' );
 		}
 	}
 
 	public function invalidGuidProvider() {
-		$snak = new PropertyValueSnak( 722, new \DataValues\StringValue( 'abc') );
+		$snak = new PropertyValueSnak( 722, new StringValue( 'abc' ) );
 		$hash = $snak->getHash();
 
 		return array(

@@ -4,10 +4,16 @@ namespace Wikibase;
 
 use DatabaseBase;
 use DBAccessBase;
+use InvalidArgumentException;
 use Iterator;
 use MWException;
-use ResultWrapper;
-use Wikibase\DataModel\Entity\BasicEntityIdParser;
+use Wikibase\DataModel\Entity\EntityDocument;
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Entity\Item;
+use Wikibase\DataModel\Term\AliasGroup;
+use Wikibase\DataModel\Term\Fingerprint;
+use Wikibase\DataModel\Term\FingerprintProvider;
+use Wikibase\Lib\Store\LabelConflictFinder;
 
 /**
  * Term lookup cache.
@@ -20,38 +26,38 @@ use Wikibase\DataModel\Entity\BasicEntityIdParser;
  * @author Daniel Kinzler
  * @author Denny
  */
-class TermSqlIndex extends DBAccessBase implements TermIndex {
+class TermSqlIndex extends DBAccessBase implements TermIndex, LabelConflictFinder {
 
 	/**
-	 * @since 0.1
-	 *
 	 * @var string
 	 */
-	protected $tableName;
+	private $tableName;
 
 	/**
 	 * @var StringNormalizer
 	 */
-	protected $stringNormalizer;
+	private $stringNormalizer;
+
+	/**
+	 * @var int
+	 */
+	private $maxConflicts = 500;
 
 	/**
 	 * Maps table fields to TermIndex interface field names.
 	 *
-	 * @since 0.2
-	 *
 	 * @var array
 	 */
-	protected $termFieldMap = array(
+	private $termFieldMap = array(
 		'term_entity_type' => 'entityType',
 		'term_type' => 'termType',
 		'term_language' => 'termLanguage',
 		'term_text' => 'termText',
+		'term_weight' => 'termWeight',
 		'term_entity_id' => 'entityId',
 	);
 
 	/**
-	 * Constructor.
-	 *
 	 * @since    0.4
 	 *
 	 * @param StringNormalizer $stringNormalizer
@@ -76,27 +82,24 @@ class TermSqlIndex extends DBAccessBase implements TermIndex {
 	}
 
 	/**
-	 * @see TermCache::saveTermsOfEntity
+	 * @see TermIndex::saveTermsOfEntity
 	 *
 	 * @since 0.1
 	 *
-	 * @param Entity $entity
+	 * @param EntityDocument $entity
 	 *
-	 * @return boolean Success indicator
+	 * @return bool Success indicator
 	 */
-	public function saveTermsOfEntity( Entity $entity ) {
-		wfProfileIn( __METHOD__ );
-
+	public function saveTermsOfEntity( EntityDocument $entity ) {
 		//First check whether there's anything to update
 		$newTerms = $this->getEntityTerms( $entity );
 		$oldTerms = $this->getTermsOfEntity( $entity->getId() );
 
-		$termsToInsert = array_udiff( $newTerms, $oldTerms, 'Wikibase\Term::compare' );
-		$termsToDelete = array_udiff( $oldTerms, $newTerms, 'Wikibase\Term::compare' );
+		$termsToInsert = array_udiff( $newTerms, $oldTerms, 'Wikibase\TermIndexEntry::compare' );
+		$termsToDelete = array_udiff( $oldTerms, $newTerms, 'Wikibase\TermIndexEntry::compare' );
 
 		if ( !$termsToInsert && !$termsToDelete ) {
-			wfDebugLog( __CLASS__, __FUNCTION__ . ": terms did not change, returning." );
-			wfProfileOut( __METHOD__ );
+			wfDebugLog( __CLASS__, __FUNCTION__ . ': terms did not change, returning.' );
 			return true;
 		}
 
@@ -104,17 +107,16 @@ class TermSqlIndex extends DBAccessBase implements TermIndex {
 		$dbw = $this->getConnection( DB_MASTER );
 
 		if ( $ok && $termsToDelete ) {
-			wfDebugLog( __CLASS__, __FUNCTION__ . ": " . count( $termsToDelete ) . " terms to delete." );
-			$ok = $dbw->deadlockLoop( array( $this, 'deleteTermsInternal' ), $entity, $termsToDelete, $dbw );
+			wfDebugLog( __CLASS__, __FUNCTION__ . ': ' . count( $termsToDelete ) . ' terms to delete.' );
+			$ok = $dbw->deadlockLoop( array( $this, 'deleteTermsInternal' ), $entity->getId(), $termsToDelete, $dbw );
 		}
 
 		if ( $ok && $termsToInsert ) {
-			wfDebugLog( __CLASS__, __FUNCTION__ . ": " . count( $termsToInsert ) . " terms to insert." );
+			wfDebugLog( __CLASS__, __FUNCTION__ . ': ' . count( $termsToInsert ) . ' terms to insert.' );
 			$ok = $dbw->deadlockLoop( array( $this, 'insertTermsInternal' ), $entity, $termsToInsert, $dbw );
 		}
 
 		$this->releaseConnection( $dbw );
-		wfProfileOut( __METHOD__ );
 
 		return $ok;
 	}
@@ -127,26 +129,20 @@ class TermSqlIndex extends DBAccessBase implements TermIndex {
 	 *
 	 * @since 0.5
 	 *
-	 * @param Entity $entity
-	 * @param Term[] $terms
+	 * @param EntityDocument $entity
+	 * @param TermIndexEntry[] $terms
 	 * @param DatabaseBase $dbw
 	 *
-	 * @return boolean Success indicator
+	 * @return bool Success indicator
 	 */
-	public function insertTermsInternal( Entity $entity, $terms, DatabaseBase $dbw ) {
-		wfProfileIn( __METHOD__ );
-
+	public function insertTermsInternal( EntityDocument $entity, $terms, DatabaseBase $dbw ) {
 		$entityIdentifiers = array(
+			// FIXME: this will fail for IDs that do not have a numeric form
 			'term_entity_id' => $entity->getId()->getNumericId(),
 			'term_entity_type' => $entity->getType()
 		);
 
-		wfDebugLog( __CLASS__, __FUNCTION__ . ": inserting terms for " . $entity->getId()->getPrefixedId() );
-
-		$weightField = array();
-		if ( $this->supportsWeight() ) {
-			$weightField = array( 'term_weight'  => $this->getWeight( $entity ) );
-		}
+		wfDebugLog( __CLASS__, __FUNCTION__ . ': inserting terms for ' . $entity->getId()->getSerialization() );
 
 		$success = true;
 		foreach ( $terms as $term ) {
@@ -155,7 +151,7 @@ class TermSqlIndex extends DBAccessBase implements TermIndex {
 				array_merge(
 					$this->getTermFields( $term ),
 					$entityIdentifiers,
-					$weightField
+					array( 'term_weight'  => $this->getWeight( $entity ) )
 				),
 				__METHOD__,
 				array( 'IGNORE' )
@@ -166,48 +162,72 @@ class TermSqlIndex extends DBAccessBase implements TermIndex {
 			}
 		}
 
-		wfProfileOut( __METHOD__ );
-
 		return $success;
 	}
 
 	/**
-	 * TODO: this method belongs in Entity itself. This change can only be made once
-	 * there is a sane Term object in DataModel itself though.
+	 * @param EntityDocument $entity
 	 *
-	 * @param Entity $entity
-	 *
-	 * @return Term[]
+	 * @return TermIndexEntry[]
 	 */
-	public function getEntityTerms( Entity $entity ) {
+	public function getEntityTerms( EntityDocument $entity ) {
+		// FIXME: OCP violation. No support for new types of entities can be registered
+
+		if ( $entity instanceof FingerprintProvider ) {
+			$fingerprint = $entity->getFingerprint();
+
+			/** @var EntityDocument $entity */
+			$extraFields = array(
+				'entityType' => $entity->getType(),
+			);
+
+			$entityId = $entity->getId();
+			if ( $entityId !== null ) {
+				$extraFields['entityId'] = $entityId->getNumericId();
+			}
+
+			return $this->getFingerprintTerms( $fingerprint, $extraFields );
+		}
+
+		return array();
+	}
+
+	/**
+	 * @param Fingerprint $fingerprint
+	 * @param array $extraFields
+	 *
+	 * @return TermIndexEntry[]
+	 */
+	private function getFingerprintTerms( Fingerprint $fingerprint, array $extraFields = array() ) {
 		$terms = array();
 
-		foreach ( $entity->getDescriptions() as $languageCode => $description ) {
-			$term = new Term();
+		foreach ( $fingerprint->getDescriptions()->toTextArray() as $languageCode => $description ) {
+			$term = new TermIndexEntry( $extraFields );
 
 			$term->setLanguage( $languageCode );
-			$term->setType( Term::TYPE_DESCRIPTION );
+			$term->setType( TermIndexEntry::TYPE_DESCRIPTION );
 			$term->setText( $description );
 
 			$terms[] = $term;
 		}
 
-		foreach ( $entity->getLabels() as $languageCode => $label ) {
-			$term = new Term();
+		foreach ( $fingerprint->getLabels()->toTextArray() as $languageCode => $label ) {
+			$term = new TermIndexEntry( $extraFields );
 
 			$term->setLanguage( $languageCode );
-			$term->setType( Term::TYPE_LABEL );
+			$term->setType( TermIndexEntry::TYPE_LABEL );
 			$term->setText( $label );
 
 			$terms[] = $term;
 		}
 
-		foreach ( $entity->getAllAliases() as $languageCode => $aliases ) {
-			foreach ( $aliases as $alias ) {
-				$term = new Term();
+		/** @var AliasGroup $aliasGroup */
+		foreach ( $fingerprint->getAliasGroups() as $aliasGroup ) {
+			foreach ( $aliasGroup->getAliases() as $alias ) {
+				$term = new TermIndexEntry( $extraFields );
 
-				$term->setLanguage( $languageCode );
-				$term->setType( Term::TYPE_ALIAS );
+				$term->setLanguage( $aliasGroup->getLanguageCode() );
+				$term->setType( TermIndexEntry::TYPE_ALIAS );
 				$term->setText( $alias );
 
 				$terms[] = $term;
@@ -217,7 +237,6 @@ class TermSqlIndex extends DBAccessBase implements TermIndex {
 		return $terms;
 	}
 
-
 	/**
 	 * Internal callback for deleting a list of terms.
 	 *
@@ -226,26 +245,25 @@ class TermSqlIndex extends DBAccessBase implements TermIndex {
 	 *
 	 * @since 0.5
 	 *
-	 * @param Entity $entity
-	 * @param Term[] $terms
+	 * @param EntityId $entityId
+	 * @param TermIndexEntry[] $terms
 	 * @param DatabaseBase $dbw
 	 *
-	 * @return boolean Success indicator
+	 * @return bool Success indicator
 	 */
-	public function deleteTermsInternal( Entity $entity, $terms, DatabaseBase $dbw ) {
-		wfProfileIn( __METHOD__ );
-
+	public function deleteTermsInternal( EntityId $entityId, $terms, DatabaseBase $dbw ) {
 		//TODO: Make getTermsOfEntity() collect term_row_id values, so we can use them here.
 		//      That would allow us to do the deletion in a single query, based on a set of ids.
 
 		$entityIdentifiers = array(
-			'term_entity_id' => $entity->getId()->getNumericId(),
-			'term_entity_type' => $entity->getType()
+			// FIXME: this will fail for IDs that do not have a numeric form
+			'term_entity_id' => $entityId->getNumericId(),
+			'term_entity_type' => $entityId->getEntityType()
 		);
 
 		$uniqueKeyFields = array( 'term_entity_type', 'term_entity_id', 'term_language', 'term_type', 'term_text' );
 
-		wfDebugLog( __CLASS__, __FUNCTION__ . ": deleting terms for " . $entity->getId()->getPrefixedId() );
+		wfDebugLog( __CLASS__, __FUNCTION__ . ': deleting terms for ' . $entityId->getSerialization() );
 
 		$success = true;
 		foreach ( $terms as $term ) {
@@ -258,8 +276,7 @@ class TermSqlIndex extends DBAccessBase implements TermIndex {
 					$termIdentifiers,
 					$entityIdentifiers
 				),
-				__METHOD__,
-				array( 'IGNORE' )
+				__METHOD__
 			);
 
 			if ( !$success ) {
@@ -267,74 +284,72 @@ class TermSqlIndex extends DBAccessBase implements TermIndex {
 			}
 		}
 
-		wfProfileOut( __METHOD__ );
-
 		return $success;
 	}
 
 	/**
 	 * Calculate a weight the given entity to be used for ranking. Should be normalized
 	 * between 0 and 1, but that's not a strong constraint.
-	 * This implementation relies on sitelinks, and simply takes the number of sitelinks
-	 * as the weight.
+	 * This implementation uses the max of the number of labels and the number of sitelinks.
 	 *
 	 * TODO Should be moved to its own object and be added via dependency injection
 	 *
-	 * @since 0.4
-	 *
-	 * @param Entity $entity
+	 * @param EntityDocument $entity
 	 *
 	 * @return float weight
 	 */
-	protected function getWeight( Entity $entity ) {
-		if ( $entity instanceof Item ) {
-			return count( $entity->getSiteLinks() ) / 1000.0;
+	private function getWeight( EntityDocument $entity ) {
+		// FIXME: OCP violation. No support for new types of entities can be registered
+
+		$weight = 0.0;
+
+		if ( $entity instanceof FingerprintProvider ) {
+			$weight = max( $weight, $entity->getFingerprint()->getLabels()->count() / 1000.0 );
 		}
-		return 0.0;
+
+		if ( $entity instanceof Item ) {
+			$weight = max( $weight, $entity->getSiteLinkList()->count() / 1000.0 );
+		}
+
+		return $weight;
 	}
 
 	/**
 	 * Returns an array with the database table fields for the provided term.
 	 *
-	 * @since 0.2
+	 * @param TermIndexEntry $term
 	 *
-	 * @param Term $term
-	 *
-	 * @return array
+	 * @return string[]
 	 */
-	protected function getTermFields( Term $term ) {
+	private function getTermFields( TermIndexEntry $term ) {
 		$fields = array(
 			'term_language' => $term->getLanguage(),
 			'term_type' => $term->getType(),
 			'term_text' => $term->getText(),
+			'term_search_key' => $this->getSearchKey( $term->getText() )
 		);
-
-		if ( !Settings::get( 'withoutTermSearchKey' ) ) {
-			$fields['term_search_key'] = $this->getSearchKey( $term->getText(), $term->getLanguage() );
-		}
 
 		return $fields;
 	}
 
 	/**
-	 * @see TermCache::deleteTermsOfEntity
+	 * @see TermIndex::deleteTermsOfEntity
 	 *
-	 * @since 0.1
+	 * @since 0.5
 	 *
-	 * @param Entity $entity
+	 * @param EntityId $entityId
 	 *
-	 * @return boolean Success indicator
+	 * @return bool Success indicator
 	 */
-	public function deleteTermsOfEntity( Entity $entity ) {
-		wfProfileIn( __METHOD__ );
-
+	public function deleteTermsOfEntity( EntityId $entityId ) {
 		$dbw = $this->getConnection( DB_MASTER );
 
 		$success = $dbw->delete(
 			$this->tableName,
 			array(
-				'term_entity_id' => $entity->getId()->getNumericId(),
-				'term_entity_type' => $entity->getType()
+				// FIXME: this will fail for IDs that do not have a numeric form
+				'term_entity_id' => $entityId->getNumericId(),
+				'term_entity_type' => $entityId->getEntityType()
 			),
 			__METHOD__
 		);
@@ -343,111 +358,113 @@ class TermSqlIndex extends DBAccessBase implements TermIndex {
 		// for other entities, without any way to remove them from the database.
 		// We probably want some extra handling here.
 
-		wfProfileOut( __METHOD__ );
 		return $success;
 	}
 
 	/**
 	 * Returns the terms stored for the given entity.
-	 * @see TermCache::getTermsOfEntity
 	 *
-	 * @param EntityId $id
+	 * @see TermIndex::getTermsOfEntity
+	 * @todo: share more code with getTermsOfEntities. There are only subtle differences
+	 * regarding what fields are loaded.
 	 *
-	 * @return Term[]
+	 * @param EntityId $entityId
+	 * @param string[]|null $termTypes
+	 * @param string[]|null $languageCodes
+	 *
+	 * @return TermIndexEntry[]
 	 */
-	public function getTermsOfEntity( EntityId $id ) {
-		wfProfileIn( __METHOD__ );
-
-		$entityIdentifiers = array(
-			'term_entity_id' => $id->getNumericId(),
-			'term_entity_type' => $id->getEntityType()
+	public function getTermsOfEntity(
+		EntityId $entityId,
+		array $termTypes = null,
+		array $languageCodes = null
+	) {
+		return $this->getTermsOfEntities(
+			array( $entityId ),
+			$termTypes,
+			$languageCodes
 		);
-
-		$fields = array(
-			'term_language',
-			'term_type',
-			'term_text',
-		);
-
-		$dbr = $this->getReadDb();
-
-		$res = $dbr->select(
-			$this->tableName,
-			$fields,
-			$entityIdentifiers,
-			__METHOD__
-		);
-
-		$terms = $this->buildTermResult( $res );
-
-		$this->releaseConnection( $dbr );
-
-		wfProfileOut( __METHOD__ );
-
-		return $terms;
 	}
 
 	/**
 	 * Returns the terms stored for the given entities.
 	 *
-	 * @see TermCache::getTermsOfEntities
+	 * @see TermIndex::getTermsOfEntities
 	 *
-	 * @param EntityId[] $ids
-	 * @param string $entityType
-	 * @param string|null $language Language code
+	 * @param EntityId[] $entityIds
+	 * @param string[]|null $termTypes
+	 * @param string[]|null $languageCodes
 	 *
 	 * @throws MWException
-	 * @return Term[]
+	 * @return TermIndexEntry[]
 	 */
-	public function getTermsOfEntities( array $ids, $entityType, $language = null ) {
-		wfProfileIn( __METHOD__ );
+	public function getTermsOfEntities(
+		array $entityIds,
+		array $termTypes = null,
+		array $languageCodes = null
+	) {
+		return $this->fetchTerms( $entityIds, $termTypes, $languageCodes );
+	}
 
-		if ( empty($ids) ) {
-			wfProfileOut( __METHOD__ );
+	/**
+	 * @param EntityId[] $entityIds
+	 * @param string[]|null $termTypes
+	 * @param string[]|null $languageCodes
+	 *
+	 * @throws MWException
+	 * @return TermIndexEntry[]
+	 */
+	private function fetchTerms(
+		array $entityIds,
+		array $termTypes = null,
+		array $languageCodes = null
+	) {
+		if ( empty( $entityIds )
+			|| ( is_array( $termTypes ) && empty( $termTypes ) )
+			|| ( is_array( $languageCodes ) && empty( $languageCodes ) )
+		) {
 			return array();
 		}
 
-		$entityIdentifiers = array(
-			'term_entity_type' => $entityType
-		);
-		if ( $language !== null ) {
-			$entityIdentifiers['term_language'] = $language;
-		}
-
+		$entityType = null;
 		$numericIds = array();
-		foreach ( $ids as $id ) {
-			if ( $id->getEntityType() !== $entityType ) {
-				throw new MWException( "ID " . $id->getPrefixedId()
-					. " does not refer to an entity of type $entityType." );
+
+		foreach ( $entityIds as $id ) {
+			if ( $entityType === null ) {
+				$entityType = $id->getEntityType();
+			} elseif ( $id->getEntityType() !== $entityType ) {
+				throw new MWException( "ID $id does not refer to an entity of type $entityType" );
 			}
 
+			// FIXME: this will fail for IDs that do not have a numeric form
 			$numericIds[] = $id->getNumericId();
 		}
 
-		$entityIdentifiers['term_entity_id'] = $numericIds;
-
-		$fields = array(
-			'term_entity_id',
-			'term_entity_type',
-			'term_language',
-			'term_type',
-			'term_text',
+		$conditions = array(
+			'term_entity_type' => $entityType,
+			'term_entity_id' => $numericIds,
 		);
+
+		if ( $languageCodes !== null ) {
+			$conditions['term_language'] = $languageCodes;
+		}
+
+		if ( $termTypes !== null ) {
+			$conditions['term_type'] = $termTypes;
+		}
 
 		$dbr = $this->getReadDb();
 
 		$res = $dbr->select(
 			$this->tableName,
-			$fields,
-			$entityIdentifiers,
+			array_keys( $this->termFieldMap ),
+			$conditions,
 			__METHOD__
 		);
 
 		$terms = $this->buildTermResult( $res );
 
 		$this->releaseConnection( $dbr );
-
-		wfProfileOut( __METHOD__ );
 
 		return $terms;
 	}
@@ -464,7 +481,7 @@ class TermSqlIndex extends DBAccessBase implements TermIndex {
 	}
 
 	/**
-	 * Returns the Database connection to wich to write.
+	 * Returns the Database connection to which to write.
 	 *
 	 * @since 0.4
 	 *
@@ -475,297 +492,192 @@ class TermSqlIndex extends DBAccessBase implements TermIndex {
 	}
 
 	/**
-	 * @see TermCache::termExists
-	 *
-	 * @since 0.1
-	 *
-	 * @param string $termValue
-	 * @param string|null $termType
-	 * @param string|null $termLanguage Language code
-	 * @param string|null $entityType
-	 *
-	 * @return boolean
-	 */
-	public function termExists( $termValue, $termType = null, $termLanguage = null, $entityType = null ) {
-		wfProfileIn( __METHOD__ );
-
-		$conditions = array(
-			'term_text' => $termValue,
-		);
-
-		if ( $termType !== null ) {
-			$conditions['term_type'] = $termType;
-		}
-
-		if ( $termLanguage !== null ) {
-			$conditions['term_language'] = $termLanguage;
-		}
-
-		if ( $entityType !== null ) {
-			$conditions['term_entity_type'] = $entityType;
-		}
-
-		$dbr = $this->getReadDb();
-
-		$result = $dbr->selectRow(
-			$this->tableName,
-			array(
-				'term_entity_id',
-			),
-			$conditions,
-			__METHOD__
-		);
-
-		$this->releaseConnection( $dbr );
-
-		wfProfileOut( __METHOD__ );
-
-		return $result !== false;
-	}
-
-	/**
-	 * @see TermCache::getEntityIdsForLabel
-	 *
-	 * @since 0.1
-	 *
-	 * @param string $label
-	 * @param string|null $languageCode
-	 * @param string|null $description
-	 * @param string|null $entityType
-	 * @param bool $fuzzySearch if false, only exact matches are returned, otherwise more relaxed search . Defaults to false.
-	 *
-	 * @return array of array( entity type, entity id )
-	 */
-	public function getEntityIdsForLabel( $label, $languageCode = null, $description = null, $entityType = null, $fuzzySearch = false ) {
-		wfProfileIn( __METHOD__ );
-
-		$fuzzySearch = false; // TODO switched off for now until we have a solution for limiting the results
-		$db = $this->getReadDb();
-
-		$tables = array( 'terms0' => $this->tableName );
-
-		$conds = array( 'terms0.term_type' => Term::TYPE_LABEL );
-		if ( $fuzzySearch ) {
-			$conds[] = 'terms0.term_text' . $db->buildLike( $label, $db->anyString() );
-		} else {
-			$conds['terms0.term_text'] = $label;
-		}
-
-		$joinConds = array();
-
-		if ( !is_null( $languageCode ) ) {
-			$conds['terms0.term_language'] = $languageCode;
-		}
-
-		if ( !is_null( $entityType ) ) {
-			$conds['terms0.term_entity_type'] = $entityType;
-		}
-
-		if ( !is_null( $description ) ) {
-			$conds['terms1.term_text'] = $description;
-			$conds['terms1.term_type'] = Term::TYPE_DESCRIPTION;
-
-			if ( !is_null( $languageCode ) ) {
-				$conds['terms1.term_language'] = $languageCode;
-			}
-
-			$tables['terms1'] = $this->tableName;
-
-			$joinConds['terms1'] = array(
-				'LEFT OUTER JOIN',
-				array(
-					'terms0.term_entity_id=terms1.term_entity_id',
-					'terms0.term_entity_type=terms1.term_entity_type',
-				)
-			);
-		}
-
-		$entities = $db->select(
-			$tables,
-			array( 'terms0.term_entity_id', 'terms0.term_entity_type' ),
-			$conds,
-			__METHOD__,
-			array( 'DISTINCT' ),
-			$joinConds
-		);
-
-		$this->releaseConnection( $db );
-
-		$result = array_map(
-			function( $entity ) {
-				return array( $entity->term_entity_type, intval( $entity->term_entity_id ) );
-			},
-			iterator_to_array( $entities )
-		);
-
-		wfProfileOut( __METHOD__ );
-
-		return $result;
-	}
-
-	/**
-	 * @see TermCache::getMatchingTerms
+	 * @see TermIndex::getMatchingTerms
 	 *
 	 * @since 0.2
 	 *
-	 * @param array $terms
-	 * @param string|null $termType
-	 * @param string|null $entityType
+	 * @param TermIndexEntry[] $terms
+	 * @param string|string[]|null $termType
+	 * @param string|string[]|null $entityType
 	 * @param array $options
 	 *
-	 * @return array
+	 * @return TermIndexEntry[]
 	 */
-	public function getMatchingTerms( array $terms, $termType = null, $entityType = null, array $options = array() ) {
-		wfProfileIn( __METHOD__ );
-
+	public function getMatchingTerms(
+		array $terms,
+		$termType = null,
+		$entityType = null,
+		array $options = array()
+	) {
 		if ( empty( $terms ) ) {
-			wfProfileOut( __METHOD__ );
 			return array();
 		}
 
-		$conditions = $this->termsToConditions( $terms, $termType, $entityType, false, $options );
-
-		$selectionFields = array_keys( $this->termFieldMap );
-
 		$dbr = $this->getReadDb();
 
-		$queryOptions = array();
+		$termConditions = $this->termsToConditions( $dbr, $terms, $termType, $entityType, $options );
 
-		if ( array_key_exists( 'LIMIT', $options ) && $options['LIMIT'] ) {
+		$queryOptions = array();
+		if ( isset( $options['LIMIT'] ) && $options['LIMIT'] > 0 ) {
 			$queryOptions['LIMIT'] = $options['LIMIT'];
 		}
 
-		$obtainedTerms = $dbr->select(
+		$rows = $dbr->select(
 			$this->tableName,
-			$selectionFields,
-			implode( ' OR ', $conditions ),
+			array_keys( $this->termFieldMap ),
+			array( $dbr->makeList( $termConditions, LIST_OR ) ),
 			__METHOD__,
 			$queryOptions
 		);
 
-		$terms = $this->buildTermResult( $obtainedTerms );
+		if ( array_key_exists( 'orderByWeight', $options ) && $options['orderByWeight'] ) {
+			$rows = $this->getRowsOrderedByWeight( $rows );
+		}
+
+		$terms = $this->buildTermResult( $rows );
 
 		$this->releaseConnection( $dbr );
-
-		wfProfileOut( __METHOD__ );
 
 		return $terms;
 	}
 
 	/**
-	 * @see TermCache::getMatchingIDs
+	 * @see TermIndex::getTopMatchingTerms
 	 *
-	 * @since 0.4
+	 * @since 0.5
 	 *
-	 * @param array $terms
-	 * @param string $entityType
-	 * @param array $options There is an implicit LIMIT of 5000 items in this implementation
+	 * @param TermIndexEntry[] $terms
+	 * @param string|string[]|null $termType
+	 * @param string|string[]|null $entityType
+	 * @param array $options
+	 *           In this implementation at most 5000 terms will be retreived.
+	 *           As we only return a single TermIndexEntry per Entity the return count may be lower.
 	 *
-	 * @return EntityId[]
+	 * @return TermIndexEntry[]
 	 */
-	public function getMatchingIDs( array $terms, $entityType, array $options = array() ) {
-		wfProfileIn( __METHOD__ );
-
-		if ( empty( $terms ) ) {
-			wfProfileOut( __METHOD__ );
-			return array();
+	public function getTopMatchingTerms(
+		array $terms,
+		$termType = null,
+		$entityType = null,
+		array $options = array()
+	) {
+		$requestedLimit = 0;
+		if ( array_key_exists( 'LIMIT', $options ) ) {
+			$requestedLimit = $options['LIMIT'];
 		}
+		$options['LIMIT'] = 5000;
+		$options['orderByWeight'] = true;
 
-		// this is the maximum limit of search results
-		// TODO this should not be hardcoded
-		$internalLimit = 5000;
-
-		$conditions = $this->termsToConditions( $terms, null, $entityType, false, $options );
-
-		$dbr = $this->getReadDb();
-
-		$selectionFields = array( 'term_entity_id' );
-
-		// TODO instead of a DB query, get a setting. Should save on a few Database round trips.
-		$hasWeight = $this->supportsWeight();
-
-		if ( $hasWeight ) {
-			$selectionFields[] = 'term_weight';
-		}
-
-		$queryOptions = array( 'DISTINCT' );
-
-		if ( array_key_exists( 'LIMIT', $options ) && $options['LIMIT'] ) {
-			if ( $hasWeight ) {
-				// if we take the weight into account, we need to grab basically all hits in order
-				// to allow for the post-search sorting below.
-				$queryOptions['LIMIT'] = max( $options['LIMIT'], $internalLimit );
-			} else {
-				$queryOptions['LIMIT'] = $options['LIMIT'];
-			}
-		}
-
-		$obtainedIDs = $dbr->select(
-			$this->tableName,
-			$selectionFields,
-			implode( ' OR ', $conditions ),
-			__METHOD__,
-			$queryOptions
+		$matchingTermIndexEntries = $this->getMatchingTerms(
+			$terms,
+			$termType,
+			$entityType,
+			$options
 		);
 
-		if ( $hasWeight ) {
-			$weights = array();
-			foreach ( $obtainedIDs as $obtainedID ) {
-				$weights[intval( $obtainedID->term_entity_id )] = floatval( $obtainedID->term_weight );
-			}
-
-			// this is a post-search sorting by weight. This allows us to not require an additional
-			// index on the wb_terms table that is very big already. This is also why we have
-			// the internal limit of 5000, since SQL's index would explode in size if we added the
-			// weight to it here (which would allow us to delegate the sorting to SQL itself)
-			arsort( $weights, SORT_NUMERIC );
-
-			if ( array_key_exists( 'LIMIT', $options ) && $options['LIMIT'] ) {
-				$numericIds = array_keys( array_slice( $weights, 0, $options['LIMIT'], true ) );
-			} else {
-				$numericIds = array_keys( $weights );
-			}
-		} else {
-			$numericIds = array();
-			foreach ( $obtainedIDs as $obtainedID ) {
-				$numericIds[] = intval( $obtainedID->term_entity_id );
+		$returnTermIndexEntries = array();
+		foreach ( $matchingTermIndexEntries as $key => $indexEntry ) {
+			$entityIdSerilization = $indexEntry->getEntityId()->getSerialization();
+			if ( !array_key_exists( $entityIdSerilization, $returnTermIndexEntries ) ) {
+				$returnTermIndexEntries[$entityIdSerilization] = $indexEntry;
 			}
 		}
 
-		$this->releaseConnection( $dbr );
-
-		// turn numbers into entity ids
-		$result = array();
-		$idParser = new BasicEntityIdParser();
-
-		foreach ( $numericIds as $numericId ) {
-			// FIXME: this is using the deprecated EntityId constructor and a hack to get the
-			// correct EntityId type that will not work for entity types other then item and property.
-			$entityId = new EntityId( $entityType, $numericId );
-			$result[] = $idParser->parse( $entityId->getSerialization() );
+		if ( $requestedLimit > 0 ) {
+			$returnTermIndexEntries = array_slice( $returnTermIndexEntries, 0, $requestedLimit, true );
 		}
 
-		wfProfileOut( __METHOD__ );
-
-		return $result;
+		return array_values( $returnTermIndexEntries );
 	}
 
 	/**
-	 * @since 0.2
+	 * @param Iterator $rows
+	 * @param int $limit
 	 *
-	 * @param Term[] $terms
-	 * @param string $termType
-	 * @param string $entityType
-	 * @param boolean $forJoin
-	 *            If the provided terms are used for a join.
-	 *            If so, the fields of each term get prefixed with a table name starting with terms0 and counting up.
+	 * @return Iterator
+	 */
+	private function getRowsOrderedByWeight( Iterator $rows, $limit = 0 ) {
+		$sortData = array();
+		$rowMap = array();
+
+		foreach ( $rows as $key => $row ) {
+			$termWeight = floatval( $row->term_weight );
+			$sortData[$key]['weight'] = $termWeight;
+			$sortData[$key]['string'] =
+				$row->term_text .
+				$row->term_type .
+				$row->term_language .
+				$row->term_entity_type .
+				$row->term_entity_id;
+			$rowMap[$key] = $row;
+		}
+
+		// this is a post-search sorting by weight. This allows us to not require an additional
+		// index on the wb_terms table that is very big already. This is also why we have
+		// the internal limit of 5000, since SQL's index would explode in size if we added the
+		// weight to it here (which would allow us to delegate the sorting to SQL itself)
+		uasort( $sortData, function( $a, $b ) {
+			if ( $a['weight'] === $b['weight'] ) {
+				return strcmp( $a['string'], $b['string'] );
+			}
+			return ( $a['weight'] < $b['weight'] ) ? 1 : -1;
+		} );
+
+		if ( $limit > 0 ) {
+			$sortData = array_slice( $sortData, 0, $limit, true );
+		}
+
+		$entityIds = array();
+
+		foreach ( $sortData as $key => $keySortData ) {
+			$entityIds[] = $rowMap[$key];
+		}
+
+		return $entityIds;
+	}
+
+	/**
+	 * @param DatabaseBase $db
+	 * @param TermIndexEntry[] $terms
+	 * @param string|string[]|null $termType
+	 * @param string|string[]|null $entityType
+	 * @param array $options
+	 *
+	 * @return string[]
+	 */
+	private function termsToConditions(
+		DatabaseBase $db,
+		array $terms,
+		$termType = null,
+		$entityType = null,
+		array $options = array()
+	) {
+		$conditions = array();
+
+		foreach ( $terms as $term ) {
+			$termConditions = $this->termMatchConditions( $db, $term, $termType, $entityType, $options );
+			$conditions[] = $db->makeList( $termConditions, LIST_AND );
+		}
+
+		return $conditions;
+	}
+
+	/**
+	 * @param DatabaseBase $db
+	 * @param TermIndexEntry $term
+	 * @param string|string[]|null $termType
+	 * @param string|string[]|null $entityType
 	 * @param array $options
 	 *
 	 * @return array
 	 */
-	protected function termsToConditions( array $terms, $termType, $entityType, $forJoin = false, array $options = array() ) {
-		wfProfileIn( __METHOD__ );
-
+	private function termMatchConditions(
+		DatabaseBase $db,
+		TermIndexEntry $term,
+		$termType = null,
+		$entityType = null,
+		array $options = array()
+	) {
 		$options = array_merge(
 			array(
 				'caseSensitive' => true,
@@ -775,75 +687,43 @@ class TermSqlIndex extends DBAccessBase implements TermIndex {
 		);
 
 		$conditions = array();
-		$tableIndex = 0;
 
-		$dbr = $this->getReadDb();
+		$language = $term->getLanguage();
 
-		/**
-		 * @var Term $term
-		 */
-		foreach ( $terms as $term ) {
-			$fullTerm = array();
-
-			$language = $term->getLanguage();
-
-			if ( $language !== null ) {
-				$fullTerm['term_language'] = $language;
-			}
-
-			$text = $term->getText();
-
-			if ( $text !== null ) {
-				if ( $options['caseSensitive']
-					|| Settings::get( 'withoutTermSearchKey' ) ) {
-					//NOTE: whether this match is *actually* case sensitive depends on the collation used in the database.
-					$textField = 'term_text';
-				}
-				else {
-					$textField = 'term_search_key';
-					$text = $this->getSearchKey( $term->getText(), $term->getLanguage() );
-				}
-
-				if ( $options['prefixSearch'] ) {
-					$fullTerm[] = $textField . $dbr->buildLike( $text, $dbr->anyString() );
-				}
-				else {
-					$fullTerm[$textField] = $text;
-				}
-			}
-
-			if ( $term->getType() !== null ) {
-				$fullTerm['term_type'] = $term->getType();
-			}
-			elseif ( $termType !== null ) {
-				$fullTerm['term_type'] = $termType;
-			}
-
-			if ( $term->getEntityType() !== null ) {
-				$fullTerm['term_entity_type'] = $term->getEntityType();
-			}
-			elseif ( $entityType !== null ) {
-				$fullTerm['term_entity_type'] = $entityType;
-			}
-
-			$tableName = 'terms' . $tableIndex++;
-
-			foreach ( $fullTerm as $field => &$value ) {
-				if ( !is_int( $field ) ) {
-					$value = $field . '=' . $dbr->addQuotes( $value );
-				}
-
-				if ( $forJoin ) {
-					$value = $tableName . '.' . $value;
-				}
-			}
-
-			$conditions[] = '(' . implode( ' AND ', $fullTerm ) . ')';
+		if ( $language !== null ) {
+			$conditions['term_language'] = $language;
 		}
 
-		$this->releaseConnection( $dbr );
+		$text = $term->getText();
 
-		wfProfileOut( __METHOD__ );
+		if ( $text !== null ) {
+			// NOTE: Whether this match is *actually* case sensitive depends on the collation
+			// used in the database.
+			$textField = 'term_text';
+
+			if ( !$options['caseSensitive'] ) {
+				$textField = 'term_search_key';
+				$text = $this->getSearchKey( $term->getText() );
+			}
+
+			if ( $options['prefixSearch'] ) {
+				$conditions[] = $textField . $db->buildLike( $text, $db->anyString() );
+			} else {
+				$conditions[$textField] = $text;
+			}
+		}
+
+		if ( $term->getType() !== null ) {
+			$conditions['term_type'] = $term->getType();
+		} elseif ( $termType !== null ) {
+			$conditions['term_type'] = $termType;
+		}
+
+		if ( $term->getEntityType() !== null ) {
+			$conditions['term_entity_type'] = $term->getEntityType();
+		} elseif ( $entityType !== null ) {
+			$conditions['term_entity_type'] = $entityType;
+		}
 
 		return $conditions;
 	}
@@ -852,15 +732,11 @@ class TermSqlIndex extends DBAccessBase implements TermIndex {
 	 * Modifies the provided terms to use the field names expected by the interface
 	 * rather then the table field names. Also ensures the values are of the correct type.
 	 *
-	 * @since 0.2
+	 * @param array[]|Iterator $obtainedTerms
 	 *
-	 * @param Iterator|array $obtainedTerms PHP fails for not having a common iterator/array thing :<0
-	 *
-	 * @return array
+	 * @return TermIndexEntry[]
 	 */
-	protected function buildTermResult( $obtainedTerms ) {
-		wfProfileIn( __METHOD__ );
-
+	private function buildTermResult( $obtainedTerms ) {
 		$matchingTerms = array();
 
 		foreach ( $obtainedTerms as $obtainedTerm ) {
@@ -874,25 +750,25 @@ class TermSqlIndex extends DBAccessBase implements TermIndex {
 
 				if ( $key === 'term_entity_id' ) {
 					$value = (int)$value;
+				} elseif ( $key === 'term_weight' ) {
+					$value = (float)$value;
 				}
 
 				$matchingTerm[$this->termFieldMap[$key]] = $value;
 			}
 
-			$matchingTerms[] = new Term( $matchingTerm );
+			$matchingTerms[] = new TermIndexEntry( $matchingTerm );
 		}
-
-		wfProfileOut( __METHOD__ );
 
 		return $matchingTerms;
 	}
 
 	/**
-	 * @see TermCache::clear
+	 * @see TermIndex::clear
 	 *
 	 * @since 0.2
 	 *
-	 * @return boolean Success indicator
+	 * @return bool Success indicator
 	 */
 	public function clear() {
 		$dbw = $this->getConnection( DB_MASTER );
@@ -902,149 +778,170 @@ class TermSqlIndex extends DBAccessBase implements TermIndex {
 	}
 
 	/**
-	 * @see TermCache::getMatchingTermCombination
+	 * @see LabelConflictFinder::getLabelConflicts
 	 *
-	 * Note: the interface specifies capability for only a single join, which in this implementation
-	 * is enforced by the $joinCount var. The code itself however could handle multiple joins.
+	 * @note: This implementation does not guarantee that all matches are returned.
+	 * The maximum number of conflicts returned is controlled by $this->maxConflicts.
 	 *
-	 * @since 0.4
+	 * @since 0.5
 	 *
-	 * @param array $terms
-	 * @param string|null $termType
-	 * @param string|null $entityType
-	 * @param EntityId|null $excludeId
+	 * @param string $entityType
+	 * @param string[] $labels
+	 * @param string[][]|null $aliases
 	 *
-	 * @return array
+	 * @return TermIndexEntry[]
 	 */
-	public function getMatchingTermCombination( array $terms, $termType = null, $entityType = null, EntityId $excludeId = null ) {
-		wfProfileIn( __METHOD__ );
+	public function getLabelConflicts( $entityType, array $labels, array $aliases = null ) {
+		if ( !is_string( $entityType ) ) {
+			throw new InvalidArgumentException( '$entityType must be a string' );
+		}
 
-		if ( empty( $terms ) ) {
-			wfProfileOut( __METHOD__ );
+		if ( empty( $labels ) && empty( $aliases ) ) {
 			return array();
 		}
 
-		$conditions = array();
-		$joinCount = 1;
+		$termTypes = ( $aliases === null )
+			? array( TermIndexEntry::TYPE_LABEL )
+			: array( TermIndexEntry::TYPE_LABEL, TermIndexEntry::TYPE_ALIAS );
 
-		$dbr = $this->getReadDb();
+		$termTexts = ( $aliases === null )
+			? $labels
+			: array_merge( $labels, $aliases );
 
-		foreach ( $terms as $termList ) {
-			// Limit the operation to a single join.
-			$termList = array_slice( $termList, 0, $joinCount + 1 );
+		$templates = $this->makeQueryTerms( $termTexts, $termTypes );
 
-			$combinationConds = $this->termsToConditions( $termList, $termType, $entityType, true );
-
-			$exclusionConds = array();
-
-			if ( $excludeId !== null ) {
-				$exclusionConds[] = 'terms0.term_entity_id <> ' . $dbr->addQuotes( $excludeId->getNumericId() );
-				$exclusionConds[] = 'terms0.term_entity_type <> ' . $dbr->addQuotes( $excludeId->getEntityType() );
-			}
-
-			if ( !empty( $exclusionConds ) ) {
-				$combinationConds[] = '(' . implode( ' OR ', $exclusionConds ) . ')';
-			}
-
-			$conditions[] = '(' . implode( ' AND ', $combinationConds ) . ')';
-		}
-
-		$tables = array();
-		$fieldsToSelect = array();
-		$joinConds = array();
-
-		for ( $tableIndex = 0; $tableIndex <= $joinCount; $tableIndex++ ) {
-			$tableName = 'terms' . $tableIndex;
-			$tables[$tableName] = $this->tableName;
-
-			foreach ( array_keys( $this->termFieldMap ) as $fieldName ) {
-				$fieldsToSelect[] = $tableName . '.' . $fieldName . ' AS ' . $tableName . $fieldName;
-			}
-
-			if ( $tableIndex !== 0 ) {
-				$joinConds[$tableName] = array(
-					'INNER JOIN',
-					array(
-						'terms0.term_entity_id=' . $tableName . '.term_entity_id',
-						'terms0.term_entity_type=' . $tableName . '.term_entity_type',
-					)
-				);
-			}
-		}
-
-		$obtainedTerms = $dbr->select(
-			$tables,
-			$fieldsToSelect,
-			implode( ' OR ', $conditions ),
-			__METHOD__,
-			array( 'LIMIT' => 1 ),
-			$joinConds
+		$labelConflicts = $this->getMatchingTerms(
+			$templates,
+			$termTypes,
+			$entityType,
+			array(
+				'LIMIT' => $this->maxConflicts,
+				'caseSensitive' => false
+			)
 		);
 
-		$terms = $this->buildTermResult( $this->getNormalizedJoinResult( $obtainedTerms, $joinCount ) );
-
-		$this->releaseConnection( $dbr );
-
-		wfProfileOut( __METHOD__ );
-
-		return $terms;
+		return $labelConflicts;
 	}
 
 	/**
-	 * Takes the result of a query with joins and turns it into a row per term.
+	 * @see LabelConflictFinder::getLabelWithDescriptionConflicts
 	 *
-	 * Also ditches any successive results PDO manages to add to the first one,
-	 * so the behavior appears to be the same as when running the query against
-	 * the database directly without PDO messing the the result up.
+	 * @note: This implementation does not guarantee that all matches are returned.
+	 * The maximum number of conflicts returned is controlled by $this->maxConflicts.
 	 *
-	 * @since 0.2
+	 * @since 0.5
 	 *
-	 * @param ResultWrapper $obtainedTerms
-	 * @param integer $joinCount
+	 * @param string $entityType
+	 * @param string[] $labels
+	 * @param string[] $descriptions
 	 *
-	 * @return array
+	 * @throws InvalidArgumentException
+	 * @return TermIndexEntry[]
 	 */
-	protected function getNormalizedJoinResult( \ResultWrapper $obtainedTerms, $joinCount ) {
-		wfProfileIn( __METHOD__ );
+	public function getLabelWithDescriptionConflicts(
+		$entityType,
+		array $labels,
+		array $descriptions
+	) {
+		$labels = array_intersect_key( $labels, $descriptions );
+		$descriptions = array_intersect_key( $descriptions, $labels );
 
-		$resultTerms = array();
+		if ( empty( $descriptions ) || empty( $labels ) ) {
+			return array();
+		}
 
-		foreach ( $obtainedTerms as $obtainedTerm ) {
-			$obtainedTerm = (array)$obtainedTerm;
+		$dbr = $this->getReadDb();
 
-			for ( $tableIndex = 0; $tableIndex <= $joinCount; $tableIndex++ ) {
-				$tableName = 'terms' . $tableIndex;
-				$resultTerm = array();
+		// FIXME: MySQL doesn't support self-joins on temporary tables,
+		//        so skip this check during unit tests on MySQL!
+		if ( defined( 'MW_PHPUNIT_TEST' ) && $dbr->getType() === 'mysql' ) {
+			$this->releaseConnection( $dbr );
+			return array();
+		}
 
-				foreach ( array_keys( $this->termFieldMap ) as $fieldName ) {
-					$fullFieldName = $tableName . $fieldName;
+		$where = array();
+		$where['L.term_entity_type'] = $entityType;
+		$where['L.term_type'] = TermIndexEntry::TYPE_LABEL;
+		$where['D.term_type'] = TermIndexEntry::TYPE_DESCRIPTION;
 
-					if ( array_key_exists( $fullFieldName, $obtainedTerm ) ) {
-						$resultTerm[$fieldName] = $obtainedTerm[$fullFieldName];
-					}
+		$where[] = 'D.term_entity_id=' . 'L.term_entity_id';
+		$where[] = 'D.term_entity_type=' . 'L.term_entity_type';
+
+		$termConditions = array();
+
+		foreach ( $labels as $lang => $label ) {
+			// Due to the array_intersect_key call earlier, we know a corresponding description exists.
+			$description = $descriptions[$lang];
+
+			$matchConditions = array(
+				'L.term_language' => $lang,
+				'L.term_search_key' => $this->getSearchKey( $label ),
+				'D.term_search_key' => $this->getSearchKey( $description )
+			);
+
+			$termConditions[] = $dbr->makeList( $matchConditions, LIST_AND );
+		}
+
+		$where[] = $dbr->makeList( $termConditions, LIST_OR );
+
+		$queryOptions = array(
+			'LIMIT' => $this->maxConflicts
+		);
+
+		$obtainedTerms = $dbr->select(
+			array( 'L' => $this->tableName, 'D' => $this->tableName ),
+			'L.*',
+			$where,
+			__METHOD__,
+			$queryOptions
+		);
+
+		$conflicts = $this->buildTermResult( $obtainedTerms );
+
+		$this->releaseConnection( $dbr );
+
+		return $conflicts;
+	}
+
+	/**
+	 * @param string[]|string[][] $textsByLanguage A list of texts, or a list of lists of texts (keyed by language on the top level)
+	 * @param string[] $types
+	 *
+	 * @throws InvalidArgumentException
+	 * @return TermIndexEntry[]
+	 */
+	private function makeQueryTerms( $textsByLanguage, array $types ) {
+		$terms = array();
+
+		foreach ( $textsByLanguage as $lang => $texts ) {
+			$texts = (array)$texts;
+
+			foreach ( $texts as $text ) {
+				if ( !is_string( $text ) ) {
+					throw new InvalidArgumentException( '$textsByLanguage must contain string values only' );
 				}
 
-				if ( !empty( $resultTerm ) ) {
-					$resultTerms[] = $resultTerm;
+				foreach ( $types as $type ) {
+					$terms[] = new TermIndexEntry( array(
+						'termText' => $text,
+						'termLanguage' => $lang,
+						'termType' => $type,
+					) );
 				}
 			}
 		}
 
-		wfProfileOut( __METHOD__ );
-
-		return $resultTerms;
+		return $terms;
 	}
 
 	/**
 	 * @since 0.4
 	 *
 	 * @param string $text
-	 * @param string $lang language code of the text's language, may be used
-	 *                     for specialized normalization.
 	 *
 	 * @return string
 	 */
-	public function getSearchKey( $text, $lang = 'en' ) {
+	public function getSearchKey( $text ) {
 		if ( $text === null ) {
 			return null;
 		}
@@ -1060,12 +957,11 @@ class TermSqlIndex extends DBAccessBase implements TermIndex {
 			wfWarn( "Unicode normalization failed for `$text`" );
 		}
 
-		// \p{Z} - whitespace
-		// \p{C} - control chars
 		// WARNING: *any* invalid UTF8 sequence causes preg_replace to return an empty string.
-		$strippedText = $nfcText;
-		$strippedText = preg_replace( '/[\p{Cc}\p{Cf}\p{Cn}\p{Cs}]+/u', ' ', $strippedText );
-		$strippedText = preg_replace( '/^[\p{Z}]+|[\p{Z}]+$/u', '', $strippedText );
+		// Control character classes excluding private use areas.
+		$strippedText = preg_replace( '/[\p{Cc}\p{Cf}\p{Cn}\p{Cs}]+/u', ' ', $nfcText );
+		// \p{Z} includes all whitespace characters and invisible separators.
+		$strippedText = preg_replace( '/^\p{Z}+|\p{Z}+$/u', '', $strippedText );
 
 		if ( $strippedText === '' ) {
 			// NOTE: This happens when there is only whitespace in the string.
@@ -1077,7 +973,7 @@ class TermSqlIndex extends DBAccessBase implements TermIndex {
 		//TODO: Use Language::lc to convert to lower case.
 		//      But that requires us to load ALL the language objects,
 		//      which loads ALL the messages, which makes us run out
-		//      of RAM (see bug 41103).
+		//      of RAM (see bug T43103).
 		$normalized = mb_strtolower( $strippedText, 'UTF-8' );
 
 		if ( !is_string( $normalized ) || $normalized === '' ) {
@@ -1087,10 +983,4 @@ class TermSqlIndex extends DBAccessBase implements TermIndex {
 		return $normalized;
 	}
 
-	/**
-	 * @return mixed
-	 */
-	public function supportsWeight() {
-		return !Settings::get( 'withoutTermWeight' );
-	}
 }

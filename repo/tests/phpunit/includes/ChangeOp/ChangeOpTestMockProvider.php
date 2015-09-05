@@ -13,27 +13,28 @@ use PHPUnit_Framework_TestCase;
 use ValueValidators\Error;
 use ValueValidators\Result;
 use ValueValidators\ValueValidator;
-use Wikibase\DataModel\Claim\ClaimGuidParser;
-use Wikibase\DataModel\Claim\Statement;
 use Wikibase\DataModel\Entity\Entity;
 use Wikibase\DataModel\Entity\EntityId;
 use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\PropertyId;
+use Wikibase\DataModel\Services\Lookup\PropertyDataTypeLookup;
+use Wikibase\DataModel\Services\Statement\GuidGenerator;
+use Wikibase\DataModel\Services\Statement\StatementGuidParser;
+use Wikibase\DataModel\Services\Statement\StatementGuidValidator;
 use Wikibase\DataModel\Snak\PropertyNoValueSnak;
 use Wikibase\DataModel\Snak\PropertyValueSnak;
+use Wikibase\DataModel\Statement\Statement;
 use Wikibase\LabelDescriptionDuplicateDetector;
-use Wikibase\Lib\ClaimGuidGenerator;
-use Wikibase\Lib\ClaimGuidValidator;
-use Wikibase\Lib\PropertyDataTypeLookup;
-use Wikibase\SiteLinkCache;
-use Wikibase\Validators\CompositeFingerprintValidator;
-use Wikibase\Validators\CompositeValidator;
-use Wikibase\Validators\DataValueValidator;
-use Wikibase\Validators\LabelDescriptionUniquenessValidator;
-use Wikibase\Validators\RegexValidator;
-use Wikibase\Validators\SnakValidator;
-use Wikibase\Validators\TermValidatorFactory;
-use Wikibase\Validators\TypeValidator;
+use Wikibase\Lib\Store\SiteLinkConflictLookup;
+use Wikibase\Repo\DataTypeValidatorFactory;
+use Wikibase\Repo\Validators\CompositeFingerprintValidator;
+use Wikibase\Repo\Validators\CompositeValidator;
+use Wikibase\Repo\Validators\DataValueValidator;
+use Wikibase\Repo\Validators\LabelDescriptionUniquenessValidator;
+use Wikibase\Repo\Validators\RegexValidator;
+use Wikibase\Repo\Validators\SnakValidator;
+use Wikibase\Repo\Validators\TermValidatorFactory;
+use Wikibase\Repo\Validators\TypeValidator;
 
 /**
  * A helper class for test cases that deal with claims.
@@ -45,7 +46,7 @@ use Wikibase\Validators\TypeValidator;
 class ChangeOpTestMockProvider {
 
 	/**
-	 * @var
+	 * @var PHPUnit_Framework_TestCase
 	 */
 	private $mockBuilderFactory;
 
@@ -63,7 +64,7 @@ class ChangeOpTestMockProvider {
 	 *
 	 * @return PHPUnit_Framework_MockObject_MockBuilder
 	 */
-	protected function getMockBuilder( $class ) {
+	private function getMockBuilder( $class ) {
 		return $this->mockBuilderFactory->getMockBuilder( $class );
 	}
 
@@ -74,7 +75,7 @@ class ChangeOpTestMockProvider {
 	 *
 	 * @return object
 	 */
-	protected function getMock( $class ) {
+	private function getMock( $class ) {
 		return $this->mockBuilderFactory->getMock( $class );
 	}
 
@@ -109,21 +110,21 @@ class ChangeOpTestMockProvider {
 	}
 
 	/**
-	 * Returns a normal ClaimGuidGenerator.
+	 * Returns a normal GuidGenerator.
 	 *
-	 * @return ClaimGuidGenerator
+	 * @return GuidGenerator
 	 */
 	public function getGuidGenerator() {
-		return new ClaimGuidGenerator();
+		return new GuidGenerator();
 	}
 
 	/**
-	 * Returns a mock ClaimGuidValidator that accepts any GUID.
+	 * Returns a mock StatementGuidValidator that accepts any GUID.
 	 *
-	 * @return ClaimGuidValidator
+	 * @return StatementGuidValidator
 	 */
 	public function getMockGuidValidator() {
-		$mock = $this->getMockBuilder( '\Wikibase\Lib\ClaimGuidValidator' )
+		$mock = $this->getMockBuilder( 'Wikibase\DataModel\Services\Statement\StatementGuidValidator' )
 			->disableOriginalConstructor()
 			->getMock();
 		$mock->expects( PHPUnit_Framework_TestCase::any() )
@@ -145,7 +146,8 @@ class ChangeOpTestMockProvider {
 	public function getMockSnakValidator() {
 		return new SnakValidator(
 			$this->getMockPropertyDataTypeLookup(),
-			$this->getMockDataTypeFactory()
+			$this->getMockDataTypeFactory(),
+			$this->getMockDataTypeValidatorFactory()
 		);
 	}
 
@@ -156,7 +158,7 @@ class ChangeOpTestMockProvider {
 	 * @return PropertyDataTypeLookup
 	 */
 	public function getMockPropertyDataTypeLookup() {
-		$mock = $this->getMock( '\Wikibase\Lib\PropertyDataTypeLookup' );
+		$mock = $this->getMock( '\Wikibase\DataModel\Services\Lookup\PropertyDataTypeLookup' );
 		$mock->expects( PHPUnit_Framework_TestCase::any() )
 			->method( 'getDataTypeIdForProperty' )
 			->will( PHPUnit_Framework_TestCase::returnValue( 'string' ) );
@@ -166,22 +168,12 @@ class ChangeOpTestMockProvider {
 
 	/**
 	 * Returns a mock MockDataTypeFactory that will return the same DataType for
-	 * any type id; The ValueValidators of that DataType will accept any
-	 * StringValue, unless the string is "INVALID".
+	 * any type id.
 	 *
 	 * @return DataTypeFactory
 	 */
 	public function getMockDataTypeFactory() {
-		// consider "INVALID" to be invalid
-		$topValidator = new DataValueValidator(
-			new CompositeValidator( array(
-				new TypeValidator( 'string' ),
-				new RegexValidator( '/INVALID/', true ),
-			), true )
-		);
-
-		$validators = array( new TypeValidator( 'DataValues\DataValue' ), $topValidator );
-		$stringType = new DataType( 'string', 'string', $validators );
+		$stringType = new DataType( 'string', 'string' );
 
 		$types = array(
 			'string' => $stringType
@@ -192,12 +184,39 @@ class ChangeOpTestMockProvider {
 			->getMock();
 		$mock->expects( PHPUnit_Framework_TestCase::any() )
 			->method( 'getType' )
-			->will( PHPUnit_Framework_TestCase::returnCallback( function ( $id ) use ( $types ) {
+			->will( PHPUnit_Framework_TestCase::returnCallback( function( $id ) use ( $types ) {
 				if ( !isset( $types[$id] ) ) {
 					throw new OutOfBoundsException( "No such type: $id" );
 				}
 
 				return $types[$id];
+			} ) );
+
+		return $mock;
+	}
+
+	/**
+	 * Returns a mock DataTypeValidatorFactory that returns validators which will accept any
+	 * StringValue, unless the string is "INVALID".
+	 *
+	 * @return DataTypeValidatorFactory
+	 */
+	public function getMockDataTypeValidatorFactory() {
+		// consider "INVALID" to be invalid
+		$topValidator = new DataValueValidator(
+			new CompositeValidator( array(
+				new TypeValidator( 'string' ),
+				new RegexValidator( '/INVALID/', true ),
+			), true )
+		);
+
+		$validators = array( new TypeValidator( 'DataValues\DataValue' ), $topValidator );
+
+		$mock = $this->getMock( 'Wikibase\Repo\DataTypeValidatorFactory' );
+		$mock->expects( PHPUnit_Framework_TestCase::any() )
+			->method( 'getValidators' )
+			->will( PHPUnit_Framework_TestCase::returnCallback( function( $id ) use ( $validators ) {
+				return $validators;
 			} ) );
 
 		return $mock;
@@ -229,12 +248,12 @@ class ChangeOpTestMockProvider {
 	}
 
 	/**
-	 * Returns a mock ClaimGuidParser that will return the same ClaimGuid for
+	 * Returns a mock StatementGuidParser that will return the same ClaimGuid for
 	 * all input strings.
 	 *
 	 * @param EntityId $entityId
 	 *
-	 * @return ClaimGuidParser
+	 * @return StatementGuidParser
 	 */
 	public function getMockGuidParser( EntityId $entityId ) {
 		$mockClaimGuid = $this->getMockBuilder( 'Wikibase\DataModel\Claim\ClaimGuid' )
@@ -247,7 +266,7 @@ class ChangeOpTestMockProvider {
 			->method( 'getEntityId' )
 			->will( PHPUnit_Framework_TestCase::returnValue( $entityId ) );
 
-		$mock = $this->getMockBuilder( 'Wikibase\DataModel\Claim\ClaimGuidParser' )
+		$mock = $this->getMockBuilder( 'Wikibase\DataModel\Services\Statement\StatementGuidParser' )
 			->disableOriginalConstructor()
 			->getMock();
 		$mock->expects( PHPUnit_Framework_TestCase::any() )
@@ -257,7 +276,7 @@ class ChangeOpTestMockProvider {
 	}
 
 	public function detectLabelConflictsForEntity( Entity $entity ) {
-		foreach ( $entity->getLabels() as $lang => $label ) {
+		foreach ( $entity->getFingerprint()->getLabels()->toTextArray() as $lang => $label ) {
 			if ( $label === 'DUPE' ) {
 				return Result::newError( array(
 					Error::newError(
@@ -279,12 +298,12 @@ class ChangeOpTestMockProvider {
 	}
 
 	public function detectLabelDescriptionConflictsForEntity( Entity $entity ) {
-		foreach ( $entity->getLabels() as $lang => $label ) {
-			$description = $entity->getDescription( $lang );
-
-			if ( $description === null ) {
+		foreach ( $entity->getFingerprint()->getLabels()->toTextArray() as $lang => $label ) {
+			if ( !$entity->getFingerprint()->hasDescription( $lang ) ) {
 				continue;
 			}
+
+			$description = $entity->getFingerprint()->getDescription( $lang )->getText();
 
 			if ( $label === 'DUPE' && $description === 'DUPE' ) {
 				return Result::newError( array(
@@ -306,34 +325,90 @@ class ChangeOpTestMockProvider {
 		return Result::newSuccess();
 	}
 
-	public function detectTermConflicts( $labels, $descriptions, EntityId $entityId = null ) {
-		$code = ( ( $descriptions === null ) ? 'label-conflict' : 'label-with-description-conflict' );
-
+	public function detectLabelConflicts(
+		$entityType,
+		array $labels,
+		array $aliases = null,
+		EntityId $entityId = null
+	) {
 		if ( $entityId && $entityId->getSerialization() === 'P666' ) {
 			// simulated conflicts always conflict with P666, so if these are
 			// ignored as self-conflicts, we don't need to check any labels.
 			$labels = array();
 		}
 
-		foreach ( $labels as $lang => $label ) {
-
-			if ( $descriptions !== null
-				&& ( !isset( $descriptions[$lang] )
-					|| $descriptions[$lang] !== 'DUPE' ) ) {
-
-				continue;
-			}
-
-			if ( $label === 'DUPE' ) {
+		foreach ( $labels as $lang => $text ) {
+			if ( $text === 'DUPE' ) {
 				return Result::newError( array(
 					Error::newError(
 						'found conflicting terms',
 						'label',
-						$code,
+						'label-conflict',
 						array(
 							'label',
 							$lang,
-							$label,
+							$text,
+							'P666'
+						)
+					)
+				) );
+			}
+		}
+
+		if ( $aliases === null ) {
+			return Result::newSuccess();
+		}
+
+		foreach ( $aliases as $lang => $texts ) {
+			if ( in_array( 'DUPE', $texts ) ) {
+				return Result::newError( array(
+					Error::newError(
+						'found conflicting terms',
+						'alias',
+						'label-conflict',
+						array(
+							'alias',
+							$lang,
+							'DUPE',
+							'P666'
+						)
+					)
+				) );
+			}
+		}
+
+		return Result::newSuccess();
+	}
+
+	public function detectLabelDescriptionConflicts(
+		$entityType,
+		array $labels,
+		array $descriptions = null,
+		EntityId $entityId = null
+	) {
+		if ( $entityId && $entityId->getSerialization() === 'P666' ) {
+			// simulated conflicts always conflict with P666, so if these are
+			// ignored as self-conflicts, we don't need to check any labels.
+			$labels = array();
+		}
+
+		foreach ( $labels as $lang => $text ) {
+			if ( $descriptions !== null
+				&& ( !isset( $descriptions[$lang] ) || $descriptions[$lang] !== 'DUPE' )
+			) {
+				continue;
+			}
+
+			if ( $text === 'DUPE' ) {
+				return Result::newError( array(
+					Error::newError(
+						'found conflicting terms',
+						'label',
+						'label-with-description-conflict',
+						array(
+							'label',
+							$lang,
+							$text,
 							'P666'
 						)
 					)
@@ -346,7 +421,8 @@ class ChangeOpTestMockProvider {
 
 	/**
 	 * Returns a duplicate detector that will, consider the string "DUPE" to be a duplicate,
-	 * unless a specific $returnValue is given.
+	 * unless a specific $returnValue is given. The same value is returned for calls to
+	 * detectLabelConflicts() and detectLabelDescriptionConflicts().
 	 *
 	 * @param null|Result|Error[] $returnValue
 	 *
@@ -362,13 +438,12 @@ class ChangeOpTestMockProvider {
 		}
 
 		if ( $returnValue instanceof Result ) {
-			$detectLabelConflictsForEntity = function() use ( $returnValue ) {
+			$detectLabelConflicts = $detectLabelDescriptionConflicts = function() use ( $returnValue ) {
 				return $returnValue;
 			};
-
-			$detectTermConflicts = $detectLabelConflictsForEntity;
 		} else {
-			$detectTermConflicts = array( $this, 'detectTermConflicts' );
+			$detectLabelConflicts = array( $this, 'detectLabelConflicts' );
+			$detectLabelDescriptionConflicts = array( $this, 'detectLabelDescriptionConflicts' );
 		}
 
 		$dupeDetector = $this->getMockBuilder( 'Wikibase\LabelDescriptionDuplicateDetector' )
@@ -376,8 +451,12 @@ class ChangeOpTestMockProvider {
 			->getMock();
 
 		$dupeDetector->expects( PHPUnit_Framework_TestCase::any() )
-			->method( 'detectTermConflicts' )
-			->will( PHPUnit_Framework_TestCase::returnCallback( $detectTermConflicts ) );
+			->method( 'detectLabelConflicts' )
+			->will( PHPUnit_Framework_TestCase::returnCallback( $detectLabelConflicts ) );
+
+		$dupeDetector->expects( PHPUnit_Framework_TestCase::any() )
+			->method( 'detectLabelDescriptionConflicts' )
+			->will( PHPUnit_Framework_TestCase::returnCallback( $detectLabelDescriptionConflicts ) );
 
 		return $dupeDetector;
 	}
@@ -417,9 +496,9 @@ class ChangeOpTestMockProvider {
 	/**
 	 * @param array $returnValue
 	 *
-	 * @return SiteLinkCache
+	 * @return SiteLinkConflictLookup
 	 */
-	public function getMockSitelinkCache( $returnValue = null ) {
+	public function getMockSiteLinkConflictLookup( $returnValue = null ) {
 		if ( is_array( $returnValue ) ) {
 			$getConflictsForItem = function() use ( $returnValue ) {
 				return $returnValue;
@@ -428,7 +507,7 @@ class ChangeOpTestMockProvider {
 			$getConflictsForItem = array( $this, 'getSiteLinkConflictsForItem' );
 		}
 
-		$mock = $this->getMock( '\Wikibase\SiteLinkCache' );
+		$mock = $this->getMock( 'Wikibase\Lib\Store\SiteLinkConflictLookup' );
 		$mock->expects( PHPUnit_Framework_TestCase::any() )
 			->method( 'getConflictsForItem' )
 			->will( PHPUnit_Framework_TestCase::returnCallback( $getConflictsForItem ) );
@@ -436,10 +515,10 @@ class ChangeOpTestMockProvider {
 	}
 
 	/**
-	 * @return ClaimGuidGenerator
+	 * @return GuidGenerator
 	 */
 	public function getMockGuidGenerator() {
-		return new ClaimGuidGenerator();
+		return new GuidGenerator();
 	}
 
 	/**
@@ -451,7 +530,7 @@ class ChangeOpTestMockProvider {
 	 *
 	 * @see getMockLabelDescriptionDuplicateDetector()
 	 *
-	 * @param $entityType
+	 * @param string $entityType
 	 *
 	 * @return LabelDescriptionUniquenessValidator|CompositeFingerprintValidator
 	 */
@@ -475,7 +554,7 @@ class ChangeOpTestMockProvider {
 	 * @return TermValidatorFactory
 	 */
 	public function getMockTermValidatorFactory() {
-		$mock = $this->getMockBuilder( 'Wikibase\Validators\TermValidatorFactory' )
+		$mock = $this->getMockBuilder( 'Wikibase\Repo\Validators\TermValidatorFactory' )
 			->disableOriginalConstructor()
 			->getMock();
 
@@ -511,4 +590,5 @@ class ChangeOpTestMockProvider {
 
 		return $mock;
 	}
+
 }

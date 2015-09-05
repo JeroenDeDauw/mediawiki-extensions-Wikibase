@@ -7,15 +7,14 @@ use InvalidArgumentException;
 use ValueValidators\Error;
 use ValueValidators\Result;
 use Wikibase\ChangeOp\ChangeOp;
-use Wikibase\ChangeOp\ChangeOpLabel;
 use Wikibase\ChangeOp\ChangeOpDescription;
-use Wikibase\ChangeOp\ChangeOpAliases;
+use Wikibase\ChangeOp\ChangeOpLabel;
 use Wikibase\ChangeOp\ChangeOpMainSnak;
 use Wikibase\ChangeOp\ChangeOps;
 use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\PropertyId;
+use Wikibase\DataModel\Services\Statement\GuidGenerator;
 use Wikibase\DataModel\Snak\PropertyValueSnak;
-use Wikibase\Lib\ClaimGuidGenerator;
 
 /**
  * @covers Wikibase\ChangeOp\ChangeOps
@@ -26,6 +25,7 @@ use Wikibase\Lib\ClaimGuidGenerator;
  *
  * @licence GNU GPL v2+
  * @author Tobias Gritschacher < tobias.gritschacher@wikimedia.de >
+ * @author Thiemo Mättig
  */
 class ChangeOpsTest extends \PHPUnit_Framework_TestCase {
 
@@ -46,19 +46,17 @@ class ChangeOpsTest extends \PHPUnit_Framework_TestCase {
 		$validatorFactory = $this->getTermValidatorFactory();
 
 		$ops = array();
-		$ops[] = array ( new ChangeOpLabel( 'en', 'myNewLabel', $validatorFactory ) );
-		$ops[] = array ( new ChangeOpDescription( 'de', 'myNewDescription', $validatorFactory ) );
-		$ops[] = array ( new ChangeOpLabel( 'en', null, $validatorFactory ) );
+		$ops[] = array( new ChangeOpLabel( 'en', 'myNewLabel', $validatorFactory ) );
+		$ops[] = array( new ChangeOpDescription( 'de', 'myNewDescription', $validatorFactory ) );
+		$ops[] = array( new ChangeOpLabel( 'en', null, $validatorFactory ) );
 
 		return $ops;
 	}
 
 	/**
 	 * @dataProvider changeOpProvider
-	 *
-	 * @param ChangeOp $changeOp
 	 */
-	public function testAdd( $changeOp ) {
+	public function testAdd( ChangeOp $changeOp ) {
 		$changeOps = new ChangeOps();
 		$changeOps->add( $changeOp );
 		$this->assertEquals( array( $changeOp ), $changeOps->getChangeOps() );
@@ -68,7 +66,7 @@ class ChangeOpsTest extends \PHPUnit_Framework_TestCase {
 		$validatorFactory = $this->getTermValidatorFactory();
 
 		$ops = array();
-		$ops[] = array (
+		$ops[] = array(
 					array(
 						new ChangeOpLabel( 'en', 'enLabel', $validatorFactory ),
 						new ChangeOpLabel( 'de', 'deLabel', $validatorFactory ),
@@ -81,10 +79,8 @@ class ChangeOpsTest extends \PHPUnit_Framework_TestCase {
 
 	/**
 	 * @dataProvider changeOpArrayProvider
-	 *
-	 * @param $changeOpArray
 	 */
-	public function testAddArray( $changeOpArray ) {
+	public function testAddArray( array $changeOpArray ) {
 		$changeOps = new ChangeOps();
 		$changeOps->add( $changeOpArray );
 		$this->assertEquals( $changeOpArray, $changeOps->getChangeOps() );
@@ -94,8 +90,8 @@ class ChangeOpsTest extends \PHPUnit_Framework_TestCase {
 		$validatorFactory = $this->getTermValidatorFactory();
 
 		$ops = array();
-		$ops[] = array ( 1234 );
-		$ops[] = array ( array( new ChangeOpLabel( 'en', 'test', $validatorFactory ), 123 ) );
+		$ops[] = array( 1234 );
+		$ops[] = array( array( new ChangeOpLabel( 'en', 'test', $validatorFactory ), 123 ) );
 
 		return $ops;
 	}
@@ -103,8 +99,6 @@ class ChangeOpsTest extends \PHPUnit_Framework_TestCase {
 	/**
 	 * @dataProvider invalidChangeOpProvider
 	 * @expectedException InvalidArgumentException
-	 *
-	 * @param $invalidChangeOp
 	 */
 	public function testInvalidAdd( $invalidChangeOp ) {
 		$changeOps = new ChangeOps();
@@ -127,31 +121,26 @@ class ChangeOpsTest extends \PHPUnit_Framework_TestCase {
 
 	/**
 	 * @dataProvider changeOpsProvider
-	 *
-	 * @param ChangeOps $changeOps
-	 * @param string $language
-	 * @param string $expectedLabel
-	 * @param string $expectedDescription
 	 */
-	public function testApply( $changeOps, $language, $expectedLabel, $expectedDescription ) {
-		$entity = Item::newEmpty();
+	public function testApply( ChangeOps $changeOps, $language, $expectedLabel, $expectedDescription ) {
+		$entity = new Item();
 
 		$changeOps->apply( $entity );
-		$this->assertEquals( $expectedLabel, $entity->getLabel( $language ) );
-		$this->assertEquals( $expectedDescription, $entity->getDescription( $language ) );
+		$this->assertEquals( $expectedLabel, $entity->getFingerprint()->getLabel( $language )->getText() );
+		$this->assertEquals( $expectedDescription, $entity->getFingerprint()->getDescription( $language )->getText() );
 	}
 
 	public function testValidate() {
-		$item = Item::newEmpty();
+		$item = new Item();
 
 		$guid = 'guid';
 		$snak = new PropertyValueSnak( new PropertyId( 'P7' ), new StringValue( 'INVALID' ) );
-		$guidGenerator = new ClaimGuidGenerator();
+		$guidGenerator = new GuidGenerator();
 
 		$error = Error::newError( 'Testing', 'test', 'test-error', array() );
 		$result = Result::newError( array( $error ) );
 
-		$snakValidator = $this->getMockBuilder( 'Wikibase\Validators\SnakValidator' )
+		$snakValidator = $this->getMockBuilder( 'Wikibase\Repo\Validators\SnakValidator' )
 			->disableOriginalConstructor()
 			->getMock();
 
@@ -164,6 +153,35 @@ class ChangeOpsTest extends \PHPUnit_Framework_TestCase {
 
 		$result = $changeOps->validate( $item );
 		$this->assertFalse( $result->isValid(), 'isValid()' );
+	}
+
+	public function testValidate_() {
+		$item = new Item();
+
+		$changeOp = $this->getMockBuilder( '\Wikibase\ChangeOp\ChangeOp' )
+			->disableOriginalConstructor()
+			->getMock();
+		$changeOp->expects( $this->any() )
+			->method( 'validate' )
+			->will( $this->returnCallback( function( Item $item ) {
+				// Fail when the label is already set (by a previous apply call).
+				return $item->getFingerprint()->hasLabel( 'en' )
+					? Result::newError( array() )
+					: Result::newSuccess();
+			} ) );
+		$changeOp->expects( $this->any() )
+			->method( 'apply' )
+			->will( $this->returnCallback( function( Item $item ) {
+				$item->setLabel( 'en', 'Label' );
+			} ) );
+
+		$changeOps = new ChangeOps();
+		$changeOps->add( $changeOp );
+		$changeOps->add( $changeOp );
+		$result = $changeOps->validate( $item );
+
+		$this->assertFalse( $result->isValid(), 'Validate must fail with this mock' );
+		$this->assertTrue( $item->isEmpty(), 'Item must still be empty' );
 	}
 
 }

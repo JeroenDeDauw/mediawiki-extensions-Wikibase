@@ -8,11 +8,12 @@ use Wikibase\DataModel\Entity\EntityId;
 use Wikibase\DataModel\Entity\EntityIdValue;
 use Wikibase\DataModel\Entity\ItemId;
 use Wikibase\DataModel\Entity\PropertyId;
+use Wikibase\DataModel\Entity\BasicEntityIdParser;
+use Wikibase\DataModel\Snak\PropertyValueSnak;
+use Wikibase\DataModel\Snak\Snak;
 use Wikibase\Lib\SnakFormatter;
-use Wikibase\PropertyValueSnak;
-use Wikibase\Snak;
-use Wikibase\Summary;
 use Wikibase\RepoHooks;
+use Wikibase\Summary;
 use Wikibase\SummaryFormatter;
 
 /**
@@ -21,12 +22,13 @@ use Wikibase\SummaryFormatter;
  * @group Wikibase
  * @group WikibaseRepo
  * @group WikibaseSummary
+ * @group Database
  *
  * @licence GNU GPL v2+
  * @author John Erling Blad < jeblad@gmail.com >
  * @author Daniel Kinzler
  */
-class SummaryFormatterTest extends \PHPUnit_Framework_TestCase {
+class SummaryFormatterTest extends \MediaWikiLangTestCase {
 
 	/**
 	 * @param EntityIdValue|EntityId $id
@@ -38,7 +40,7 @@ class SummaryFormatterTest extends \PHPUnit_Framework_TestCase {
 			$id = $id->getEntityId();
 		}
 
-		return '[[' . $id->getEntityType() . ':' . $id->getPrefixedId() . ']]';
+		return '[[' . $id->getEntityType() . ':' . $id->getSerialization() . ']]';
 	}
 
 	/**
@@ -77,11 +79,9 @@ class SummaryFormatterTest extends \PHPUnit_Framework_TestCase {
 	/**
 	 * @return SummaryFormatter
 	 */
-	protected function newFormatter() {
-		$idFormatter = $this->getMockBuilder( 'Wikibase\Lib\EntityIdFormatter' )
-			->disableOriginalConstructor()
-			->getMock();
-		$idFormatter->expects( $this->any() )->method( 'format' )
+	private function newFormatter() {
+		$idFormatter = $this->getMock( 'Wikibase\DataModel\Services\EntityId\EntityIdFormatter' );
+		$idFormatter->expects( $this->any() )->method( 'formatEntityId' )
 			->will( $this->returnCallback( array( $this, 'formatId' ) ) );
 
 		$valueFormatter = $this->getMock( 'ValueFormatters\ValueFormatter' );
@@ -102,7 +102,8 @@ class SummaryFormatterTest extends \PHPUnit_Framework_TestCase {
 			$idFormatter,
 			$valueFormatter,
 			$snakFormatter,
-			$language
+			$language,
+			new BasicEntityIdParser()
 		);
 
 		return $formatter;
@@ -117,32 +118,82 @@ class SummaryFormatterTest extends \PHPUnit_Framework_TestCase {
 		$summary->setAction( $action );
 		$summary->setLanguage( $language );
 
-		call_user_func_array( array( $summary, 'addAutoCommentArgs' ), $parts );
+		if ( !empty( $parts ) ) {
+			call_user_func_array( array( $summary, 'addAutoCommentArgs' ), $parts );
+		}
 
 		$formatter = $this->newFormatter();
 		$result = $formatter->formatAutoComment( $summary );
 		$this->assertEquals( $expected, $result, 'Not the expected result' );
 	}
 
-	public static function providerFormatAutoComment() {
+	public function providerFormatAutoComment() {
 		$p20 = new PropertyId( 'P20' );
 		$q5 = new ItemId( 'Q5' );
 		$q5Value = new EntityIdValue( $q5 );
 		$p20q5Snak = new PropertyValueSnak( $p20, $q5Value );
 
 		return array(
-			'empty' => array( '', '', '', array(), ':0|' ),
-			'no args' => array( 'foo', 'testing', 'en', array(), 'foo-testing:0|en' ),
-			'one arg' => array( 'foo', 'testing', 'en', array( 'one' ), 'foo-testing:0|en|one' ),
-			'two args (no action)' => array( 'foo', '', 'en', array( 'one', 'two' ), 'foo:0|en|one|two' ),
-			'args contains array (no module)' => array( '', 'testing', 'en', array( array( 'one', 'two' ) ), 'testing:0|en|one|two' ),
-			'args contains map (no module)' => array( '', 'testing', 'en', array( array( array( 'one' => 1, 'two' => 2 ) ) ), 'testing:0|en|one: 1, two: 2' ),
-			'empty arg' => array( 'foo', 'testing', 'en', array( 'one', '', 'three' ), 'foo-testing:0|en|one||three' ),
-			'number' => array( 'foo', 'testing', 'en', array( 23 ), 'foo-testing:0|en|23' ),
-			'EntityId' => array( 'foo', 'testing', 'en', array( $q5 ), 'foo-testing:0|en|[[item:Q5]]' ),
-			'DataValue' => array( 'foo', 'testing', 'en', array( $q5Value ), 'foo-testing:0|en|[[item:Q5]]' ),
-			'Snak' => array( 'foo', 'testing', 'en', array( $p20q5Snak ), 'foo-testing:0|en|[[item:Q5]]' ),
-			'property-item-map' => array( '', 'testing', 'en', array( array( array( 'P17' => new ItemId( "Q2" ) ) ) ), 'testing:0|en|[[property:P17]]: [[item:Q2]]' ),
+			'empty' => array(
+				'', '', '',
+				array(),
+				':0|'
+			),
+			'no args' => array(
+				'foo', 'testing', 'en',
+				array(),
+				'foo-testing:0|en'
+			),
+			'one arg' => array(
+				'foo', 'testing', 'en',
+				array( 'one' ),
+				'foo-testing:0|en|one'
+			),
+			'two args (no action)' => array(
+				'foo', '', 'en',
+				array( 'one', 'two' ),
+				'foo:0|en|one|two'
+			),
+			'args contains array (no module)' => array(
+				'', 'testing', 'en',
+				array( array( 'one', 'two' ) ),
+				'testing:0|en|one|two'
+			),
+			'args contains map (no module)' => array(
+				'', 'testing', 'en',
+				array( array( array( 'one' => 1, 'two' => 2 ) ) ),
+				'testing:0|en|one: 1, two: 2'
+			),
+			'empty arg' => array(
+				'foo', 'testing', 'en',
+				array( 'one', '', 'three' ),
+				'foo-testing:0|en|one||three'
+			),
+			'number' => array(
+				'foo', 'testing', 'en',
+				array( 23 ),
+				'foo-testing:0|en|23'
+			),
+			'EntityId' => array(
+				'foo', 'testing', 'en',
+				array( $q5 ),
+				'foo-testing:0|en|[[item:Q5]]'
+			),
+			'DataValue' => array(
+				'foo', 'testing', 'en',
+				array( $q5Value ),
+				'foo-testing:0|en|[[item:Q5]]'
+			),
+			'Snak' => array(
+				'foo', 'testing', 'en',
+				array( $p20q5Snak ),
+				'foo-testing:0|en|[[item:Q5]]'
+			),
+			'property-item-map' => array(
+				'', 'testing', 'en',
+				array( array( array( 'P17' => new ItemId( "Q2" ) ) ) ),
+				'testing:0|en|[[property:P17]]: [[item:Q2]]'
+			),
 		);
 	}
 
@@ -151,15 +202,14 @@ class SummaryFormatterTest extends \PHPUnit_Framework_TestCase {
 	 */
 	public function testFormatAutoSummary( array $parts, $expected ) {
 		$summary = new Summary();
-
-		call_user_func_array( array( $summary, 'addAutoSummaryArgs' ), $parts );
+		$summary->addAutoSummaryArgs( $parts );
 
 		$formatter = $this->newFormatter();
 		$result = $formatter->formatAutoSummary( $summary );
 		$this->assertEquals( $expected, $result, 'Not the expected result' );
 	}
 
-	public static function providerFormatAutoSummary() {
+	public function providerFormatAutoSummary() {
 		$p20 = new PropertyId( 'P20' );
 		$q5 = new ItemId( 'Q5' );
 		$q5Value = new EntityIdValue( $q5 );
@@ -186,24 +236,60 @@ class SummaryFormatterTest extends \PHPUnit_Framework_TestCase {
 	 */
 	public function testToStringArgHandling( array $commentArgs, array $summaryArgs, $expected ) {
 		$summary = new Summary( 'foobar' );
-		call_user_func_array( array( $summary, 'addAutoCommentArgs' ), $commentArgs );
-		call_user_func_array( array( $summary, 'addAutoSummaryArgs' ), $summaryArgs );
+		$summary->addAutoCommentArgs( $commentArgs );
+		$summary->addAutoSummaryArgs( $summaryArgs );
 
 		$formatter = $this->newFormatter();
 		$this->assertEquals( $expected, $formatter->formatSummary( $summary ) );
 	}
 
-	public static function provideToStringArgs() {
+	public function provideToStringArgs() {
 		return array(
-			array( array(), array(), '/* foobar:0| */' ),
-			array( array( '' ), array( 'This is a test…' ), '/* foobar:1|| */ This is a test…' ),
-			array( array( 'one' ), array( 'This is a test…' ), '/* foobar:1||one */ This is a test…' ),
-			array( array( 'one', 'two' ), array( 'This is a test…' ), '/* foobar:1||one|two */ This is a test…' ),
-			array( array( 'one', 'two', 'three' ), array( 'This is a test…' ), '/* foobar:1||one|two|three */ This is a test…' ),
-			array( array( 'one', 'two', 'three', '…' ), array( 'This is a test…' ), '/* foobar:1||one|two|three|… */ This is a test…' ),
-			array( array( 'one', 'two', 'three', '<>' ), array( 'This is a test…' ), '/* foobar:1||one|two|three|<> */ This is a test…' ),
-			array( array( 'one', 'two', 'three', '&lt;&gt;' ), array( 'This is a test…' ), '/* foobar:1||one|two|three|&lt;&gt; */ This is a test…' ),
-			array( array(), array( str_repeat( 'a', 2 * SUMMARY_MAX_LENGTH ) ), '/* foobar:1| */ ' . str_repeat( 'a', SUMMARY_MAX_LENGTH - 19 ) . '...' ),
+			array(
+				array(),
+				array(),
+				'/* foobar:0| */'
+			),
+			array(
+				array( '' ),
+				array( 'This is a test…' ),
+				'/* foobar:1|| */ This is a test…'
+			),
+			array(
+				array( 'one' ),
+				array( 'This is a test…' ),
+				'/* foobar:1||one */ This is a test…'
+			),
+			array(
+				array( 'one', 'two' ),
+				array( 'This is a test…' ),
+				'/* foobar:1||one|two */ This is a test…'
+			),
+			array(
+				array( 'one', 'two', 'three' ),
+				array( 'This is a test…' ),
+				'/* foobar:1||one|two|three */ This is a test…'
+			),
+			array(
+				array( 'one', 'two', 'three', '…' ),
+				array( 'This is a test…' ),
+				'/* foobar:1||one|two|three|… */ This is a test…'
+			),
+			array(
+				array( 'one', 'two', 'three', '<>' ),
+				array( 'This is a test…' ),
+				'/* foobar:1||one|two|three|<> */ This is a test…'
+			),
+			array(
+				array( 'one', 'two', 'three', '&lt;&gt;' ),
+				array( 'This is a test…' ),
+				'/* foobar:1||one|two|three|&lt;&gt; */ This is a test…'
+			),
+			array(
+				array(),
+				array( str_repeat( 'a', 2 * SUMMARY_MAX_LENGTH ) ),
+				'/* foobar:1| */ ' . str_repeat( 'a', SUMMARY_MAX_LENGTH - 19 ) . '...'
+			),
 		);
 	}
 
@@ -237,7 +323,7 @@ class SummaryFormatterTest extends \PHPUnit_Framework_TestCase {
 		$this->assertEquals( $expected, $formatter->formatSummary( $summary ) );
 	}
 
-	public static function provideFormatSummary() {
+	public function provideFormatSummary() {
 		return array(
 			array( // #0
 				'summarytest',
@@ -271,7 +357,7 @@ class SummaryFormatterTest extends \PHPUnit_Framework_TestCase {
 				'testing',
 				'nl',
 				array( 'x', 'y' ),
-				array( 'A', 'B'),
+				array( 'A', 'B' ),
 				null,
 				'/* summarytest-testing:2|nl|x|y */ A, B'
 			),
@@ -284,16 +370,25 @@ class SummaryFormatterTest extends \PHPUnit_Framework_TestCase {
 				null,
 				'/* summarytest:2| */ A, B'
 			),
-			array( // #5
+			'User summary overrides arguments' => array(
 				'summarytest',
 				'testing',
 				'nl',
 				array( 'x', 'y' ),
-				array( 'A', 'B'),
+				array( 'A', 'B' ),
 				'can I haz world domination?',
-				'/* summarytest-testing:2|nl|x|y */ can I haz world domination?'
-				),
-			array( // #6
+				'/* summarytest-testing:2|nl|x|y */ A, B, can I haz world domination?'
+			),
+			'Trimming' => array(
+				'summarytest',
+				'testing',
+				'de',
+				array( ' autoArg0 ', ' autoArg1 ' ),
+				array( ' userArg0 ', ' userArg1 ' ),
+				' userSummary ',
+				'/* summarytest-testing:2|de| autoArg0 | autoArg1 */ userArg0 ,  userArg1, userSummary'
+			),
+			'User summary only' => array(
 				'summarytest',
 				null,
 				null,
@@ -301,8 +396,26 @@ class SummaryFormatterTest extends \PHPUnit_Framework_TestCase {
 				null,
 				'can I haz world domination?',
 				'/* summarytest:0| */ can I haz world domination?'
-				),
-			array( // #7
+			),
+			'User summary w/o arguments' => array(
+				'summarytest',
+				'testing',
+				'de',
+				array( 'autoArg0', 'autoArg1' ),
+				null,
+				'userSummary',
+				'/* summarytest-testing:0|de|autoArg0|autoArg1 */ userSummary'
+			),
+			'User summary w/o auto comment arguments' => array(
+				'summarytest',
+				'testing',
+				'de',
+				null,
+				array( 'userArg0', 'userArg1' ),
+				'userSummary',
+				'/* summarytest-testing:2|de */ userArg0, userArg1, userSummary'
+			),
+			'Array arguments' => array(
 				'summarytest',
 				'testing',
 				'nl',
@@ -311,7 +424,7 @@ class SummaryFormatterTest extends \PHPUnit_Framework_TestCase {
 				null,
 				'/* summarytest-testing:2|nl|x|1, 2, 3 */ A, 1, 2, 3'
 			),
-			array( // #8
+			'Associative arguments' => array(
 				'summarytest',
 				'testing',
 				'nl',
@@ -324,27 +437,33 @@ class SummaryFormatterTest extends \PHPUnit_Framework_TestCase {
 	}
 
 	/**
+	 * Tests the FormatAutocomment hook provided by RepoHooks.
+	 *
+	 * @todo move to RepoHooksTest
+	 *
 	 * @dataProvider providerOnFormat
 	 */
 	public function testOnFormat( $model, $root, $pre, $auto, $post, $title, $local, $expected ) {
 		$itemTitle = $this->getMock( $title );
 		$itemTitle->expects( $this->once() )->method( 'getContentModel' )->will( $this->returnValue( $model ) );
+
 		$comment = null;
-		RepoHooks::onFormat( array($model, $root), $comment, $pre, $auto, $post, $itemTitle, $local );
+
+		RepoHooks::onFormat( array( $model, $root ), $comment, $pre, $auto, $post, $itemTitle, $local );
+
 		if ( is_null( $expected ) ) {
 			$this->assertEquals( $expected, $comment, "Didn't find the expected null" );
-		}
-		else {
+		} else {
 			$this->assertRegExp( $expected, $comment, "Didn't find the expected final comment" );
 		}
 	}
 
-	public static function providerOnFormat() {
+	public function providerOnFormat() {
 		return array( //@todo: test other types of entities too!
 			array(
 				CONTENT_MODEL_WIKIBASE_ITEM,
 				"wikibase-item",
-				'', '', '',
+				false, '', false,
 				'Title',
 				false,
 				null
@@ -352,7 +471,7 @@ class SummaryFormatterTest extends \PHPUnit_Framework_TestCase {
 			array(
 				CONTENT_MODEL_WIKIBASE_ITEM,
 				"wikibase-item",
-				'foo', '', 'bar',
+				false, '', false,
 				'Title',
 				false,
 				null
@@ -360,51 +479,52 @@ class SummaryFormatterTest extends \PHPUnit_Framework_TestCase {
 			array(
 				CONTENT_MODEL_WIKIBASE_ITEM,
 				"wikibase-item",
-				'foo', 'wbeditentity', 'bar',
+				true, 'wbeditentity', true,
 				'Title',
 				false,
-				'!foo‎<span dir="auto"><span class="autocomment">.*?</span>bar</span>!'
+				'!<span dir="auto"><span class="autocomment">.*?: </span></span>!'
 			),
 			array(
 				CONTENT_MODEL_WIKIBASE_ITEM,
 				"wikibase-item",
-				'foo', 'wbsetlabel-set:1|en', 'bar',
+				true, 'wbsetlabel-set:1|en', true,
 				'Title',
 				false,
-				'!foo‎<span dir="auto"><span class="autocomment">.*?\[en\].*?</span>bar</span>!'
+				'!<span dir="auto"><span class="autocomment">.*?\[en\].*?: </span></span>!'
 			),
 			array(
 				CONTENT_MODEL_WIKIBASE_ITEM,
 				"wikibase-item",
-				'foo', 'wbsetlabel-set:1|<>', 'bar',
+				false, 'wbsetlabel-set:1|<>', false,
 				'Title',
 				false,
-				'!foo‎<span dir="auto"><span class="autocomment">.*?\[&lt;&gt;\].*?</span>bar</span>!'
+				'!<span dir="auto"><span class="autocomment">.*?\[&lt;&gt;\].*?</span></span>!'
 			),
 			array(
 				CONTENT_MODEL_WIKIBASE_ITEM,
 				"wikibase-item",
-				'foo', 'wbsetlabel-set:1|&lt;&gt;', 'bar',
+				false, 'wbsetlabel-set:1|&lt;&gt;', false,
 				'Title',
 				false,
-				'!foo‎<span dir="auto"><span class="autocomment">.*?\[&lt;&gt;\].*?</span>bar</span>!'
+				'!<span dir="auto"><span class="autocomment">.*?\[&lt;&gt;\].*?</span></span>!'
 			),
 			array(
 				CONTENT_MODEL_WIKIBASE_ITEM,
 				"wikibase-item",
-				'foo', 'wbsetlabel-set:1|&', 'bar',
+				false, 'wbsetlabel-set:1|&', false,
 				'Title',
 				false,
-				'!foo‎<span dir="auto"><span class="autocomment">.*?\[&amp;\].*?</span>bar</span>!'
+				'!<span dir="auto"><span class="autocomment">.*?\[&amp;\].*?</span></span>!'
 			),
 			array(
 				CONTENT_MODEL_WIKIBASE_ITEM,
 				"wikibase-item",
-				'foo', 'wbsetlabel-set:1|…', 'bar',
+				false, 'wbsetlabel-set:1|…', false,
 				'Title',
 				false,
-				'!foo‎<span dir="auto"><span class="autocomment">.*?\[…\].*?</span>bar</span>!'
+				'!<span dir="auto"><span class="autocomment">.*?\[…\].*?</span></span>!'
 			)
 		);
 	}
+
 }

@@ -1,13 +1,24 @@
 <?php
 
 return call_user_func( function() {
-	$remoteExtPathParts = explode( DIRECTORY_SEPARATOR . 'extensions' . DIRECTORY_SEPARATOR , __DIR__, 2 );
+	preg_match( '+' . preg_quote( DIRECTORY_SEPARATOR ) . '(?:vendor|extensions)'
+		. preg_quote( DIRECTORY_SEPARATOR ) . '.*+', __DIR__, $remoteExtPath );
+
 	$moduleTemplate = array(
 		'localBasePath' => __DIR__,
-		'remoteExtPath' => $remoteExtPathParts[1],
+		'remoteExtPath' => '..' . $remoteExtPath[0],
 	);
 
 	return array(
+		'wikibase.client.getMwApiForRepo' => $moduleTemplate + array(
+			'scripts' => array(
+				'wikibase.client.getMwApiForRepo.js'
+			),
+			'dependencies' => array(
+				'mw.config.values.wbRepo',
+				'wikibase.api.getLocationAgnosticMwApi',
+			)
+		),
 		'wikibase.client.init' => $moduleTemplate + array(
 			'position' => 'top',
 			'skinStyles' => array(
@@ -19,10 +30,6 @@ return call_user_func( function() {
 				)
 			),
 		),
-		'wikibase.client.nolanglinks' => $moduleTemplate + array(
-			'position' => 'top',
-			'styles' => 'wikibase.client.nolanglinks.css',
-		),
 		'wikibase.client.currentSite' => $moduleTemplate + array(
 			'class' => 'Wikibase\SiteModule'
 		),
@@ -31,6 +38,7 @@ return call_user_func( function() {
 			'styles' => 'wikibase.client.page-move.css'
 		),
 		'wikibase.client.changeslist.css' => $moduleTemplate + array(
+			'position' => 'top',
 			'styles' => 'wikibase.client.changeslist.css'
 		),
 		'wikibase.client.linkitem.init' => $moduleTemplate + array(
@@ -38,7 +46,6 @@ return call_user_func( function() {
 				'wikibase.client.linkitem.init.js'
 			),
 			'messages' => array(
-				'wikibase-linkitem-addlinks',
 				'unknown-error'
 			),
 			'dependencies' => array(
@@ -51,8 +58,7 @@ return call_user_func( function() {
 				'wikibase.client.PageConnector.js'
 			),
 			'dependencies' => array(
-				'wikibase.sites',
-				'wikibase.RepoApi',
+				'wikibase.sites'
 			),
 		),
 		'jquery.wikibase.linkitem' => $moduleTemplate + array(
@@ -70,15 +76,16 @@ return call_user_func( function() {
 				'jquery.wikibase.wbtooltip',
 				'mediawiki.api',
 				'mediawiki.util',
-				'mediawiki.Title',
 				'mediawiki.jqueryMsg',
+				'jquery.event.special.eachchange',
 				'wikibase.client.currentSite',
 				'wikibase.sites',
-				'wikibase.RepoApi',
-				'wikibase.RepoApiError',
+				'wikibase.api.RepoApi',
+				'wikibase.api.RepoApiError',
 				'wikibase.client.PageConnector'
 			),
 			'messages' => array(
+				'wikibase-error-unexpected',
 				'wikibase-linkitem-alreadylinked',
 				'wikibase-linkitem-title',
 				'wikibase-linkitem-linkpage',

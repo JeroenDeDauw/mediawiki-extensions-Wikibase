@@ -2,9 +2,24 @@
 
 namespace Wikibase\Test;
 
-use Wikibase\DataModel\SimpleSiteLink;
+use ContentHandler;
+use Diff\DiffOp\Diff\Diff;
+use Diff\DiffOp\DiffOpAdd;
+use Diff\DiffOp\DiffOpRemove;
+use Title;
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Entity\EntityRedirect;
+use Wikibase\DataModel\Entity\Item;
+use Wikibase\DataModel\Entity\ItemId;
+use Wikibase\DataModel\Entity\PropertyId;
+use Wikibase\DataModel\Services\Diff\EntityDiff;
+use Wikibase\DataModel\SiteLink;
+use Wikibase\DataModel\SiteLinkList;
+use Wikibase\DataModel\Snak\PropertyNoValueSnak;
 use Wikibase\EntityContent;
 use Wikibase\ItemContent;
+use Wikibase\Repo\Content\EntityContentDiff;
+use Wikibase\Repo\WikibaseRepo;
 
 /**
  * @covers Wikibase\ItemContent
@@ -19,93 +34,48 @@ use Wikibase\ItemContent;
  *
  * @licence GNU GPL v2+
  * @author Jeroen De Dauw < jeroendedauw@gmail.com >
- * @author aude
+ * @author Katie Filbert < aude.wiki@gmail.com >
+ * @author Daniel Kinzler
  */
 class ItemContentTest extends EntityContentTest {
 
-	public function setUp() {
-		parent::setUp();
-	}
-
 	/**
-	 * @see EntityContentTest::getContentClass
+	 * @return ItemId
 	 */
-	protected function getContentClass() {
-		return '\Wikibase\ItemContent';
-	}
-
-	public function provideEquals() {
-		return array(
-			array( #0
-				array(),
-				array(),
-				true
-			),
-			array( #1
-				array( 'labels' => array() ),
-				array( 'descriptions' => null ),
-				true
-			),
-			array( #2
-				array( 'entity' => 'q23' ),
-				array(),
-				true
-			),
-			array( #3
-				array( 'entity' => 'q23' ),
-				array( 'entity' => 'q24' ),
-				false
-			),
-			array( #4
-				array( 'labels' => array(
-					'en' => 'foo',
-					'de' => 'bar',
-				) ),
-				array( 'labels' => array(
-					'en' => 'foo',
-				) ),
-				false
-			),
-			array( #5
-				array( 'labels' => array(
-					'en' => 'foo',
-					'de' => 'bar',
-				) ),
-				array( 'labels' => array(
-					'de' => 'bar',
-					'en' => 'foo',
-				) ),
-				true
-			),
-			array( #6
-				array( 'aliases' => array(
-					'en' => array( 'foo', 'FOO' ),
-				) ),
-				array( 'aliases' => array(
-					'en' => array( 'foo', 'FOO', 'xyz' ),
-				) ),
-				false
-			),
-		);
+	protected function getDummyId() {
+		return new ItemId( 'Q100' );
 	}
 
 	/**
-	 * @dataProvider provideEquals
-	 */
-	public function testEquals( array $a, array $b, $equals ) {
-		$itemA = $this->newFromArray( $a );
-		$itemB = $this->newFromArray( $b );
-
-		$actual = $itemA->equals( $itemB );
-		$this->assertEquals( $equals, $actual );
-
-		$actual = $itemB->equals( $itemA );
-		$this->assertEquals( $equals, $actual );
-	}
-
-	/**
-	 * Tests @see Wikibase\Entity::getTextForSearchIndex
+	 * @param EntityId $itemId
 	 *
+	 * @return ItemContent
+	 */
+	protected function newEmpty( EntityId $itemId = null ) {
+		$empty = ItemContent::newEmpty();
+
+		if ( $itemId !== null ) {
+			$empty->getItem()->setId( $itemId );
+		}
+
+		return $empty;
+	}
+
+	/**
+	 * @param ItemId $itemId
+	 * @param ItemId $targetId
+	 *
+	 * @return ItemContent
+	 */
+	private function newRedirect( ItemId $itemId, ItemId $targetId ) {
+		// FIXME: Use the respective EntityHandler instead of going via the global title lookup!
+		$titleLookup = WikibaseRepo::getDefaultInstance()->getEntityTitleLookup();
+		$title = $titleLookup->getTitleForId( $targetId );
+
+		return ItemContent::newFromRedirect( new EntityRedirect( $itemId, $targetId ), $title );
+	}
+
+	/**
 	 * @dataProvider getTextForSearchIndexProvider
 	 *
 	 * @param EntityContent $itemContent
@@ -117,10 +87,9 @@ class ItemContentTest extends EntityContentTest {
 	}
 
 	public function getTextForSearchIndexProvider() {
-		/** @var ItemContent $itemContent */
 		$itemContent = $this->newEmpty();
 		$itemContent->getEntity()->setLabel( 'en', "cake" );
-		$itemContent->getEntity()->addSiteLink( new SimpleSiteLink( 'dewiki', 'Berlin' ) );
+		$itemContent->getEntity()->getSiteLinkList()->addNewSiteLink( 'dewiki', 'Berlin' );
 
 		return array(
 			array( $itemContent, '!^cake$!' ),
@@ -131,9 +100,24 @@ class ItemContentTest extends EntityContentTest {
 	public function providePageProperties() {
 		$cases = parent::providePageProperties();
 
+		$contentLinkStub = $this->newEmpty( $this->getDummyId() );
+		$contentLinkStub->getEntity()->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Foo' );
+
 		$cases['sitelinks'] = array(
-			array( 'links' => array( 'enwiki' => array( 'name' => 'Foo', 'badges' => array() ) ) ),
+			$contentLinkStub,
 			array( 'wb-claims' => 0, 'wb-sitelinks' => 1 )
+		);
+
+		// @todo this is needed in PropertyContentTest as well
+		//       once we have statements in properties
+		$contentWithClaim = $this->newEmpty( $this->getDummyId() );
+		$snak = new PropertyNoValueSnak( 83 );
+		$guid = '$testing$';
+		$contentWithClaim->getEntity()->getStatements()->addNewStatement( $snak, null, null, $guid );
+
+		$cases['claims'] = array(
+			$contentWithClaim,
+			array( 'wb-claims' => 1 )
 		);
 
 		return $cases;
@@ -142,25 +126,74 @@ class ItemContentTest extends EntityContentTest {
 	public function provideGetEntityStatus() {
 		$cases = parent::provideGetEntityStatus();
 
-		$links = array( 'enwiki' => array( 'name' => 'Foo', 'badges' => array() ) );
+		$contentLinkStub = ItemContent::newEmpty();
+		$contentLinkStub->getEntity()->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Foo' );
 
 		$cases['linkstub'] = array(
-			array( 'links' => $links ),
+			$contentLinkStub,
 			ItemContent::STATUS_LINKSTUB
 		);
+
+		$linksAndTerms = $contentLinkStub->copy();
+		$linksAndTerms->getEntity()->setLabel( 'en', 'foo' );
 
 		$cases['linkstub with terms'] = array(
-			array(
-				'label' => array( 'en' => 'Foo' ),
-				'links' => $links
-			),
+			$linksAndTerms,
 			ItemContent::STATUS_LINKSTUB
 		);
 
-		$cases['statements and links'] = $cases['claims']; // from parent::provideGetEntityStatus();
-		$cases['statements and links'][0]['links'] = $links;
+		// @todo this is needed in PropertyContentTest as well
+		//       once we have statements in properties
+		$contentWithClaim = $this->newEmpty();
+		$snak = new PropertyNoValueSnak( 83 );
+		$guid = '$testing$';
+		$contentWithClaim->getEntity()->getStatements()->addNewStatement( $snak, null, null, $guid );
+
+		$cases['claims'] = array(
+			$contentWithClaim,
+			EntityContent::STATUS_NONE
+		);
+
+		$contentWithClaimAndLink = $contentWithClaim->copy();
+		$contentWithClaimAndLink->getEntity()->getSiteLinkList()->addNewSiteLink( 'enwiki', 'Foo' );
+
+		$cases['statements and links'] = array(
+			$contentWithClaimAndLink,
+			EntityContent::STATUS_NONE
+		);
 
 		return $cases;
+	}
+
+	/**
+	 * @return EntityContent
+	 */
+	private function getItemContentWithClaim() {
+		$itemContent = $this->newEmpty();
+		$item = $itemContent->getItem();
+
+		$item->getStatements()->addNewStatement(
+			new PropertyNoValueSnak( new PropertyId( 'P11' ) ),
+			null,
+			null,
+			'Whatever'
+		);
+
+		return $itemContent;
+	}
+
+	/**
+	 * @return EntityContent
+	 */
+	private function getItemContentWithSiteLink() {
+		$itemContent = $this->newEmpty();
+		$item = $itemContent->getItem();
+
+		$item->setSiteLinkList( new SiteLinkList( array(
+			new SiteLink( 'enwiki', 'Foo' )
+		) ) );
+
+		return $itemContent;
 	}
 
 	public function provideGetEntityPageProperties() {
@@ -171,8 +204,24 @@ class ItemContentTest extends EntityContentTest {
 			$case[1]['wb-sitelinks'] = 0;
 		}
 
+		$cases['redirect'] = array(
+			ItemContent::newFromRedirect(
+				new EntityRedirect( new ItemId( 'Q1' ), new ItemId( 'Q2' ) ),
+				Title::newFromText( 'Item:Q2' )
+			),
+			array()
+		);
+
+		$cases['claims'] = array(
+			$this->getItemContentWithClaim(),
+			array(
+				'wb-claims' => 1,
+				'wb-sitelinks' => 0,
+			)
+		);
+
 		$cases['sitelinks'] = array(
-			array( 'links' => array( 'enwiki' => array( 'name' => 'Foo', 'badges' => array() ) ) ),
+			$this->getItemContentWithSiteLink(),
 			array(
 				'wb-claims' => 0,
 				'wb-sitelinks' => 1,
@@ -181,6 +230,243 @@ class ItemContentTest extends EntityContentTest {
 		);
 
 		return $cases;
+	}
+
+	private function handlerSupportsRedirects() {
+		$handler = ContentHandler::getForModelID( CONTENT_MODEL_WIKIBASE_ITEM );
+		return $handler->supportsRedirects();
+	}
+
+	public function diffProvider() {
+		$cases = parent::diffProvider();
+
+		if ( !$this->handlerSupportsRedirects() ) {
+			// As of 2014-06-30, redirects are still experimental.
+			// So do a feature check before trying to test redirects.
+			return $cases;
+		}
+
+		$q10 = new ItemId( 'Q10' );
+		$empty = $this->newEmpty( $q10 );
+
+		$spam = $this->newEmpty( $q10 );
+		$spam->getEntity()->setLabel( 'en', 'Spam' );
+
+		$redir = $this->newRedirect( $q10, new ItemId( 'Q17' ) );
+		$redirTarget = 'Q17';
+
+		$emptyToRedirDiff = new EntityContentDiff(
+			new EntityDiff( array() ),
+			new Diff( array(
+				'redirect' => new DiffOpAdd( $redirTarget ),
+			), true )
+		);
+
+		$spamToRedirDiff = new EntityContentDiff(
+			new EntityDiff( array(
+				'label' => new Diff(
+						array( 'en' => new DiffOpRemove( 'Spam' ) )
+					),
+			) ),
+			new Diff( array(
+				'redirect' => new DiffOpAdd( $redirTarget ),
+			), true )
+		);
+
+		$redirToSpamDiff = new EntityContentDiff(
+			new EntityDiff( array(
+				'label' => new Diff(
+						array( 'en' => new DiffOpAdd( 'Spam' ) )
+					),
+			) ),
+			new Diff( array(
+				'redirect' => new DiffOpRemove( $redirTarget ),
+			), true )
+		);
+
+		$cases['same redir'] = array( $redir, $redir, new EntityContentDiff(
+			new EntityDiff(),
+			new Diff()
+		) );
+		$cases['empty to redir'] = array( $empty, $redir, $emptyToRedirDiff );
+		$cases['entity to redir'] = array( $spam, $redir, $spamToRedirDiff );
+		$cases['redir to entity'] = array( $redir, $spam, $redirToSpamDiff );
+
+		return $cases;
+	}
+
+	public function patchedCopyProvider() {
+		$cases = parent::patchedCopyProvider();
+
+		if ( !$this->handlerSupportsRedirects() ) {
+			// As of 2014-06-30, redirects are still experimental.
+			// So do a feature check before trying to test redirects.
+			return $cases;
+		}
+
+		$q10 = new ItemId( 'Q10' );
+		$empty = $this->newEmpty( $q10 );
+
+		$spam = $this->newEmpty( $q10 );
+		$spam->getEntity()->setLabel( 'en', 'Spam' );
+
+		$redirTarget = 'Q17';
+		$redir = $this->newRedirect( $q10, new ItemId( $redirTarget ) );
+
+		$emptyToRedirDiff = new EntityContentDiff(
+			new EntityDiff( array() ),
+			new Diff( array(
+				'redirect' => new DiffOpAdd( $redirTarget ),
+			), true )
+		);
+
+		$spamToRedirDiff = new EntityContentDiff(
+			new EntityDiff( array(
+				'label' => new Diff(
+						array( 'en' => new DiffOpRemove( 'Spam' ) )
+					),
+			) ),
+			new Diff( array(
+				'redirect' => new DiffOpAdd( $redirTarget ),
+			), true )
+		);
+
+		$redirToSpamDiff = new EntityContentDiff(
+			new EntityDiff( array(
+				'label' => new Diff(
+						array( 'en' => new DiffOpAdd( 'Spam' ) )
+					),
+			) ),
+			new Diff( array(
+				'redirect' => new DiffOpRemove( $redirTarget ),
+			), true )
+		);
+
+		$cases['empty to redir'] = array( $empty, $emptyToRedirDiff, $redir );
+		$cases['entity to redir'] = array( $spam, $spamToRedirDiff, $redir );
+		$cases['redir to entity'] = array( $redir, $redirToSpamDiff, $spam );
+		$cases['redir with entity clash'] = array( $spam, $emptyToRedirDiff, null );
+
+		return $cases;
+	}
+
+	public function copyProvider() {
+		$cases = parent::copyProvider();
+
+		if ( !$this->handlerSupportsRedirects() ) {
+			// As of 2014-06-30, redirects are still experimental.
+			// So do a feature check before trying to test redirects.
+			return $cases;
+		}
+
+		$redir = $this->newRedirect( new ItemId( 'Q5' ), new ItemId( 'Q7' ) );
+
+		$cases['redirect'] = array( $redir );
+
+		return $cases;
+	}
+
+	public function equalsProvider() {
+		$cases = parent::equalsProvider();
+
+		if ( !$this->handlerSupportsRedirects() ) {
+			// As of 2014-06-30, redirects are still experimental.
+			// So do a feature check before trying to test redirects.
+			return $cases;
+		}
+
+		$redir = $this->newRedirect( new ItemId( 'Q5' ), new ItemId( 'Q7' ) );
+
+		$labels1 = $this->newEmpty();
+		$labels1->getEntity()->setLabel( 'en', 'Foo' );
+
+		$cases['same redirect'] = array( $redir, $redir, true );
+		$cases['redirect vs labels'] = array( $redir, $labels1, false );
+		$cases['labels vs redirect'] = array( $labels1, $redir, false );
+
+		return $cases;
+	}
+
+	public function testGetParserOutput_redirect() {
+		if ( !$this->handlerSupportsRedirects() ) {
+			// As of 2014-06-30, redirects are still experimental.
+			// So do a feature check before trying to test redirects.
+			$this->markTestSkipped( 'Redirects not yet supported.' );
+		}
+
+		$content = $this->newRedirect( new ItemId( 'Q5' ), new ItemId( 'Q123' ) );
+
+		$title = Title::newFromText( 'Foo' );
+		$parserOutput = $content->getParserOutput( $title );
+
+		$html = $parserOutput->getText();
+
+		$this->assertTag( array( 'tag' => 'div', 'class' => 'redirectMsg' ), $html, 'redirect message' );
+		$this->assertTag( array( 'tag' => 'a', 'content' => 'Q123' ), $html, 'redirect target' );
+	}
+
+	public function provideGetEntityId() {
+		$q11 = new ItemId( 'Q11' );
+		$q12 = new ItemId( 'Q12' );
+
+		$cases = array();
+		$cases['entity id'] = array( $this->newEmpty( $q11 ), $q11 );
+
+		if ( $this->handlerSupportsRedirects() ) {
+			// As of 2014-06-30, redirects are still experimental.
+			// So do a feature check before trying to test redirects.
+			$cases['redirect id'] = array( $this->newRedirect( $q11, $q12 ), $q11 );
+		}
+
+		return $cases;
+	}
+
+	public function entityRedirectProvider() {
+		$cases = parent::entityRedirectProvider();
+
+		if ( !$this->handlerSupportsRedirects() ) {
+			// As of 2014-06-30, redirects are still experimental.
+			// So do a feature check before trying to test redirects.
+			return $cases;
+		}
+
+		$cases['redirect'] = array(
+			$this->newRedirect( new ItemId( 'Q11' ), new ItemId( 'Q12' ) ),
+			new EntityRedirect( new ItemId( 'Q11' ), new ItemId( 'Q12' ) )
+		);
+
+		return $cases;
+	}
+
+	public function testIsEmpty_emptyItem() {
+		$content = ItemContent::newFromItem( new Item() );
+		$this->assertTrue( $content->isEmpty() );
+	}
+
+	public function testIsEmpty_nonEmptyItem() {
+		$item = new Item();
+		$item->setLabel( 'en', '~=[,,_,,]:3' );
+		$content = ItemContent::newFromItem( $item );
+		$this->assertFalse( $content->isEmpty() );
+	}
+
+	public function testIsStub_stubItem() {
+		$item = new Item();
+		$item->setLabel( 'en', '~=[,,_,,]:3' );
+		$content = ItemContent::newFromItem( $item );
+		$this->assertTrue( $content->isStub() );
+	}
+
+	public function testIsStub_emptyItem() {
+		$content = ItemContent::newFromItem( new Item() );
+		$this->assertFalse( $content->isStub() );
+	}
+
+	public function testIsStub_nonStubItem() {
+		$item = new Item();
+		$item->getStatements()->addNewStatement( new PropertyNoValueSnak( 42 ) );
+		$content = ItemContent::newFromItem( $item );
+		$this->assertFalse( $content->isStub() );
 	}
 
 }

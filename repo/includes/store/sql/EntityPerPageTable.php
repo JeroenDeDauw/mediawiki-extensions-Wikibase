@@ -1,19 +1,22 @@
 <?php
 
-namespace Wikibase;
+namespace Wikibase\Repo\Store\SQL;
 
+use DatabaseBase;
+use DBError;
 use InvalidArgumentException;
-use Wikibase\DataModel\Entity\BasicEntityIdParser;
+use Wikibase\DataModel\Entity\EntityId;
+use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\ItemId;
+use Wikibase\DataModel\LegacyIdInterpreter;
+use Wikibase\DataModel\Entity\EntityIdParser;
+use Wikibase\Repo\Store\EntityPerPage;
 
 /**
  * Represents a lookup database table that make the link between entities and pages.
  * Corresponds to the wb_entities_per_page table.
  *
  * @since 0.2
- *
- * @todo: make this extend DBAccessBase, so it can be used to access the repo's EPP table
- * from a client!
  *
  * @licence GNU GPL v2+
  * @author Thomas Pellissier Tanon
@@ -22,15 +25,64 @@ use Wikibase\DataModel\Entity\ItemId;
 class EntityPerPageTable implements EntityPerPage {
 
 	/**
+	 * @var EntityIdParser
+	 */
+	private $entityIdParser;
+
+	/**
+	 * @var bool
+	 * @todo Drop this backwards compat flag.
+	 */
+	private $useRedirectTargetColumn;
+
+	/**
+	 * @param EntityIdParser $entityIdParser
+	 * @param bool $useRedirectTargetColumn
+	 *
+	 * @throws InvalidArgumentException
+	 */
+	public function __construct( EntityIdParser $entityIdParser, $useRedirectTargetColumn = true ) {
+		if ( !is_bool( $useRedirectTargetColumn ) ) {
+			throw new InvalidArgumentException( '$useRedirectTargetColumn must be true or false' );
+		}
+
+		$this->entityIdParser = $entityIdParser;
+		$this->useRedirectTargetColumn = $useRedirectTargetColumn;
+	}
+
+	/**
 	 * @see EntityPerPage::addEntityPage
 	 *
 	 * @param EntityId $entityId
 	 * @param int $pageId
 	 *
 	 * @throws InvalidArgumentException
-	 * @return boolean Success indicator
 	 */
 	public function addEntityPage( EntityId $entityId, $pageId ) {
+		$this->addRow( $entityId, $pageId );
+	}
+
+	/**
+	 * @see EntityPerPage::addEntityPage
+	 *
+	 * @param EntityId $entityId
+	 * @param int $pageId
+	 * @param EntityId $targetId
+	 */
+	public function addRedirectPage( EntityId $entityId, $pageId, EntityId $targetId ) {
+		$this->addRow( $entityId, $pageId, $targetId );
+	}
+
+	/**
+	 * @see EntityPerPage::addEntityPage
+	 *
+	 * @param EntityId $entityId
+	 * @param int $pageId
+	 * @param EntityId $targetId
+	 *
+	 * @throws InvalidArgumentException
+	 */
+	private function addRow( EntityId $entityId, $pageId, EntityId $targetId = null ) {
 		if ( !is_int( $pageId ) ) {
 			throw new InvalidArgumentException( '$pageId must be an int' );
 		}
@@ -39,28 +91,86 @@ class EntityPerPageTable implements EntityPerPage {
 			throw new InvalidArgumentException( '$pageId must be greater than 0' );
 		}
 
-		$dbw = wfGetDB( DB_MASTER );
-		$select = $dbw->selectField(
-			'wb_entity_per_page',
-			'epp_page_id',
-			array(
-				'epp_entity_id' => $entityId->getNumericId(),
-				'epp_entity_type' => $entityId->getEntityType()
-			),
-			__METHOD__
+		$redirectTarget = $targetId ? $targetId->getSerialization() : null;
+
+		$values = array(
+			'epp_entity_id' => $entityId->getNumericId(),
+			'epp_entity_type' => $entityId->getEntityType(),
+			'epp_page_id' => $pageId,
 		);
-		if( $select !== false ) {
-			return false;
+
+		if ( $this->useRedirectTargetColumn ) {
+			$values['epp_redirect_target'] = $redirectTarget;
 		}
 
-		return $dbw->insert(
-			'wb_entity_per_page',
-			array(
-				'epp_entity_id' => $entityId->getNumericId(),
-				'epp_entity_type' => $entityId->getEntityType(),
-				'epp_page_id' => $pageId
-			),
-			__METHOD__
+		$this->addRowInternal( $values );
+	}
+
+	/**
+	 * @param array $values
+	 *
+	 * @throws DBError
+	 */
+	private function addRowInternal( array $values ) {
+		$conflictConds = $this->getConflictingRowConditions( $values );
+
+		$dbw = wfGetDB( DB_MASTER );
+
+		$thisTable = $this;
+		$ok = $dbw->deadlockLoop(
+			function ( DatabaseBase $dbw, array $values, array $conflictConds ) use ( $thisTable ) {
+				if ( $conflictConds ) {
+					$where = $dbw->makeList( $conflictConds, LIST_OR );
+					$dbw->delete(
+						'wb_entity_per_page',
+						$where,
+						__METHOD__
+					);
+				}
+
+				$dbw->insert(
+					'wb_entity_per_page',
+					$values,
+					__METHOD__
+				);
+
+				return true;
+			},
+			$dbw, $values, $conflictConds
+		);
+
+		if ( !$ok ) {
+			throw new DBError( $dbw, 'Failed to insert a row into wb_entity_per_page, the deadlock retry limit was exceeded.' );
+		}
+	}
+
+	private function getConflictingRowConditions( array $values ) {
+		$dbw = wfGetDB( DB_MASTER );
+		$indexes = $this->getUniqueIndexes();
+
+		$conditions = array();
+
+		foreach ( $indexes as $indexFields ) {
+			$indexValues = array_intersect_key( $values, array_flip( $indexFields ) );
+			$conditions[] = $dbw->makeList( $indexValues, LIST_AND );
+		}
+
+		return $conditions;
+	}
+
+	/**
+	 * Returns a list of unique indexes, each index being described by a list of fields.
+	 * This is intended for use with DatabaseBase::replace().
+	 *
+	 * @return array[]
+	 */
+	private function getUniqueIndexes() {
+		// CREATE UNIQUE INDEX /*i*/wb_epp_entity ON /*_*/wb_entity_per_page (epp_entity_id, epp_entity_type);
+		// CREATE UNIQUE INDEX /*i*/wb_epp_page ON /*_*/wb_entity_per_page (epp_page_id);
+
+		return array(
+			'wb_epp_entity' => array( 'epp_entity_id', 'epp_entity_type' ),
+			'wb_epp_page' => array( 'epp_page_id' ),
 		);
 	}
 
@@ -89,6 +199,7 @@ class EntityPerPageTable implements EntityPerPage {
 		return $dbw->delete(
 			'wb_entity_per_page',
 			array(
+				// FIXME: this only works for items and properties
 				'epp_entity_id' => $entityId->getNumericId(),
 				'epp_entity_type' => $entityId->getEntityType()
 			),
@@ -108,26 +219,11 @@ class EntityPerPageTable implements EntityPerPage {
 	}
 
 	/**
-	 * @see EntityPerPage::rebuild
-	 *
-	 * @since 0.2
-	 *
-	 * @return boolean success indicator
-	 */
-	public function rebuild() {
-		// FIXME: class not found!
-		$rebuilder = new EntityPerPageRebuilder();
-		$rebuilder->rebuild( $this );
-
-		return true;
-	}
-
-	/**
 	 * @see EntityPerPage::getEntitiesWithoutTerm
 	 *
 	 * @since 0.2
 	 *
-	 * @param string $termType Can be any member of the Term::TYPE_ enum
+	 * @param string $termType Can be any member of the TermIndexEntry::TYPE_ enum
 	 * @param string|null $language Restrict the search for one language. By default the search is done for all languages.
 	 * @param string|null $entityType Can be "item", "property" or "query". By default the search is done for all entities.
 	 * @param integer $limit Limit of the query.
@@ -140,7 +236,14 @@ class EntityPerPageTable implements EntityPerPage {
 		$conditions = array(
 			'term_entity_type IS NULL'
 		);
-		$joinConditions = 'term_entity_id = epp_entity_id AND term_entity_type = epp_entity_type AND term_type = ' . $dbr->addQuotes( $termType );
+
+		$joinConditions = 'term_entity_id = epp_entity_id' .
+			' AND term_entity_type = epp_entity_type' .
+			' AND term_type = ' . $dbr->addQuotes( $termType );
+
+		if ( $this->useRedirectTargetColumn ) {
+			$joinConditions .= ' AND epp_redirect_target IS NULL';
+		}
 
 		if ( $language !== null ) {
 			$joinConditions .= ' AND term_language = ' . $dbr->addQuotes( $language );
@@ -171,11 +274,10 @@ class EntityPerPageTable implements EntityPerPage {
 
 	protected function getEntityIdsFromRows( $rows ) {
 		$entities = array();
-		$idParser = new BasicEntityIdParser();
 
 		foreach ( $rows as $row ) {
-			$id = new EntityId( $row->entity_type, (int)$row->entity_id );
-			$entities[] = $idParser->parse( $id->getSerialization() );
+			// FIXME: this only works for items and properties
+			$entities[] = LegacyIdInterpreter::newIdFromTypeAndNumber( $row->entity_type, $row->entity_id );
 		}
 
 		return $entities;
@@ -197,7 +299,12 @@ class EntityPerPageTable implements EntityPerPage {
 			'ips_site_page IS NULL'
 		);
 		$conditions['epp_entity_type'] = Item::ENTITY_TYPE;
+
 		$joinConditions = 'ips_item_id = epp_entity_id';
+
+		if ( $this->useRedirectTargetColumn ) {
+			$joinConditions .= ' AND epp_redirect_target IS NULL';
+		}
 
 		if ( $siteId !== null ) {
 			$joinConditions .= ' AND ips_site_id = ' . $dbr->addQuotes( $siteId );
@@ -237,12 +344,12 @@ class EntityPerPageTable implements EntityPerPage {
 	 * @param null|string $entityType The entity type to look for.
 	 * @param int $limit The maximum number of IDs to return.
 	 * @param EntityId $after Only return entities with IDs greater than this.
+	 * @param mixed $redirects A XXX_REDIRECTS constant (default is NO_REDIRECTS).
 	 *
-	 * @throws InvalidArgumentException
 	 * @return EntityId[]
 	 */
-	public function listEntities( $entityType, $limit, EntityId $after = null ) {
-		if ( $entityType == null  ) {
+	public function listEntities( $entityType, $limit, EntityId $after = null, $redirects = self::NO_REDIRECTS ) {
+		if ( $entityType === null ) {
 			$where = array();
 			//NOTE: needs to be id/type, not type/id, according to the definition of the relevant
 			//      index in wikibase.sql: wb_entity_per_page (epp_entity_id, epp_entity_type);
@@ -256,6 +363,14 @@ class EntityPerPageTable implements EntityPerPage {
 			$orderBy = array( 'epp_entity_id' );
 		}
 
+		if ( $this->useRedirectTargetColumn ) {
+			if ( $redirects === self::NO_REDIRECTS ) {
+				$where[] = 'epp_redirect_target IS NULL';
+			} elseif ( $redirects === self::ONLY_REDIRECTS ) {
+				$where[] = 'epp_redirect_target IS NOT NULL';
+			}
+		}
+
 		if ( !is_int( $limit ) || $limit < 1 ) {
 			throw new InvalidArgumentException( '$limit must be a positive integer' );
 		}
@@ -263,14 +378,16 @@ class EntityPerPageTable implements EntityPerPage {
 		$dbr = wfGetDB( DB_SLAVE );
 
 		if ( $after ) {
+			$numericId = (int)$after->getNumericId();
+
 			if ( $entityType === null ) {
 				// Ugly. About time we switch to qualified, string based IDs!
 				// NOTE: this must be consistent with the sort order, see above!
-				$where[] = '( ( epp_entity_type > ' . $dbr->addQuotes( $after->getEntityType() ) .
-						'AND epp_entity_id = ' . $after->getNumericId() . ' ) ' .
-						' OR epp_entity_id > ' . $after->getNumericId() . ' )';
+				$where[] = '( ( epp_entity_type > ' . $dbr->addQuotes( $after->getEntityType() )
+					. ' AND epp_entity_id = ' . $numericId . ' )'
+					. ' OR epp_entity_id > ' . $numericId . ' )';
 			} else {
-				$where[] = 'epp_entity_id > ' . $after->getNumericId();
+				$where[] = 'epp_entity_id > ' . $numericId;
 			}
 		}
 
@@ -281,6 +398,8 @@ class EntityPerPageTable implements EntityPerPage {
 			__METHOD__,
 			array(
 				'ORDER BY' => $orderBy,
+				// MySQL tends to use the epp_redirect_target key which has a very low selectivity
+				'USE INDEX' => 'wb_epp_entity',
 				'LIMIT' => $limit
 			)
 		);

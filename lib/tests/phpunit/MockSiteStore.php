@@ -5,7 +5,6 @@ namespace Wikibase\Test;
 use Site;
 use SiteList;
 use SiteStore;
-use TestSites;
 
 /**
  * @license GPL 2+
@@ -25,14 +24,14 @@ class MockSiteStore implements SiteStore {
 	 * @return SiteStore
 	 */
 	public static function newFromTestSites() {
-		$store = new MockSiteStore( TestSites::getSites() );
+		$store = new MockSiteStore( \TestSites::getSites() );
 		return $store;
 	}
 
 	/**
-	 * @param array $sites
+	 * @param Site[] $sites
 	 */
-	public function __construct( $sites = array() ) {
+	public function __construct( array $sites = array() ) {
 		$this->saveSites( $sites );
 	}
 
@@ -106,4 +105,5 @@ class MockSiteStore implements SiteStore {
 	public function clear() {
 		$this->sites = array();
 	}
+
 }

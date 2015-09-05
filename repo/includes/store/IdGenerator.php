@@ -3,7 +3,8 @@
 namespace Wikibase;
 
 /**
- * Contains methods to generate and obtain an unique id.
+ * Generates a new unique numeric id for the provided type.
+ * Ids are only unique per type.
  *
  * @since 0.1
  *
@@ -14,8 +15,6 @@ interface IdGenerator {
 
 	/**
 	 * @since 0.1
-	 *
-	 * @todo: Change this to return an EntityId
 	 *
 	 * @param string $type
 	 *

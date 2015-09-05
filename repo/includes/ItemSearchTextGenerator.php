@@ -2,13 +2,14 @@
 
 namespace Wikibase\Repo;
 
-use Wikibase\Item;
+use Wikibase\DataModel\Entity\Item;
 
 /**
  * @since 0.5
  *
  * @licence GNU GPL v2+
  * @author Katie Filbert < aude.wiki@gmail.com >
+ * @author Thiemo Mättig
  */
 class ItemSearchTextGenerator {
 
@@ -18,28 +19,14 @@ class ItemSearchTextGenerator {
 	 * @return string
 	 */
 	public function generate( Item $item ) {
-		$entitySearchTextGenerator = new EntitySearchTextGenerator();
-		$text = $entitySearchTextGenerator->generate( $item );
+		$fingerprintGenerator = new FingerprintSearchTextGenerator();
+		$text = $fingerprintGenerator->generate( $item->getFingerprint() );
 
-		$siteLinks = $item->getSiteLinks();
-		$text .= $this->getSiteLinksText( $siteLinks );
-
-		return $text;
-	}
-
-	/**
-	 * @param array $siteLinks
-	 *
-	 * @return string
-	 */
-	protected function getSiteLinksText( array $siteLinks ) {
-		$pages = array();
-
-		foreach( $siteLinks as $siteLink ) {
-			$pages[] = $siteLink->getPageName();
+		foreach ( $item->getSiteLinkList()->toArray() as $siteLink ) {
+			$text .= "\n" . $siteLink->getPageName();
 		}
 
-		return "\n" . implode( "\n", $pages );
+		return trim( $text, "\n" );
 	}
 
 }

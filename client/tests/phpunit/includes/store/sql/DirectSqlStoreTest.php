@@ -1,10 +1,9 @@
 <?php
 
-namespace Wikibase\Test;
+namespace Wikibase\Client\Tests\Store\Sql;
 
-use Language;
-use MediaWikiSite;
-use Site;
+use Wikibase\Client\WikibaseClient;
+use Wikibase\DataModel\Entity\BasicEntityIdParser;
 use Wikibase\DirectSqlStore;
 
 /**
@@ -21,12 +20,11 @@ use Wikibase\DirectSqlStore;
 class DirectSqlStoreTest extends \MediaWikiTestCase {
 
 	protected function newStore() {
-		$site = new Site( MediaWikiSite::TYPE_MEDIAWIKI );
-		$site->setGlobalId( 'dummy' );
-		$lang = Language::factory( 'en' );
+		$idParser = new BasicEntityIdParser();
 
-		$store = new DirectSqlStore( $lang, 'DirectStoreSqlTestDummyRepoId');
-		$store->setSite( $site ); //TODO: inject via constructor once that is possible
+		$contentCodec = WikibaseClient::getDefaultInstance()->getEntityContentDataCodec();
+
+		$store = new DirectSqlStore( $contentCodec, $idParser, 'DirectStoreSqlTestDummyRepoId', 'en' );
 
 		return $store;
 	}
@@ -37,20 +35,26 @@ class DirectSqlStoreTest extends \MediaWikiTestCase {
 	public function testGetters( $getter, $expectedType ) {
 		$store = $this->newStore();
 
+		$this->assertTrue( method_exists( $store, $getter ), "Method $getter" );
+
 		$obj = $store->$getter();
 
 		$this->assertInstanceOf( $expectedType, $obj );
 	}
 
-	public static function provideGetters() {
+	public function provideGetters() {
 		return array(
-			array( 'getItemUsageIndex', 'Wikibase\ItemUsageIndex' ),
-			array( 'getSiteLinkTable', 'Wikibase\SiteLinkTable' ),
-			array( 'getEntityLookup', 'Wikibase\EntityLookup' ),
+			array( 'getSiteLinkLookup', 'Wikibase\Lib\Store\SiteLinkLookup' ),
+			array( 'getEntityLookup', 'Wikibase\DataModel\Services\Lookup\EntityLookup' ),
 			array( 'getTermIndex', 'Wikibase\TermIndex' ),
 			array( 'getPropertyLabelResolver', 'Wikibase\PropertyLabelResolver' ),
 			array( 'newChangesTable', 'Wikibase\ChangesTable' ),
 			array( 'getPropertyInfoStore', 'Wikibase\PropertyInfoStore' ),
+			array( 'getUsageTracker', 'Wikibase\Client\Usage\UsageTracker' ),
+			array( 'getUsageLookup', 'Wikibase\Client\Usage\UsageLookup' ),
+			array( 'getSubscriptionManager', 'Wikibase\Client\Usage\SubscriptionManager' ),
+			array( 'getEntityIdLookup', 'Wikibase\Store\EntityIdLookup' ),
+			array( 'getEntityPrefetcher', 'Wikibase\DataModel\Services\Entity\EntityPrefetcher' ),
 		);
 	}
 

@@ -5,6 +5,7 @@ namespace Wikibase\Lib\Parsers;
 use DataValues\TimeValue;
 use Language;
 use ValueParsers\CalendarModelParser;
+use ValueParsers\IsoTimestampParser;
 use ValueParsers\ParseException;
 use ValueParsers\ParserOptions;
 use ValueParsers\StringValueParser;
@@ -26,18 +27,24 @@ class YearMonthTimeParser extends StringValueParser {
 	/**
 	 * @var Language
 	 */
-	protected $lang;
+	private $lang;
+
+	/**
+	 * @var ValueParser
+	 */
+	private $isoTimestampParser;
 
 	/**
 	 * @see StringValueParser::__construct
 	 */
 	public function __construct( ParserOptions $options = null ) {
-		if( is_null( $options ) ) {
-			$options = new ParserOptions();
-		}
-
 		parent::__construct( $options );
-		$this->lang = Language::factory( $this->getOptions()->getOption( ValueParser::OPT_LANG ) );
+
+		$this->lang = Language::factory( $this->getOption( ValueParser::OPT_LANG ) );
+		$this->isoTimestampParser = new IsoTimestampParser(
+			new CalendarModelParser( $this->options ),
+			$this->options
+		);
 	}
 
 	/**
@@ -50,7 +57,7 @@ class YearMonthTimeParser extends StringValueParser {
 	 */
 	protected function stringParse( $value ) {
 		//Matches Year and month separated by a separator, \p{L} matches letters outside the ASCII range
-		if( !preg_match( '/^([\d\p{L}]+)\s*[\/\-\s.,]\s*([\d\p{L}]+)$/', trim( $value ), $matches ) ) {
+		if ( !preg_match( '/^([\d\p{L}]+)\s*[\/\-\s.,]\s*([\d\p{L}]+)$/', trim( $value ), $matches ) ) {
 			throw new ParseException( 'Failed to parse year and month', $value, self::FORMAT_NAME );
 		}
 		list( , $a, $b ) = $matches;
@@ -58,15 +65,15 @@ class YearMonthTimeParser extends StringValueParser {
 		$aIsInt = preg_match( '/^\d+$/', $a );
 		$bIsInt = preg_match( '/^\d+$/', $b );
 
-		if( $aIsInt && $bIsInt ) {
+		if ( $aIsInt && $bIsInt ) {
 			$parsed = $this->parseYearMonthTwoInts( $a, $b );
-			if( $parsed ) {
+			if ( $parsed ) {
 				return $parsed;
 			}
 		}
 
-		if( $aIsInt || $bIsInt ) {
-			if( $aIsInt ) {
+		if ( $aIsInt || $bIsInt ) {
+			if ( $aIsInt ) {
 				$year = $a;
 				$month = trim( $b );
 			} else {
@@ -75,7 +82,7 @@ class YearMonthTimeParser extends StringValueParser {
 			}
 
 			$parsed =  $this->parseYearMonth( $year, $month );
-			if( $parsed ) {
+			if ( $parsed ) {
 				return $parsed;
 			}
 		}
@@ -92,14 +99,14 @@ class YearMonthTimeParser extends StringValueParser {
 	 *
 	 * @return TimeValue|bool
 	 */
-	private function parseYearMonthTwoInts( $a, $b  ) {
-		if( !preg_match( '/^\d+$/', $a ) || !preg_match( '/^\d+$/', $b ) ) {
+	private function parseYearMonthTwoInts( $a, $b ) {
+		if ( !preg_match( '/^\d+$/', $a ) || !preg_match( '/^\d+$/', $b ) ) {
 			return false;
 		}
 
-		if( !$this->canBeMonth( $a ) && $this->canBeMonth( $b ) ) {
+		if ( !$this->canBeMonth( $a ) && $this->canBeMonth( $b ) ) {
 			return $this->getTimeFromYearMonth( $a, $b );
-		} elseif( $this->canBeMonth( $a ) ) {
+		} elseif ( $this->canBeMonth( $a ) ) {
 			return $this->getTimeFromYearMonth( $b, $a );
 		}
 
@@ -118,13 +125,13 @@ class YearMonthTimeParser extends StringValueParser {
 	private function parseYearMonth( $year, $month ) {
 		$names = $this->lang->getMonthNamesArray();
 		for ( $i = 1; $i <= 12; $i++ ) {
-			if( strcasecmp( $names[$i], $month ) === 0 ) {
+			if ( strcasecmp( $names[$i], $month ) === 0 ) {
 				return $this->getTimeFromYearMonth( $year, $i );
 			}
 		}
 		$nameAbbrevs = $this->lang->getMonthAbbreviationsArray();
 		for ( $i = 1; $i <= 12; $i++ ) {
-			if( strcasecmp( $nameAbbrevs[$i], $month ) === 0 ) {
+			if ( strcasecmp( $nameAbbrevs[$i], $month ) === 0 ) {
 				return $this->getTimeFromYearMonth( $year, $i );
 			}
 		}
@@ -135,19 +142,19 @@ class YearMonthTimeParser extends StringValueParser {
 	/**
 	 * @param string $year
 	 * @param string $month
+	 *
 	 * @return TimeValue
 	 */
 	private function getTimeFromYearMonth( $year, $month ) {
-		$timeParser = new \ValueParsers\TimeParser( new CalendarModelParser(), $this->getOptions() );
-		return $timeParser->parse( sprintf( '+%d-%02d-00T00:00:00Z', $year, $month ) );
+		return $this->isoTimestampParser->parse( sprintf( '+%d-%02d-00T00:00:00Z', $year, $month ) );
 	}
 
 	/**
 	 * @param string|int $value
+	 *
 	 * @return bool can the given value be a month?
 	 */
 	private function canBeMonth( $value ) {
-		$value = intval( $value );
 		return $value >= 0 && $value <= 12;
 	}
 

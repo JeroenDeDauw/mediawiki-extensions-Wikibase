@@ -4,13 +4,14 @@ namespace Wikibase\Test;
 
 use Wikibase\DataModel\Entity\Item;
 use Wikibase\DataModel\Entity\ItemId;
-use Wikibase\EntityIdPager;
-use Wikibase\ItemsPerSiteBuilder;
-use Wikibase\EntityLookup;
-use Wikibase\SiteLinkTable;
+use Wikibase\DataModel\Services\Entity\NullEntityPrefetcher;
+use Wikibase\DataModel\Services\Lookup\EntityLookup;
+use Wikibase\Lib\Store\SiteLinkTable;
+use Wikibase\Repo\Store\EntityIdPager;
+use Wikibase\Repo\Store\SQL\ItemsPerSiteBuilder;
 
 /**
- * @covers Wikibase\ItemsPerSiteBuilder
+ * @covers Wikibase\Repo\Store\SQL\ItemsPerSiteBuilder
  *
  * @license GPL 2+
  *
@@ -21,12 +22,8 @@ use Wikibase\SiteLinkTable;
  * @author Marius Hoch < hoo@online.de >
  */
 class ItemsPerSiteBuilderTest extends \MediaWikiTestCase {
-	/**
-	 * @return int
-	 */
-	private function getBatchSize() {
-		return 5;
-	}
+
+	const BATCH_SIZE = 5;
 
 	/**
 	 * @return ItemId
@@ -39,48 +36,41 @@ class ItemsPerSiteBuilderTest extends \MediaWikiTestCase {
 	 * @return Item
 	 */
 	private function getTestItem() {
-		static $item = null;
-
-		if ( !$item  ) {
-			$item = Item::newEmpty();
-			$item->setId( $this->getTestItemId() );
-		}
-
-		return $item;
+		return new Item( $this->getTestItemId() );
 	}
 
 	/**
 	 * @return SiteLinkTable
 	 */
-	private function getSiteLinkTableMock() {
-		$siteLinkTableMock = $this->getMockBuilder( '\Wikibase\SiteLinkTable' )
+	private function getSiteLinkTable() {
+		$mock = $this->getMockBuilder( 'Wikibase\Lib\Store\SiteLinkTable' )
 			->disableOriginalConstructor()
 			->getMock();
 
 		$item = $this->getTestItem();
-		$siteLinkTableMock->expects( $this->exactly( 10 ) )
+		$mock->expects( $this->exactly( 10 ) )
 			->method( 'saveLinksOfItem' )
 			->will( $this->returnValue( true ) )
 			->with( $this->equalTo( $item ) );
 
-		return $siteLinkTableMock;
+		return $mock;
 	}
 
 	/**
 	 * @return EntityLookup
 	 */
-	private function getEntityLookupMock() {
-		$entityLookupMock = $this->getMockBuilder( '\Wikibase\EntityLookup' )
+	private function getEntityLookup() {
+		$mock = $this->getMockBuilder( 'Wikibase\DataModel\Services\Lookup\EntityLookup' )
 			->disableOriginalConstructor()
 			->getMock();
 
 		$item = $this->getTestItem();
-		$entityLookupMock->expects( $this->exactly( 10 ) )
+		$mock->expects( $this->exactly( 10 ) )
 			->method( 'getEntity' )
 			->will( $this->returnValue( $item ) )
 			->with( $this->equalTo( $this->getTestItemId() ) );
 
-		return $entityLookupMock;
+		return $mock;
 	}
 
 	/**
@@ -88,8 +78,9 @@ class ItemsPerSiteBuilderTest extends \MediaWikiTestCase {
 	 */
 	private function getItemsPerSiteBuilder() {
 		return new ItemsPerSiteBuilder(
-			$this->getSiteLinkTableMock(),
-			$this->getEntityLookupMock()
+			$this->getSiteLinkTable(),
+			$this->getEntityLookup(),
+			new NullEntityPrefetcher()
 		);
 	}
 
@@ -97,7 +88,7 @@ class ItemsPerSiteBuilderTest extends \MediaWikiTestCase {
 	 * @return EntityIdPager
 	 */
 	private function getEntityIdPager() {
-		$entityIdPager = $this->getMock( 'Wikibase\EntityIdPager' );
+		$mock = $this->getMock( 'Wikibase\Repo\Store\EntityIdPager' );
 
 		$itemIds = array(
 			$this->getTestItemId(),
@@ -107,27 +98,27 @@ class ItemsPerSiteBuilderTest extends \MediaWikiTestCase {
 			$this->getTestItemId()
 		);
 
-		$entityIdPager->expects( $this->at( 0 ) )
+		$mock->expects( $this->at( 0 ) )
 			->method( 'fetchIds' )
 			->will( $this->returnValue( $itemIds ) )
-			->with( $this->equalTo( $this->getBatchSize() ) );
+			->with( $this->equalTo( self::BATCH_SIZE ) );
 
-		$entityIdPager->expects( $this->at( 1 ) )
+		$mock->expects( $this->at( 1 ) )
 			->method( 'fetchIds' )
 			->will( $this->returnValue( $itemIds ) )
-			->with( $this->equalTo( $this->getBatchSize() ) );
+			->with( $this->equalTo( self::BATCH_SIZE ) );
 
-		$entityIdPager->expects( $this->at( 2 ) )
+		$mock->expects( $this->at( 2 ) )
 			->method( 'fetchIds' )
 			->will( $this->returnValue( array() ) )
-			->with( $this->equalTo( $this->getBatchSize() ) );
+			->with( $this->equalTo( self::BATCH_SIZE ) );
 
-		return $entityIdPager;
+		return $mock;
 	}
 
 	public function testRebuild() {
 		$itemsPerSiteBuilder = $this->getItemsPerSiteBuilder();
-		$itemsPerSiteBuilder->setBatchSize( $this->getBatchSize() );
+		$itemsPerSiteBuilder->setBatchSize( self::BATCH_SIZE );
 
 		$entityIdPager = $this->getEntityIdPager();
 		$itemsPerSiteBuilder->rebuild( $entityIdPager );
@@ -136,4 +127,5 @@ class ItemsPerSiteBuilderTest extends \MediaWikiTestCase {
 		// so no need for assertions
 		$this->assertTrue( true );
 	}
+
 }

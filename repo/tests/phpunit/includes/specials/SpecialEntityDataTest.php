@@ -2,6 +2,7 @@
 
 namespace Wikibase\Test;
 
+use DataValues\Serializers\DataValueSerializer;
 use FauxRequest;
 use FauxResponse;
 use HttpError;
@@ -9,18 +10,14 @@ use OutputPage;
 use SiteList;
 use SpecialPage;
 use Title;
-use Wikibase\DataModel\Entity\BasicEntityIdParser;
 use Wikibase\DataModel\Entity\EntityId;
-use Wikibase\EntityFactory;
-use Wikibase\Item;
-use Wikibase\ItemContent;
-use Wikibase\Lib\Serializers\SerializationOptions;
-use Wikibase\Lib\Serializers\SerializerFactory;
-use Wikibase\LinkedData\EntityDataRequestHandler;
-use Wikibase\LinkedData\EntityDataSerializationService;
-use Wikibase\LinkedData\EntityDataUriManager;
+use Wikibase\DataModel\SerializerFactory;
+use Wikibase\DataModel\Entity\BasicEntityIdParser;
+use Wikibase\Repo\LinkedData\EntityDataFormatProvider;
+use Wikibase\Repo\LinkedData\EntityDataRequestHandler;
+use Wikibase\Repo\LinkedData\EntityDataSerializationService;
+use Wikibase\Repo\LinkedData\EntityDataUriManager;
 use Wikibase\Repo\Specials\SpecialEntityData;
-use Wikibase\Repo\WikibaseRepo;
 
 /**
  * @covers Wikibase\Repo\Specials\SpecialEntityData
@@ -41,28 +38,6 @@ class SpecialEntityDataTest extends SpecialPageTestBase {
 	const URI_BASE = 'http://acme.test/';
 	const URI_DATA = 'http://data.acme.test/';
 
-	protected function saveItem( Item $item ) {
-		//TODO: Same as in EntityDataRequestHandlerTest. Factor out.
-
-		$store = WikibaseRepo::getDefaultInstance()->getEntityStore();
-		$store->saveEntity( $item, "testing", $GLOBALS['wgUser'], EDIT_NEW );
-	}
-
-	public function getTestItem() {
-		//TODO: Same as in EntityDataRequestHandlerTest. Factor out.
-
-		$prefix = get_class( $this ) . '/';
-		static $item;
-
-		if ( $item === null ) {
-			$item = Item::newEmpty();
-			$item->setLabel( 'en', $prefix . 'Raarrr' );
-			$this->saveItem( $item );
-		}
-
-		return $item;
-	}
-
 	protected function newSpecialPage() {
 		$page = new SpecialEntityData();
 
@@ -74,44 +49,43 @@ class SpecialEntityDataTest extends SpecialPageTestBase {
 		return $page;
 	}
 
-	protected function newRequestHandler() {
-		$mockRepo = EntityDataTestProvider::getMockRepo();
+	private function newRequestHandler() {
+		$mockRepository = EntityDataTestProvider::getMockRepository();
 
-		$entityRevisionLookup = $mockRepo;
-
-		$titleLookup = $this->getMock( 'Wikibase\EntityTitleLookup' );
+		$titleLookup = $this->getMock( 'Wikibase\Lib\Store\EntityTitleLookup' );
 		$titleLookup->expects( $this->any() )
 			->method( 'getTitleForId' )
 			->will( $this->returnCallback( function( EntityId $id ) {
 				return Title::newFromText( $id->getEntityType() . ':' . $id->getSerialization() );
 			} ) );
 
-		$idParser = new BasicEntityIdParser();
-
-		$dataTypeLookup = $this->getMock( 'Wikibase\Lib\PropertyDataTypeLookup' );
+		$dataTypeLookup = $this->getMock( 'Wikibase\DataModel\Services\Lookup\PropertyDataTypeLookup' );
 		$dataTypeLookup->expects( $this->any() )
 			->method( 'getDataTypeIdForProperty' )
 			->will( $this->returnValue( 'string' ) );
 
-		$serializationOptions = new SerializationOptions();
+		$entityDataFormatProvider = new EntityDataFormatProvider();
 		$serializerFactory = new SerializerFactory(
-			$serializationOptions,
-			$dataTypeLookup,
-			EntityFactory::singleton()
+			new DataValueSerializer(),
+			SerializerFactory::OPTION_SERIALIZE_MAIN_SNAKS_WITHOUT_HASH +
+			SerializerFactory::OPTION_SERIALIZE_REFERENCE_SNAKS_WITHOUT_HASH
 		);
 
 		$serializationService = new EntityDataSerializationService(
 			self::URI_BASE,
 			self::URI_DATA,
-			$mockRepo,
+			$mockRepository,
 			$titleLookup,
+			$dataTypeLookup,
+			new SiteList(),
+			$entityDataFormatProvider,
 			$serializerFactory,
-			new SiteList()
+			new MockSiteStore()
 		);
 
 		$maxAge = 60*60;
-		$formats = array( 'json', 'xml', 'rdf', 'n3' );
-		$serializationService->setFormatWhiteList( $formats );
+		$formats = array( 'json', 'rdfxml', 'ntriples' );
+		$entityDataFormatProvider->setFormatWhiteList( $formats );
 
 		$defaultFormat = 'rdf';
 		$supportedExtensions = array_combine( $formats, $formats );
@@ -130,9 +104,11 @@ class SpecialEntityDataTest extends SpecialPageTestBase {
 		return new EntityDataRequestHandler(
 			$uriManager,
 			$titleLookup,
-			$idParser,
-			$entityRevisionLookup,
+			new BasicEntityIdParser(),
+			$mockRepository,
+			$mockRepository,
 			$serializationService,
+			$entityDataFormatProvider,
 			$defaultFormat,
 			$maxAge,
 			$useSquid,
@@ -140,7 +116,7 @@ class SpecialEntityDataTest extends SpecialPageTestBase {
 		);
 	}
 
-	public static function provideExecute() {
+	public function provideExecute() {
 		$cases = EntityDataTestProvider::provideHandleRequest();
 
 		foreach ( $cases as $n => $case ) {
@@ -166,7 +142,14 @@ class SpecialEntityDataTest extends SpecialPageTestBase {
 	 * @param int    $expCode     Expected HTTP status code
 	 * @param array  $expHeaders  Expected HTTP response headers
 	 */
-	public function testExecute( $subpage, $params, $headers, $expRegExp, $expCode = 200, $expHeaders = array() ) {
+	public function testExecute(
+		$subpage,
+		array $params,
+		array $headers,
+		$expRegExp,
+		$expCode = 200,
+		array $expHeaders = array()
+	) {
 		$request = new FauxRequest( $params );
 		$request->response()->header( 'Status: 200 OK', true, 200 ); // init/reset
 
@@ -192,4 +175,5 @@ class SpecialEntityDataTest extends SpecialPageTestBase {
 			$this->assertRegExp( $expRegExp, $e->getHTML(), "error output" );
 		}
 	}
+
 }
